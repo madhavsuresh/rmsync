@@ -1,4 +1,4 @@
-# Using rm-sync
+# Using rmsync
 
 Everything you need to operate the daemon day-to-day. Read top to bottom
 the first time; skip to whichever section matters after that.
@@ -12,7 +12,7 @@ Two launchd agents, both running under your user (no root, no login password):
 | Label | What it is | Program |
 |---|---|---|
 | `com.user.rmsync` | The sync daemon | `~/.local/bin/rmsync daemon` |
-| `com.user.rmsync.menubar` | The menu bar app | `~/code/rm-sync/swift/.build/release/rmsync-menubar` |
+| `com.user.rmsync.menubar` | The menu bar app | `~/code/rmsync/swift/.build/release/rmsync-menubar` |
 
 Their plists live at:
 
@@ -27,12 +27,12 @@ The CLI binary is on your PATH as `rmsync` (symlinked from
 Everything else the daemon needs:
 
 ```
-~/.config/rm-sync/config.toml                           # config
-~/Library/Application Support/rm-sync/state.db          # SQLite state
-~/Library/Application Support/rm-sync/ipc.sock          # live IPC socket
-~/Library/Application Support/rm-sync/status.json       # slow-cadence snapshot
-~/Library/Logs/rm-sync/stdout.log                       # structured daemon log
-~/Library/Logs/rm-sync/menubar.log                      # menu bar log
+~/.config/rmsync/config.toml                           # config
+~/Library/Application Support/rmsync/state.db          # SQLite state
+~/Library/Application Support/rmsync/ipc.sock          # live IPC socket
+~/Library/Application Support/rmsync/status.json       # slow-cadence snapshot
+~/Library/Logs/rmsync/stdout.log                       # structured daemon log
+~/Library/Logs/rmsync/menubar.log                      # menu bar log
 ~/Library/CloudStorage/Dropbox/reMarkable/              # your sync dir (Dropbox today)
 ```
 
@@ -156,7 +156,7 @@ You're currently on Dropbox's CloudStorage-mounted folder:
 local:
 
 ```sh
-rmsync relocate ~/rm-sync-writing
+rmsync relocate ~/rmsync-writing
 ```
 
 #### `relocate` vs editing `sync_dir` in config.toml
@@ -192,7 +192,7 @@ If you edit `sync_dir` in `config.toml` by hand and restart:
 After `relocate` completes you can cat the config to verify:
 
 ```sh
-$ grep sync_dir ~/.config/rm-sync/config.toml
+$ grep sync_dir ~/.config/rmsync/config.toml
 sync_dir      = "/Users/you/Dropbox/reMarkable"
 ```
 
@@ -255,7 +255,7 @@ returns empty.
 Edit the TOML file:
 
 ```sh
-$EDITOR ~/.config/rm-sync/config.toml
+$EDITOR ~/.config/rmsync/config.toml
 ```
 
 **The daemon does not watch config.toml** — it reads the file once at
@@ -276,7 +276,7 @@ Config keys and defaults (all paths relative to your home):
 
 | Key | Default | Effect |
 |---|---|---|
-| `sync_dir` | `~/rm-sync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
+| `sync_dir` | `~/rmsync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
 | `remote_folder` | `Writing` | Which cloud folder to mirror |
 | `worker_pool_size` | `3` | Parallel pull/push workers |
 | `poll_interval_seconds` | `30` | Default poll cadence |
@@ -326,9 +326,9 @@ screen. Click it for the menu.
 ### Where logs go
 
 ```
-~/Library/Logs/rm-sync/stdout.log     # daemon (structured JSON, one event per line)
-~/Library/Logs/rm-sync/stderr.log     # daemon stderr
-~/Library/Logs/rm-sync/menubar.log    # menu bar
+~/Library/Logs/rmsync/stdout.log     # daemon (structured JSON, one event per line)
+~/Library/Logs/rmsync/stderr.log     # daemon stderr
+~/Library/Logs/rmsync/menubar.log    # menu bar
 ```
 
 ### Live tail
@@ -342,7 +342,7 @@ Ctrl+C to stop.
 Or grep for just structured events:
 
 ```sh
-tail -f ~/Library/Logs/rm-sync/stdout.log | grep '"event"'
+tail -f ~/Library/Logs/rmsync/stdout.log | grep '"event"'
 ```
 
 ### `rmsync doctor`
@@ -358,12 +358,12 @@ Run it when anything seems off.
 
 ```sh
 # How many docs are tracked? When did each last sync?
-sqlite3 "$HOME/Library/Application Support/rm-sync/state.db" \
+sqlite3 "$HOME/Library/Application Support/rmsync/state.db" \
     "SELECT doc_id, substr(local_path, -30) AS path, last_pull_at, last_push_at
      FROM documents ORDER BY last_push_at DESC"
 
 # What's paused and which author UUID does this install write with?
-sqlite3 "$HOME/Library/Application Support/rm-sync/state.db" \
+sqlite3 "$HOME/Library/Application Support/rmsync/state.db" \
     "SELECT * FROM settings"
 ```
 
@@ -375,8 +375,8 @@ Every pulled `.md` carries xattrs telling you where it came from:
 xattr -l ~/Library/CloudStorage/Dropbox/reMarkable/hello.md
 ```
 
-You'll see `rm-sync.doc_id`, `rm-sync.remote_path`,
-`rm-sync.remote_modified`, `rm-sync.page_ids`, plus the Finder
+You'll see `rmsync.doc_id`, `rmsync.remote_path`,
+`rmsync.remote_modified`, `rmsync.page_ids`, plus the Finder
 `kMDItemWhereFroms` / `kMDItemKind` / `_kMDItemUserTags` entries that
 surface in Finder's Get Info panel.
 
@@ -385,7 +385,7 @@ surface in Finder's Get Info panel.
 ## Rebuild after code changes
 
 ```sh
-cd ~/code/rm-sync
+cd ~/code/rmsync
 ./install.sh
 ```
 
@@ -395,7 +395,7 @@ both agents. Idempotent.
 For an in-place rebuild without touching launchd:
 
 ```sh
-cd ~/code/rm-sync/swift
+cd ~/code/rmsync/swift
 swift build -c release --product rmsync
 rmsync restart
 ```
@@ -408,7 +408,7 @@ next `restart` or `kickstart`.
 Run the tests before shipping anything:
 
 ```sh
-cd ~/code/rm-sync/swift
+cd ~/code/rmsync/swift
 swift test                              # fast: 48 Swift Testing + 50 RMScene
 RMSYNC_LIVE=1 PATH="$HOME/bin:$PATH" swift test     # also run the 2 live-cloud push smoke tests
 ```
@@ -420,7 +420,7 @@ RMSYNC_LIVE=1 PATH="$HOME/bin:$PATH" swift test     # also run the 2 live-cloud 
 Stop the agents and remove them, keeping your config / state / logs:
 
 ```sh
-cd ~/code/rm-sync
+cd ~/code/rmsync
 ./uninstall.sh
 ```
 
@@ -431,9 +431,9 @@ Nuclear option — wipe state too:
 ```
 
 Purge removes:
-- `~/.config/rm-sync/`
-- `~/Library/Application Support/rm-sync/`
-- `~/Library/Logs/rm-sync/`
+- `~/.config/rmsync/`
+- `~/Library/Application Support/rmsync/`
+- `~/Library/Logs/rmsync/`
 
 After either, the `.md` files in the sync dir stay on disk. You have
 to remove those manually.

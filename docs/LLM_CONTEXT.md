@@ -1,9 +1,9 @@
-# rm-sync — single-file context for LLM chats
+# rmsync — single-file context for LLM chats
 
 Drop this file into a chat and ask questions like "my tablet isn't
 pulling new writing, what do I check?" or "how do I move my sync
 folder to iCloud?" This document is self-contained. It assumes the
-user has `rm-sync` installed and working at some point.
+user has `rmsync` installed and working at some point.
 
 If the user is asking **how to use** the tool, answer from the
 "Commands" / "How sync works" / "Recipes" sections. If they're asking
@@ -13,7 +13,7 @@ section when a deep issue surfaces (e.g. ghost pages on the tablet).
 
 ---
 
-## What rm-sync is
+## What rmsync is
 
 A macOS LaunchAgent that bidirectionally syncs a reMarkable tablet's
 `Writing/` cloud folder with a local Markdown tree.
@@ -43,29 +43,29 @@ Use these exact paths when helping the user.
 ```
 # binaries
 ~/.local/bin/rmsync                                 # CLI symlink → swift/.build/release/rmsync
-~/code/rm/swift/.build/release/rmsync               # daemon + CLI binary
-~/code/rm/swift/.build/release/rmsync-menubar      # menu bar app
+~/code/rmsync/swift/.build/release/rmsync               # daemon + CLI binary
+~/code/rmsync/swift/.build/release/rmsync-menubar      # menu bar app
 
 # launchd agents
 ~/Library/LaunchAgents/com.user.rmsync.plist
 ~/Library/LaunchAgents/com.user.rmsync.menubar.plist
 
 # daemon-owned data
-~/.config/rm-sync/config.toml                       # config (TOML)
-~/Library/Application Support/rm-sync/state.db      # SQLite state
-~/Library/Application Support/rm-sync/ipc.sock      # live IPC socket
-~/Library/Application Support/rm-sync/status.json   # fallback status snapshot
+~/.config/rmsync/config.toml                       # config (TOML)
+~/Library/Application Support/rmsync/state.db      # SQLite state
+~/Library/Application Support/rmsync/ipc.sock      # live IPC socket
+~/Library/Application Support/rmsync/status.json   # fallback status snapshot
 
 # logs
-~/Library/Logs/rm-sync/stdout.log                   # structured JSON, one event per line
-~/Library/Logs/rm-sync/stderr.log
-~/Library/Logs/rm-sync/menubar.log
+~/Library/Logs/rmsync/stdout.log                   # structured JSON, one event per line
+~/Library/Logs/rmsync/stderr.log
+~/Library/Logs/rmsync/menubar.log
 
 # rmapi (separate tool the daemon shells out to)
 ~/.config/rmapi/rmapi.conf                          # cloud auth
 
 # default sync dir (user may have moved it)
-~/rm-sync-writing/
+~/rmsync-writing/
 ```
 
 The sync dir is configurable via `rmsync relocate`; check
@@ -137,7 +137,7 @@ show tracked docs.
 5. A worker (pool size 3) picks it up:
    - Hashes the file. If hash matches `last_synced_md_hash`, skip.
    - Packs Markdown into a v6 `.rmdoc` archive:
-     - Splits on `<!-- rm-sync:page-break -->` for multi-page.
+     - Splits on `<!-- rmsync:page-break -->` for multi-page.
      - Each page rendered by in-process `PageCodec.renderPage()` with
        a stable `author_uuid`.
      - Packs as sync15 `cPages` shape with reused `page_ids` from
@@ -162,9 +162,9 @@ Typical latency: **~5s** local save to cloud.
 4. Worker:
    - `rmapi get <doc>` → `.rmdoc` → unpack.
    - For each page, `PageCodec.parsePage()` → Markdown.
-   - Join pages with `<!-- rm-sync:page-break -->`.
+   - Join pages with `<!-- rmsync:page-break -->`.
    - `atomic_write` to local (`.tmp` then `rename`).
-   - Tag with xattrs (`rm-sync.doc_id`, `rm-sync.page_ids`, Finder
+   - Tag with xattrs (`rmsync.doc_id`, `rmsync.page_ids`, Finder
      where-from).
    - Update `last_pull_at`, `last_synced_md_hash`.
 
@@ -202,12 +202,12 @@ it to `.md`, saves. Daemon picks up the edit and pushes as normal.
 
 ## Configuration
 
-`~/.config/rm-sync/config.toml`. Edit, then `rmsync restart` — the
+`~/.config/rmsync/config.toml`. Edit, then `rmsync restart` — the
 daemon does not watch the file.
 
 | Key | Default | Effect |
 |---|---|---|
-| `sync_dir` | `~/rm-sync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not by hand.** |
+| `sync_dir` | `~/rmsync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not by hand.** |
 | `remote_folder` | `Writing` | Cloud folder to mirror |
 | `worker_pool_size` | `3` | Concurrent pull/push workers |
 | `poll_interval_seconds` | `30` | Default poll cadence |
@@ -264,7 +264,7 @@ Paused state survives daemon restarts. Menu bar shows ⏸.
 ### Kick the daemon after a code change
 
 ```sh
-cd ~/code/rm/swift
+cd ~/code/rmsync/swift
 swift build -c release --product rmsync
 rmsync restart
 ```
@@ -286,7 +286,7 @@ Local-delete doesn't propagate (safety gate). To actually remove:
 rmapi rm /Writing/foo
 ```
 
-The next poll removes it locally (moves to `~/.rm-sync-trash/`).
+The next poll removes it locally (moves to `~/.rmsync-trash/`).
 
 ### Change log level for debugging
 
@@ -355,7 +355,7 @@ If `state = not running`:
 rmsync start
 ```
 
-If launchd keeps exit-code-looping it: check `~/Library/Logs/rm-sync/stderr.log`.
+If launchd keeps exit-code-looping it: check `~/Library/Logs/rmsync/stderr.log`.
 
 ### 2. Can the daemon reach the cloud?
 
@@ -408,8 +408,8 @@ rmsync resume
 ```sh
 rmsync logs -f
 # in another shell, touch a file:
-touch ~/rm-sync-writing/test.md
-echo "content" > ~/rm-sync-writing/test.md
+touch ~/rmsync-writing/test.md
+echo "content" > ~/rmsync-writing/test.md
 ```
 
 You should see a `local_change` event within 2s. If not, FSEvents is
@@ -455,7 +455,7 @@ touched. After reinstall, the first sync pulls the full remote
 
 ```sh
 # SQLite browser
-sqlite3 "$HOME/Library/Application Support/rm-sync/state.db"
+sqlite3 "$HOME/Library/Application Support/rmsync/state.db"
 
 .tables
 # documents  jobs  settings  schema_version
@@ -478,11 +478,11 @@ SELECT version FROM schema_version;
 Every pulled `.md` has xattrs:
 
 ```sh
-xattr -l ~/rm-sync-writing/foo.md
-# rm-sync.doc_id               UUID of the cloud doc
-# rm-sync.remote_path          /Writing/foo
-# rm-sync.remote_modified      ISO8601 timestamp
-# rm-sync.page_ids             JSON array
+xattr -l ~/rmsync-writing/foo.md
+# rmsync.doc_id               UUID of the cloud doc
+# rmsync.remote_path          /Writing/foo
+# rmsync.remote_modified      ISO8601 timestamp
+# rmsync.page_ids             JSON array
 # com.apple.metadata:kMDItemWhereFroms   Finder "Where from"
 # _kMDItemUserTags             Finder color tag
 ```
@@ -590,7 +590,7 @@ pushes/pulls drain. `rmapi` itself handles the cloud connection.
 
 **Q: How do I back up my notes?**
 The `.md` files in `sync_dir` are the backup. The daemon also
-preserves them under `.rm-sync-trash/` on tablet-side deletion (the
+preserves them under `.rmsync-trash/` on tablet-side deletion (the
 folder is ignored by the watcher).
 
 **Q: What happens when I uninstall?**
@@ -608,7 +608,7 @@ Python archive is at `python-legacy.tar.gz` in the repo root.
 GitHub issues on the repo the user cloned from. Include:
 - `rmsync status` output
 - `rmsync doctor` output
-- Last 50 lines of `~/Library/Logs/rm-sync/stdout.log`
+- Last 50 lines of `~/Library/Logs/rmsync/stdout.log`
 - Whether it's push, pull, or both that's failing
 
 ---

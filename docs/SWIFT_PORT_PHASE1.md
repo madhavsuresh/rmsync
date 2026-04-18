@@ -2,7 +2,7 @@
 
 **Status:** plan — not started.
 **Timeline:** 8 working weeks, one engineer.
-**Outcome:** A Swift replacement for `rm-sync daemon` that drops in as the LaunchAgent. CLI, menu bar, launchd integration, and on-disk state DB stay backward-compatible. Python lives on only as a 60-line CLI bridge around the `rmscene` library.
+**Outcome:** A Swift replacement for `rmsync daemon` that drops in as the LaunchAgent. CLI, menu bar, launchd integration, and on-disk state DB stay backward-compatible. Python lives on only as a 60-line CLI bridge around the `rmscene` library.
 
 ## Goals
 
@@ -172,7 +172,7 @@ Each week has a concrete deliverable that can be demoed or unit-tested in isolat
   - `test_md_to_rm_roundtrip.py` → **stays as a Python test** against the rmscene bridge. Swift test shells out to `python3 -m pytest bridge/tests` as part of `swift test`.
 - Soak test: 24 hours of real usage, watch the logs for anything new or missing.
 - Delete `src/rm_sync/`, `pyproject.toml`, `.venv/`. Keep `bridge/` for rmscene.
-- Update `README.md` — installation, build, day-to-day commands. The `rm-sync` binary name becomes just `rmsync` (no hyphen) to reflect it's a different implementation; CLI compatibility otherwise preserved. Alias `rm-sync` for back-compat if wanted.
+- Update `README.md` — installation, build, day-to-day commands. The `rmsync` binary name becomes just `rmsync` (no hyphen) to reflect it's a different implementation; CLI compatibility otherwise preserved. Alias `rmsync` for back-compat if wanted.
 - Update `CHANGES_FROM_SPEC.md` with a header noting this is now the historic record from the Python version; new invariants get a new doc.
 
 ## Dependencies (Swift Package Manager)
@@ -238,7 +238,7 @@ What stays:
 
 ## What we need to decide before starting
 
-1. Binary name: `rmsync` (new) or keep `rm-sync` (alias)?
+1. Binary name: `rmsync` (new) or keep `rmsync` (alias)?
 2. Single executable (daemon + CLI in one binary, subcommand dispatch) or two (`rmsync-daemon`, `rmsync`)?
 3. Do we want strict concurrency on from week 1 (more typing upfront, more safety) or defer until week 6 (move faster early, refactor later)?
 4. Does the menu bar app stay in `menubar/` or migrate into the new `swift/` package structure?

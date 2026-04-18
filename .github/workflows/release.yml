@@ -9,7 +9,7 @@ name: release
 #
 # Requires one repo secret if you want step 5 to work:
 #   TAP_REPO_TOKEN  — a fine-grained PAT with write access to the
-#                     homebrew-rm-sync tap repo. Without it, the
+#                     homebrew-rmsync tap repo. Without it, the
 #                     "bump-formula" job is skipped; you bump manually.
 
 on:
@@ -54,7 +54,7 @@ jobs:
         working-directory: swift
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          OUTDIR="rm-sync-${VERSION}-macos-universal"
+          OUTDIR="rmsync-${VERSION}-macos-universal"
           mkdir -p "../${OUTDIR}"
 
           # SPM drops universal builds under .build/apple/…
@@ -99,14 +99,14 @@ jobs:
             ### Homebrew
 
             ```
-            brew install madhavsuresh/rm-sync/rm-sync
+            brew install madhavsuresh/rmsync/rmsync
             ```
 
             ### From source
 
             ```
             git clone https://github.com/${{ github.repository }}.git
-            cd rm-sync && ./install.sh
+            cd rmsync && ./install.sh
             ```
 
             ### From release tarball (no Swift toolchain required)
@@ -142,22 +142,22 @@ jobs:
       - name: Check out tap repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/homebrew-rm-sync
+          repository: ${{ github.repository_owner }}/homebrew-rmsync
           token: ${{ secrets.TAP_REPO_TOKEN }}
           path: tap
 
       - name: Update formula
         working-directory: tap
         run: |
-          FORMULA="Formula/rm-sync.rb"
+          FORMULA="Formula/rmsync.rb"
           sed -i -E "s|url \".*\"|url \"${{ steps.srcsha.outputs.src_url }}\"|" "$FORMULA"
           sed -i -E "s|sha256 \"[0-9a-f]{64}\"|sha256 \"${{ steps.srcsha.outputs.src_sha }}\"|" "$FORMULA"
 
-          git config user.name "rm-sync release bot"
+          git config user.name "rmsync release bot"
           git config user.email "actions@users.noreply.github.com"
           git checkout -b "bump-${GITHUB_REF_NAME}"
           git add "$FORMULA"
-          git commit -m "rm-sync ${GITHUB_REF_NAME}"
+          git commit -m "rmsync ${GITHUB_REF_NAME}"
           git push -u origin "bump-${GITHUB_REF_NAME}"
 
       - name: Open PR on tap
@@ -166,7 +166,7 @@ jobs:
           GH_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
         run: |
           gh pr create \
-            --title "rm-sync ${GITHUB_REF_NAME}" \
+            --title "rmsync ${GITHUB_REF_NAME}" \
             --body  "Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}." \
             --base  main \
             --head  "bump-${GITHUB_REF_NAME}"

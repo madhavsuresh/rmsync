@@ -285,7 +285,7 @@ actor SyncWorker {
             return
         }
         if rel.components.contains(where: { $0.hasPrefix(".") }) {
-            return  // hidden dir like .rm-sync-trash
+            return  // hidden dir like .rmsync-trash
         }
 
         if await fence.isRecent(localPath.path) {

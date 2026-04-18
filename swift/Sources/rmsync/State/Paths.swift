@@ -14,7 +14,7 @@ enum Paths {
         if let override = ProcessInfo.processInfo.environment["RM_SYNC_CONFIG"] {
             return URL(fileURLWithPath: override)
         }
-        return home.appendingPathComponent(".config/rm-sync/config.toml")
+        return home.appendingPathComponent(".config/rmsync/config.toml")
     }
 
     static var stateDir: URL {
@@ -22,7 +22,7 @@ enum Paths {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return home.appendingPathComponent(
-            "Library/Application Support/rm-sync", isDirectory: true
+            "Library/Application Support/rmsync", isDirectory: true
         )
     }
 
@@ -30,7 +30,7 @@ enum Paths {
         if let override = ProcessInfo.processInfo.environment["RM_SYNC_LOG_DIR"] {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        return home.appendingPathComponent("Library/Logs/rm-sync", isDirectory: true)
+        return home.appendingPathComponent("Library/Logs/rmsync", isDirectory: true)
     }
 
     static var stateDBPath: URL { stateDir.appendingPathComponent("state.db") }

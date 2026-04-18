@@ -43,11 +43,11 @@ struct WatcherIgnoreTests {
         #expect(LocalWatcher.shouldIgnore("/tmp/sync/thing.pdf", syncDir: sync))
     }
 
-    @Test("anything under .rm-sync-trash ignored")
+    @Test("anything under .rmsync-trash ignored")
     func rmSyncTrash() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
         #expect(LocalWatcher.shouldIgnore(
-            "/tmp/sync/.rm-sync-trash/old.md", syncDir: sync
+            "/tmp/sync/.rmsync-trash/old.md", syncDir: sync
         ))
     }
 }

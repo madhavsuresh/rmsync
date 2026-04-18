@@ -25,10 +25,10 @@ enum Xattrs {
     static let kind = "com.apple.metadata:kMDItemKind"
     static let userTags = "com.apple.metadata:_kMDItemUserTags"
     static let finderInfo = "com.apple.FinderInfo"
-    static let docIDKey = "rm-sync.doc_id"
-    static let remotePathKey = "rm-sync.remote_path"
-    static let remoteModifiedKey = "rm-sync.remote_modified"
-    static let pageIDsKey = "rm-sync.page_ids"
+    static let docIDKey = "rmsync.doc_id"
+    static let remotePathKey = "rmsync.remote_path"
+    static let remoteModifiedKey = "rmsync.remote_modified"
+    static let pageIDsKey = "rmsync.page_ids"
 
     /// Finder tag colour IDs: 0=none, 1=grey, 2=green, 3=purple, 4=blue,
     /// 5=yellow, 6=red, 7=orange. Yellow to match the Python port.
@@ -67,7 +67,7 @@ enum Xattrs {
         }
     }
 
-    /// Return the ``rm-sync.doc_id`` xattr if set. Handy for "which
+    /// Return the ``rmsync.doc_id`` xattr if set. Handy for "which
     /// reMarkable doc is this .md, even if I renamed it?".
     static func readDocID(at path: URL) -> String? {
         guard let data = try? getRaw(path: path, name: docIDKey) else { return nil }
