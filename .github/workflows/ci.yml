@@ -21,15 +21,11 @@ concurrency:
 jobs:
   test:
     name: Build + test (macOS)
-    runs-on: macos-14
+    # macos-15 ships Xcode 16 by default, giving us Swift 6.0.
+    # Our Package.swift demands swift-tools-version 6.0.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-
-      - name: Select Xcode 16
-        # macos-14 ships Xcode 15 by default; the Swift 6.3 toolchain
-        # we need lives in Xcode 16. Tolerate failure in case the
-        # runner image moves forward and 16 is already default.
-        run: sudo xcode-select -s /Applications/Xcode_16.0.app || true
 
       - name: Swift version
         run: swift --version
