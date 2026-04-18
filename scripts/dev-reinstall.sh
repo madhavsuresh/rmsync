@@ -164,12 +164,24 @@ done
 # ── 5. status ────────────────────────────────────────────────────────
 step "Status"
 
-# Give the daemon a beat to bind its IPC socket before we hit it.
-sleep 1
-if command -v rmsync >/dev/null 2>&1; then
-    rmsync status || yellow "  rmsync status returned non-zero (daemon still starting?)"
-else
+if ! command -v rmsync >/dev/null 2>&1; then
     yellow "  rmsync not on PATH; skipping status check"
+else
+    # Poll for the daemon to come back up. Fresh launchd kickstart
+    # takes 2–4s typically; give it up to 10.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if rmsync status 2>/dev/null | grep -q '^state:'; then
+            rmsync status
+            break
+        fi
+        sleep 1
+    done || true
+    # If we fell out without seeing 'state:', at least print whatever
+    # status has (probably "daemon: not running").
+    if ! rmsync status 2>/dev/null | grep -q '^state:'; then
+        yellow "  daemon didn't come up within 10s; falling back to DB read:"
+        rmsync status || true
+    fi
 fi
 
 bold ""
