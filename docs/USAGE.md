@@ -1,0 +1,504 @@
+# Using rm-sync
+
+Everything you need to operate the daemon day-to-day. Read top to bottom
+the first time; skip to whichever section matters after that.
+
+---
+
+## What's installed right now
+
+Two launchd agents, both running under your user (no root, no login password):
+
+| Label | What it is | Program |
+|---|---|---|
+| `com.user.rmsync` | The sync daemon | `~/.local/bin/rmsync daemon` |
+| `com.user.rmsync.menubar` | The menu bar app | `~/code/rm-sync/swift/.build/release/rmsync-menubar` |
+
+Their plists live at:
+
+```
+~/Library/LaunchAgents/com.user.rmsync.plist
+~/Library/LaunchAgents/com.user.rmsync.menubar.plist
+```
+
+The CLI binary is on your PATH as `rmsync` (symlinked from
+`~/.local/bin/rmsync` to the release build under the repo).
+
+Everything else the daemon needs:
+
+```
+~/.config/rm-sync/config.toml                           # config
+~/Library/Application Support/rm-sync/state.db          # SQLite state
+~/Library/Application Support/rm-sync/ipc.sock          # live IPC socket
+~/Library/Application Support/rm-sync/status.json       # slow-cadence snapshot
+~/Library/Logs/rm-sync/stdout.log                       # structured daemon log
+~/Library/Logs/rm-sync/menubar.log                      # menu bar log
+~/Library/CloudStorage/Dropbox/reMarkable/              # your sync dir (Dropbox today)
+```
+
+The agents start automatically at login and restart on crash.
+
+### One prerequisite: rmapi must be authenticated
+
+The daemon shells out to `rmapi` for all cloud access, so `rmapi`
+itself needs a reMarkable cloud session stored in
+`~/.config/rmapi/rmapi.conf`. You only do this once per Mac. If
+`install.sh` didn't walk you through it already:
+
+```sh
+rmapi
+# Opens an interactive prompt. In a browser, go to
+#   https://my.remarkable.com/device/desktop/connect
+# sign in, copy the 8-character code, and paste it into the rmapi prompt.
+```
+
+Verify:
+
+```sh
+rmapi account
+# Should print your email. If it prompts for a code, auth hasn't stuck.
+```
+
+Without this, the daemon will run but `rmsync doctor` fails on the
+"rmapi authenticated" check and nothing syncs.
+
+---
+
+## Daily commands
+
+All 10 subcommands. Run any of them from anywhere.
+
+| Command | What it does | Mechanism |
+|---|---|---|
+| `rmsync status` | Current state, tracked docs, last pull/push, conflicts, errors | Live IPC |
+| `rmsync pause` | Stop syncing without stopping the daemon | IPC → state DB |
+| `rmsync resume` | Resume | IPC → state DB |
+| `rmsync sync-now` | Force an immediate poll cycle | IPC |
+| `rmsync conflicts` | List unresolved `.md.conflict` files | State DB |
+| `rmsync doctor` | Run all 10 health checks, exit 1 on failure | Direct |
+| `rmsync logs -f` | Tail the structured JSON log | File tail |
+| `rmsync start` | Boot the launchd agent (idempotent) | `launchctl bootstrap` |
+| `rmsync stop` | Stop the launchd agent (idempotent) | `launchctl bootout` |
+| `rmsync restart` | Replace the running instance | `launchctl kickstart -k` |
+| `rmsync relocate <path>` | Move sync dir + rewrite state + update config + restart agent | Composite |
+| `rmsync uninstall` | Remove the launchd agent (leaves state + config) | Delegates to script |
+
+`daemon` and `init` also exist but you don't run them by hand — `daemon`
+is what launchd invokes; `init` just prints a pointer to `install.sh`.
+
+Everything that changes daemon state (`pause`, `resume`, `sync-now`)
+goes through the Unix-socket IPC. Everything that controls the agent
+lifecycle (`start`, `stop`, `restart`, `relocate`) talks to `launchctl`.
+
+---
+
+## How do I…
+
+### …edit a Markdown file on my Mac and see it on the tablet
+
+Just edit it.
+
+```sh
+echo "new line" >> ~/Library/CloudStorage/Dropbox/reMarkable/hello.md
+```
+
+What happens:
+
+1. FSEventStream fires within ~100ms.
+2. Watcher debounces 2s (coalesces rapid editor saves).
+3. Worker packs the file, shells `rmapi put --force` to the cloud.
+4. Sync appears on the tablet the next time you sync it (swipe-down
+   from the top on the home screen) or within its own auto-sync window.
+
+End-to-end ~5s from save to cloud, plus however long the tablet takes
+to pull.
+
+`rmsync status` will show `last push:` updated and `tracked docs:`
+incremented if it was a new file.
+
+### …write on the tablet and have it appear as Markdown locally
+
+Write on the tablet. When the tablet syncs back to the cloud (auto on
+modern firmware), our poller sees it.
+
+Poll intervals adapt based on recent activity:
+- **15s** when something changed in the last 5 minutes
+- **30s** default
+- **120s** when idle for 20+ minutes
+
+So the first change after a quiet stretch can take up to 2 minutes to
+show up locally. Once you start editing, subsequent changes are 15s.
+
+If you don't want to wait:
+
+```sh
+rmsync sync-now
+```
+
+Which kicks the poller immediately.
+
+### …move the sync dir to Dropbox (or anywhere else)
+
+One command handles everything — stops the agent, moves the files,
+rewrites `state.db`'s `local_path` column for every tracked doc,
+updates `sync_dir` in `config.toml`, restarts the agent:
+
+```sh
+rmsync relocate ~/Dropbox/reMarkable
+```
+
+Pass `--force` if the target already has `.md` files and you want to
+merge. Pass `--keep-stopped` to leave the agent down for manual
+follow-up work.
+
+You're currently on Dropbox's CloudStorage-mounted folder:
+`~/Library/CloudStorage/Dropbox/reMarkable/`. If you move back to
+local:
+
+```sh
+rmsync relocate ~/rm-sync-writing
+```
+
+#### `relocate` vs editing `sync_dir` in config.toml
+
+Both exist because they do different things. Use the right one:
+
+| You want to… | Use | Why |
+|---|---|---|
+| Change where synced `.md` files live on disk | **`rmsync relocate <path>`** | Moves the existing files, updates the state DB, edits the config, restarts the daemon. All atomic. |
+| Change any other config key | Edit `config.toml` + `rmsync restart` | No other field has this much stuff depending on it. |
+
+**`config.toml` is the source of truth.** The daemon reads `sync_dir`
+from it at startup. What `relocate` does is update that value along
+with the two things that would break if you changed it alone:
+
+1. The `.md` files themselves — they have to physically move.
+2. The state DB — every row stores an absolute `local_path`. Without
+   rewriting those, the daemon would think every tracked doc was
+   deleted from disk the next time it starts up.
+
+If you edit `sync_dir` in `config.toml` by hand and restart:
+
+- The daemon comes up looking at the new path.
+- That directory is probably empty (you didn't move the files).
+- Startup reconcile sees every tracked doc's `local_path` pointing at
+  the old location and reads them as "missing from disk."
+- That fires the "local file missing on startup" handler, which tries
+  to propagate deletions to the cloud.
+
+**Don't edit `sync_dir` in `config.toml` manually.** Always use
+`rmsync relocate`.
+
+After `relocate` completes you can cat the config to verify:
+
+```sh
+$ grep sync_dir ~/.config/rm-sync/config.toml
+sync_dir      = "/Users/you/Dropbox/reMarkable"
+```
+
+The change is persistent — it survives daemon restarts, launchd
+reboots, machine reboots. Just like any other config edit, except you
+didn't have to do it yourself.
+
+### …pause the daemon without uninstalling it
+
+```sh
+rmsync pause
+# … daemon is now idle. tablet changes still queued up but not pulled; …
+# … local edits still not pushed …
+rmsync resume
+```
+
+The paused state persists across daemon restarts (stored in
+`state.db`'s `settings` table). Menu bar icon shows ⏸ while paused.
+
+### …resolve a conflict
+
+A conflict means both sides changed the same doc between syncs. The
+daemon never silently picks a winner. Instead it writes a
+`<stem>.md.conflict` file with git-style markers:
+
+```
+<<<<<<< local
+your local edits
+=======
+what came back from the tablet
+>>>>>>> remote
+```
+
+The original `.md` is left untouched (the version from before the
+conflict was detected). Nothing pushes until you resolve.
+
+List unresolved ones:
+
+```sh
+rmsync conflicts
+```
+
+Resolve:
+
+```sh
+$EDITOR ~/sync-dir/foo.md.conflict
+# edit: delete the <<<<<<<, =======, >>>>>>> lines, keep the content
+# you want. you can mix from both sides.
+
+mv ~/sync-dir/foo.md.conflict ~/sync-dir/foo.md
+# overwrites the stale .md with your merged version. the daemon picks
+# this up as a normal local edit and pushes.
+```
+
+After the push, both sides are in sync again and `rmsync conflicts`
+returns empty.
+
+### …change config and have it take effect
+
+Edit the TOML file:
+
+```sh
+$EDITOR ~/.config/rm-sync/config.toml
+```
+
+**The daemon does not watch config.toml** — it reads the file once at
+startup and holds the values for the life of the process. Restart for
+edits to take effect:
+
+```sh
+rmsync restart
+```
+
+The default config's header comment reminds you of this.
+
+> **Exception:** don't edit `sync_dir` directly. Use `rmsync relocate`
+> — it updates the config *and* the three other things that depend on
+> it in sync. See the previous section for the reasoning.
+
+Config keys and defaults (all paths relative to your home):
+
+| Key | Default | Effect |
+|---|---|---|
+| `sync_dir` | `~/rm-sync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
+| `remote_folder` | `Writing` | Which cloud folder to mirror |
+| `worker_pool_size` | `3` | Parallel pull/push workers |
+| `poll_interval_seconds` | `30` | Default poll cadence |
+| `poll_active_interval_seconds` | `15` | After recent activity |
+| `poll_idle_interval_seconds` | `120` | After 20+ min quiet |
+| `debounce_seconds` | `2.0` | Local edit → push delay |
+| `echo_fence_seconds` | `5.0` | Drop watcher events we caused |
+| `retry_max_attempts` | `3` | Per-operation retry budget |
+| `push_strategy` | `native_plain` | Also: `native_formatted` (stub), `pdf` (stub) |
+| `dry_run` | `false` | Log intent, don't execute |
+| `[log].level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+
+---
+
+## Menu bar
+
+Look at your menu bar — you'll see an icon near the top-right of the
+screen. Click it for the menu.
+
+### Icon states
+
+| Icon | Meaning |
+|---|---|
+| ✓ | Synced, idle |
+| tablet-and-pencil + ⟳ | Syncing |
+| tablet-and-pencil + ⚠ | Unresolved conflicts present |
+| tablet-and-pencil + ⏸ | Paused |
+| tablet-and-pencil + ✗ | Error or daemon stopped |
+
+### Menu items
+
+- **Synced (N docs)** — status line, updates live from IPC
+- **Last pull / push** — relative time (e.g. "2 min ago")
+- **Open Sync Folder** — reveals it in Finder
+- **Show Conflicts (N)** — hidden when zero
+- **Pause / Resume** — toggles the pause state (persists)
+- **Sync Now** — force poll
+- **Restart Daemon** — `launchctl kickstart -k`
+- **Open Logs** — opens the log file in Console.app
+- **Edit Config…** — opens `config.toml`
+- **Quit Menu Bar** — stops the menu bar only; daemon keeps syncing
+
+---
+
+## Logs + diagnostics
+
+### Where logs go
+
+```
+~/Library/Logs/rm-sync/stdout.log     # daemon (structured JSON, one event per line)
+~/Library/Logs/rm-sync/stderr.log     # daemon stderr
+~/Library/Logs/rm-sync/menubar.log    # menu bar
+```
+
+### Live tail
+
+```sh
+rmsync logs -f
+```
+
+Ctrl+C to stop.
+
+Or grep for just structured events:
+
+```sh
+tail -f ~/Library/Logs/rm-sync/stdout.log | grep '"event"'
+```
+
+### `rmsync doctor`
+
+Runs 10 health checks, prints ✓ / ! / ✗ per check, exits 1 if anything
+is ✗. Checks: rmapi on PATH, rmapi version, rmapi authenticated, remote
+Writing folder reachable, local sync_dir writable, state DB openable,
+launchd plist loaded, disk space, log dir writable, clock sanity.
+
+Run it when anything seems off.
+
+### Inspect state directly
+
+```sh
+# How many docs are tracked? When did each last sync?
+sqlite3 "$HOME/Library/Application Support/rm-sync/state.db" \
+    "SELECT doc_id, substr(local_path, -30) AS path, last_pull_at, last_push_at
+     FROM documents ORDER BY last_push_at DESC"
+
+# What's paused and which author UUID does this install write with?
+sqlite3 "$HOME/Library/Application Support/rm-sync/state.db" \
+    "SELECT * FROM settings"
+```
+
+### Xattrs on a pulled file
+
+Every pulled `.md` carries xattrs telling you where it came from:
+
+```sh
+xattr -l ~/Library/CloudStorage/Dropbox/reMarkable/hello.md
+```
+
+You'll see `rm-sync.doc_id`, `rm-sync.remote_path`,
+`rm-sync.remote_modified`, `rm-sync.page_ids`, plus the Finder
+`kMDItemWhereFroms` / `kMDItemKind` / `_kMDItemUserTags` entries that
+surface in Finder's Get Info panel.
+
+---
+
+## Rebuild after code changes
+
+```sh
+cd ~/code/rm-sync
+./install.sh
+```
+
+Rebuilds both products in release mode, refreshes the plists, kicks
+both agents. Idempotent.
+
+For an in-place rebuild without touching launchd:
+
+```sh
+cd ~/code/rm-sync/swift
+swift build -c release --product rmsync
+rmsync restart
+```
+
+The `~/.local/bin/rmsync` symlink points at the release-build path, so
+any `swift build -c release` pickup is reflected immediately in new CLI
+invocations. Launchd-launched daemon picks up the new binary on the
+next `restart` or `kickstart`.
+
+Run the tests before shipping anything:
+
+```sh
+cd ~/code/rm-sync/swift
+swift test                              # fast: 48 Swift Testing + 50 RMScene
+RMSYNC_LIVE=1 PATH="$HOME/bin:$PATH" swift test     # also run the 2 live-cloud push smoke tests
+```
+
+---
+
+## Uninstall
+
+Stop the agents and remove them, keeping your config / state / logs:
+
+```sh
+cd ~/code/rm-sync
+./uninstall.sh
+```
+
+Nuclear option — wipe state too:
+
+```sh
+./uninstall.sh --purge
+```
+
+Purge removes:
+- `~/.config/rm-sync/`
+- `~/Library/Application Support/rm-sync/`
+- `~/Library/Logs/rm-sync/`
+
+After either, the `.md` files in the sync dir stay on disk. You have
+to remove those manually.
+
+---
+
+## Rough edges to know about
+
+### Local-delete of a tracked `.md` does NOT remove the cloud doc
+
+Safety gate. FSEvents can misfire in editor/finder-rename scenarios and
+destroying a cloud doc from an unverified single event is too risky.
+If you delete `hello.md` locally, the daemon logs `local delete
+detected; cloud removal deferred`. The cloud copy stays put.
+
+To actually delete:
+
+```sh
+~/bin/rmapi rm /Writing/hello
+```
+
+### `rmapi put --force` only
+
+Our push path uses `rmapi put --force` to update an existing doc in
+place. **Never** hand-invoke `rmapi put --content-only` — that flag is
+PDF-only and will fail loudly. Plain `rmapi put` without `--force`
+errors when the doc already exists.
+
+### Dropbox "conflicted copy" files ignored
+
+If Dropbox decides to manufacture a `foo (Mac mini's conflicted copy
+2026-04-17).md` file, the watcher ignores it. It won't be pushed as a
+new reMarkable doc. You handle Dropbox's conflict resolution manually
+— keep the copy you want, delete the other.
+
+### Handwriting pages pull as empty
+
+Only typed text extracts to Markdown. Pages that are purely
+handwriting come through as empty strings and don't appear in the
+`.md`. Notebooks mixing the two keep only the typed text.
+
+### Never edit `sync_dir` in config.toml by hand
+
+Use `rmsync relocate <new-path>` instead. The command moves the files,
+rewrites the state DB, and updates the config atomically. Editing just
+the config leaves every tracked doc's `local_path` pointing at a
+missing location, which the daemon interprets as "user deleted
+everything" on next startup. See the **relocate vs editing sync_dir**
+table in the "How do I…" section above.
+
+### Dropbox "smart sync" / online-only
+
+If Dropbox has the sync folder on smart-sync (online-only files), our
+watcher will see 0-byte placeholders and push empties. Keep the sync
+folder set to "Always Keep on This Device" in Dropbox's UI.
+
+---
+
+## Quick sanity check
+
+```sh
+rmsync status                              # daemon alive, talks IPC
+rmsync doctor                              # all ✓
+ls ~/Library/LaunchAgents/com.user.rmsync* # both plists present
+ps auxww | grep rmsync | grep -v grep      # both processes running
+```
+
+If any of those surprise you, `rmsync restart` is the fast fix.

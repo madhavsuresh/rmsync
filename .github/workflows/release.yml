@@ -1,0 +1,172 @@
+name: release
+
+# On tag push (vX.Y.Z):
+#   1. Build universal (arm64 + x86_64) release binaries.
+#   2. Run the non-live test suite.
+#   3. Compute SHA256 of the GitHub-generated source tarball for the tag.
+#   4. Create a GitHub Release and attach binaries.
+#   5. Open a PR against the Homebrew tap repo bumping url + sha256.
+#
+# Requires one repo secret if you want step 5 to work:
+#   TAP_REPO_TOKEN  — a fine-grained PAT with write access to the
+#                     homebrew-rm-sync tap repo. Without it, the
+#                     "bump-formula" job is skipped; you bump manually.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # needed to create the release
+
+jobs:
+  build:
+    name: Build + test
+    runs-on: macos-14  # Apple Silicon; also cross-compiles x86_64.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app || true
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Install rmapi for tests
+        run: brew install io41/tap/rmapi
+
+      - name: Build universal release
+        working-directory: swift
+        run: |
+          swift build \
+            --disable-sandbox \
+            -c release \
+            --arch arm64 \
+            --arch x86_64
+
+      - name: Run tests (non-live)
+        working-directory: swift
+        run: swift test -c release
+
+      - name: Package binaries
+        id: package
+        working-directory: swift
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUTDIR="rm-sync-${VERSION}-macos-universal"
+          mkdir -p "../${OUTDIR}"
+
+          # SPM drops universal builds under .build/apple/…
+          cp .build/apple/Products/Release/rmsync "../${OUTDIR}/"
+          cp .build/apple/Products/Release/rmsync-menubar "../${OUTDIR}/"
+
+          cd ..
+          cp -R scripts "${OUTDIR}/"
+          cp -R assets "${OUTDIR}/"
+          cp -R docs "${OUTDIR}/"
+          cp README.md install.sh uninstall.sh "${OUTDIR}/"
+
+          # Strip debug symbols so the tarball doesn't ship debug info.
+          strip -x "${OUTDIR}/rmsync" "${OUTDIR}/rmsync-menubar"
+
+          tar czf "${OUTDIR}.tar.gz" "${OUTDIR}"
+          shasum -a 256 "${OUTDIR}.tar.gz" | tee "${OUTDIR}.tar.gz.sha256"
+
+          echo "tarball=${OUTDIR}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "shafile=${OUTDIR}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Compute source-tarball SHA (for Homebrew `url`)
+        id: srcsha
+        run: |
+          URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          echo "Downloading $URL"
+          curl -sL "$URL" -o src.tar.gz
+          SRC_SHA=$(shasum -a 256 src.tar.gz | awk '{print $1}')
+          echo "src_sha=$SRC_SHA" >> "$GITHUB_OUTPUT"
+          echo "src_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Source tarball SHA256: $SRC_SHA"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.package.outputs.tarball }}
+            ${{ steps.package.outputs.shafile }}
+          body: |
+            ## Installation
+
+            ### Homebrew
+
+            ```
+            brew install madhavsuresh/rm-sync/rm-sync
+            ```
+
+            ### From source
+
+            ```
+            git clone https://github.com/${{ github.repository }}.git
+            cd rm-sync && ./install.sh
+            ```
+
+            ### From release tarball (no Swift toolchain required)
+
+            ```
+            curl -L ${{ steps.srcsha.outputs.src_url }} -o src.tar.gz
+            # … or download the ${{ steps.package.outputs.tarball }} attached below
+            ```
+
+            ## Formula values for the tap
+
+            ```
+            url    "${{ steps.srcsha.outputs.src_url }}"
+            sha256 "${{ steps.srcsha.outputs.src_sha }}"
+            ```
+
+  bump-formula:
+    name: Bump Homebrew tap
+    runs-on: ubuntu-latest
+    needs: build
+    # Skip silently if the tap PAT isn't configured.
+    if: ${{ secrets.TAP_REPO_TOKEN != '' }}
+    steps:
+      - name: Compute source SHA
+        id: srcsha
+        run: |
+          URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          curl -sL "$URL" -o src.tar.gz
+          SRC_SHA=$(sha256sum src.tar.gz | awk '{print $1}')
+          echo "src_sha=$SRC_SHA" >> "$GITHUB_OUTPUT"
+          echo "src_url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Check out tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-rm-sync
+          token: ${{ secrets.TAP_REPO_TOKEN }}
+          path: tap
+
+      - name: Update formula
+        working-directory: tap
+        run: |
+          FORMULA="Formula/rm-sync.rb"
+          sed -i -E "s|url \".*\"|url \"${{ steps.srcsha.outputs.src_url }}\"|" "$FORMULA"
+          sed -i -E "s|sha256 \"[0-9a-f]{64}\"|sha256 \"${{ steps.srcsha.outputs.src_sha }}\"|" "$FORMULA"
+
+          git config user.name "rm-sync release bot"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -b "bump-${GITHUB_REF_NAME}"
+          git add "$FORMULA"
+          git commit -m "rm-sync ${GITHUB_REF_NAME}"
+          git push -u origin "bump-${GITHUB_REF_NAME}"
+
+      - name: Open PR on tap
+        working-directory: tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
+        run: |
+          gh pr create \
+            --title "rm-sync ${GITHUB_REF_NAME}" \
+            --body  "Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}." \
+            --base  main \
+            --head  "bump-${GITHUB_REF_NAME}"
