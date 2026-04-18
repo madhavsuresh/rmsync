@@ -13,7 +13,6 @@ actor IPCServer {
     private let socketPath: URL
     private let bus: StateBus
     private var handlers: [String: CommandHandler] = [:]
-    private var listenFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private let queue = DispatchQueue(label: "com.user.rmsync.ipc.accept")
 
@@ -69,7 +68,6 @@ actor IPCServer {
             throw IPCError.listenFailed(errno: err)
         }
 
-        listenFD = fd
         let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         let listenFDCopy = fd
         let handlersCopy = self.handlers
@@ -77,18 +75,19 @@ actor IPCServer {
         src.setEventHandler {
             Self.acceptLoop(listenFD: listenFDCopy, bus: busCopy, handlers: handlersCopy)
         }
-        src.setCancelHandler { [weak self] in
-            Task { await self?.closeListenFD() }
+        // The cancel handler fires exactly once when the source is
+        // cancelled (from ``stop()``). Close the captured-by-value fd
+        // directly — no need to hop back into the actor for a field
+        // that no other code reads. Capturing `self` here would make
+        // the closure conflict with its ``sending`` parameter shape
+        // under Swift 6 strict concurrency.
+        src.setCancelHandler {
+            if listenFDCopy >= 0 {
+                Darwin.close(listenFDCopy)
+            }
         }
         src.resume()
         acceptSource = src
-    }
-
-    private func closeListenFD() {
-        if listenFD >= 0 {
-            Darwin.close(listenFD)
-            listenFD = -1
-        }
     }
 
     func stop() {
