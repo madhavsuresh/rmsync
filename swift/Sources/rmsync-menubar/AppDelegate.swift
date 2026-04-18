@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if let image = NSImage(systemSymbolName: symbolName,
-                               accessibilityDescription: "rm-sync: \(state)") {
+                               accessibilityDescription: "rmsync: \(state)") {
             image.isTemplate = true
             button.image = image
         } else {

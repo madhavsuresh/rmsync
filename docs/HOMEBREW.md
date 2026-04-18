@@ -1,12 +1,12 @@
-# Shipping rm-sync via Homebrew
+# Shipping rmsync via Homebrew
 
 You do this once, per-release. The short version:
 
-1. **Create a tap repo.** `github.com/<you>/homebrew-rm-sync`.
-2. **Copy `Formula/rm-sync.rb`** from this repo into the tap repo.
+1. **Create a tap repo.** `github.com/<you>/homebrew-rmsync`.
+2. **Copy `Formula/rmsync.rb`** from this repo into the tap repo.
 3. **Tag a release** here (`git tag v0.2.0 && git push origin v0.2.0`).
 4. **Update `url` and `sha256`** in the tap's formula to match the tag.
-5. **Users install with** `brew install <you>/rm-sync/rm-sync`.
+5. **Users install with** `brew install <you>/rmsync/rmsync`.
 
 The `release.yml` GitHub Action automates steps 3–4 once you've set up
 a token. This doc explains the pieces.
@@ -16,17 +16,17 @@ a token. This doc explains the pieces.
 ## 1. Create the tap repository
 
 Tap repos follow a strict naming convention. For `brew install
-<you>/rm-sync/rm-sync` to resolve, the tap repo MUST be named
-`homebrew-rm-sync` under your GitHub user or org. Brew strips the
+<you>/rmsync/rmsync` to resolve, the tap repo MUST be named
+`homebrew-rmsync` under your GitHub user or org. Brew strips the
 `homebrew-` prefix when printing.
 
 ```sh
-gh repo create <you>/homebrew-rm-sync --public --clone --description "Homebrew tap for rm-sync"
-cd homebrew-rm-sync
+gh repo create <you>/homebrew-rmsync --public --clone --description "Homebrew tap for rmsync"
+cd homebrew-rmsync
 mkdir Formula
-cp ../rm-sync/Formula/rm-sync.rb Formula/
-git add Formula/rm-sync.rb
-git commit -m "Initial formula for rm-sync v0.2.0"
+cp ../rmsync/Formula/rmsync.rb Formula/
+git add Formula/rmsync.rb
+git commit -m "Initial formula for rmsync v0.2.0"
 git push
 ```
 
@@ -41,7 +41,7 @@ Search and replace once before first release:
 ```sh
 # inside the tap repo
 GH_USER=your-github-username
-sed -i '' "s|<GH_USER>|$GH_USER|g" Formula/rm-sync.rb
+sed -i '' "s|<GH_USER>|$GH_USER|g" Formula/rmsync.rb
 ```
 
 The `sha256` you fill in the next step, after tagging.
@@ -49,7 +49,7 @@ The `sha256` you fill in the next step, after tagging.
 ## 3. Tag a release on the main repo
 
 ```sh
-# inside the main rm-sync repo
+# inside the main rmsync repo
 git tag -a v0.2.0 -m "Initial Homebrew-compatible release"
 git push origin v0.2.0
 ```
@@ -57,45 +57,45 @@ git push origin v0.2.0
 GitHub auto-generates a source tarball at:
 
 ```
-https://github.com/<you>/rm-sync/archive/refs/tags/v0.2.0.tar.gz
+https://github.com/<you>/rmsync/archive/refs/tags/v0.2.0.tar.gz
 ```
 
 ## 4. Compute the SHA and update the formula
 
 ```sh
-curl -sL https://github.com/<you>/rm-sync/archive/refs/tags/v0.2.0.tar.gz \
+curl -sL https://github.com/<you>/rmsync/archive/refs/tags/v0.2.0.tar.gz \
   | shasum -a 256
 # prints:  <sha256>  -
 ```
 
-Paste that SHA into the tap's `Formula/rm-sync.rb` `sha256` line,
+Paste that SHA into the tap's `Formula/rmsync.rb` `sha256` line,
 commit, push:
 
 ```sh
-cd ~/src/homebrew-rm-sync
-$EDITOR Formula/rm-sync.rb  # paste the SHA
-git commit -am "rm-sync v0.2.0"
+cd ~/src/homebrew-rmsync
+$EDITOR Formula/rmsync.rb  # paste the SHA
+git commit -am "rmsync v0.2.0"
 git push
 ```
 
 ## 5. Test the install locally
 
 ```sh
-brew tap <you>/rm-sync
-brew install --build-from-source rm-sync
+brew tap <you>/rmsync
+brew install --build-from-source rmsync
 rmsync --version
-rm-sync-install-agents
+rmsync-install-agents
 rmsync doctor
 ```
 
 If any of those fail, iterate on the formula and do a `brew reinstall
-rm-sync` until clean.
+rmsync` until clean.
 
 For full uninstall during iteration:
 
 ```sh
-rm-sync-uninstall-agents
-brew uninstall rm-sync
+rmsync-uninstall-agents
+brew uninstall rmsync
 ```
 
 ---
@@ -115,7 +115,7 @@ variables → Actions, add:
 
 | Name | Value |
 |---|---|
-| `TAP_REPO_TOKEN` | A fine-grained PAT with Contents:write and Pull requests:write on the `<you>/homebrew-rm-sync` repo |
+| `TAP_REPO_TOKEN` | A fine-grained PAT with Contents:write and Pull requests:write on the `<you>/homebrew-rmsync` repo |
 
 Without the secret, the workflow skips the bump-formula job silently
 — you do steps 4 manually each release.
@@ -126,7 +126,7 @@ Without the secret, the workflow skips the bump-formula job silently
 GitHub → Settings → Developer settings → Personal access tokens
   → Fine-grained tokens → Generate new token
     Resource owner: <you>
-    Repository access: Only select repositories → homebrew-rm-sync
+    Repository access: Only select repositories → homebrew-rmsync
     Repository permissions:
       Contents: Read and write
       Pull requests: Read and write
@@ -140,19 +140,19 @@ for anything else.
 ## Handling the menu bar + daemon
 
 Homebrew is oriented around one daemon per formula (via the `service
-do` block). rm-sync ships two agents (daemon + menu bar), so the
+do` block). rmsync ships two agents (daemon + menu bar), so the
 formula does neither automatically — both are installed by the
-`rm-sync-install-agents` helper after `brew install`.
+`rmsync-install-agents` helper after `brew install`.
 
-Why not use `brew services start rm-sync`?
+Why not use `brew services start rmsync`?
 
-- `brew services` writes a plist with label `homebrew.mxcl.rm-sync`,
+- `brew services` writes a plist with label `homebrew.mxcl.rmsync`,
   whereas the daemon, CLI, and menu bar app all expect the label
   `com.user.rmsync`. `rmsync start/stop/restart` would all break.
 - `brew services` only manages one label per formula. There's no clean
   way to start the menu bar app from the same formula.
 
-The cost: two lines in the caveats (`rm-sync-install-agents` and
+The cost: two lines in the caveats (`rmsync-install-agents` and
 `rmsync doctor`). Acceptable.
 
 ---
@@ -167,18 +167,18 @@ git push origin v0.3.0
 ```
 
 If you configured the PAT, the Action opens a PR on the tap repo.
-Review and merge. Users `brew upgrade rm-sync`.
+Review and merge. Users `brew upgrade rmsync`.
 
 Without the PAT, update the tap manually:
 
 ```sh
-cd ~/src/homebrew-rm-sync
-sed -i '' 's/v0.2.0/v0.3.0/g' Formula/rm-sync.rb
+cd ~/src/homebrew-rmsync
+sed -i '' 's/v0.2.0/v0.3.0/g' Formula/rmsync.rb
 # new sha:
-curl -sL https://github.com/<you>/rm-sync/archive/refs/tags/v0.3.0.tar.gz \
+curl -sL https://github.com/<you>/rmsync/archive/refs/tags/v0.3.0.tar.gz \
   | shasum -a 256
-$EDITOR Formula/rm-sync.rb   # paste new sha256
-git commit -am "rm-sync v0.3.0"
+$EDITOR Formula/rmsync.rb   # paste new sha256
+git commit -am "rmsync v0.3.0"
 git push
 ```
 
@@ -192,14 +192,14 @@ tap** and symlink the formula into it:
 
 ```sh
 # one-time setup
-brew tap-new madhavsuresh/rm-sync
-ln -sf "$PWD/Formula/rm-sync.rb" \
-       "$(brew --repo madhavsuresh/rm-sync)/Formula/rm-sync.rb"
+brew tap-new madhavsuresh/rmsync
+ln -sf "$PWD/Formula/rmsync.rb" \
+       "$(brew --repo madhavsuresh/rmsync)/Formula/rmsync.rb"
 
 # iterate:
-$EDITOR Formula/rm-sync.rb
-brew reinstall --build-from-source madhavsuresh/rm-sync/rm-sync
-rm-sync-install-agents
+$EDITOR Formula/rmsync.rb
+brew reinstall --build-from-source madhavsuresh/rmsync/rmsync
+rmsync-install-agents
 rmsync doctor
 ```
 
@@ -211,10 +211,10 @@ Note: while `sha256` in the formula still points at `0000…` /
 whatever the placeholder is, `brew install` will fail the checksum
 check on the tagged tarball. Work around it one of two ways:
 
-- **Add `head "https://github.com/<you>/rm-sync.git"`** (already in
+- **Add `head "https://github.com/<you>/rmsync.git"`** (already in
   the formula) and install with `--HEAD`:
     ```sh
-    brew install --HEAD madhavsuresh/rm-sync/rm-sync
+    brew install --HEAD madhavsuresh/rmsync/rmsync
     ```
   This clones the main branch at install time, ignoring `url`/`sha256`.
 

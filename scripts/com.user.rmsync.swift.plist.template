@@ -25,8 +25,8 @@
     <key>ProcessType</key><string>Background</string>
 
     <key>WorkingDirectory</key><string>__HOME__</string>
-    <key>StandardOutPath</key><string>__HOME__/Library/Logs/rm-sync/stdout.log</string>
-    <key>StandardErrorPath</key><string>__HOME__/Library/Logs/rm-sync/stderr.log</string>
+    <key>StandardOutPath</key><string>__HOME__/Library/Logs/rmsync/stdout.log</string>
+    <key>StandardErrorPath</key><string>__HOME__/Library/Logs/rmsync/stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

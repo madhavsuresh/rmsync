@@ -1,7 +1,7 @@
 import Foundation
 import TOMLDecoder
 
-/// User-editable configuration loaded from ``~/.config/rm-sync/config.toml``.
+/// User-editable configuration loaded from ``~/.config/rmsync/config.toml``.
 ///
 /// Field names mirror the Python Pydantic model in ``src/rm_sync/config.py``
 /// so the same TOML file works with both the old and new daemon.

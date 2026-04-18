@@ -33,7 +33,7 @@ enum Notifications {
 
     static func notifyConflict(docTitle: String, localPath: URL) {
         notify(
-            title: "rm-sync: conflict",
+            title: "rmsync: conflict",
             body: "\(docTitle) changed on both sides. A .conflict file was written.",
             subtitle: localPath.deletingLastPathComponent().path
         )

@@ -30,7 +30,7 @@ from rmscene import simple_text_document, write_blocks  # type: ignore
 from rm_sync.conversion.archive import RmDoc, RmDocPage, new_page_id, pack
 
 RMAPI = str(Path.home() / "bin/rmapi")
-FOLDER = "/rm-sync-test"
+FOLDER = "/rmsync-test"
 
 
 def run(*args: str, check: bool = False) -> subprocess.CompletedProcess:
