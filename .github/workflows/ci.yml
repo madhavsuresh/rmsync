@@ -1,0 +1,86 @@
+name: CI
+
+# Runs on every pull request against main + every push to main.
+# Faster feedback than waiting for a tag to build.
+#
+# Not intended to gate merges by default — if you want that, add a
+# branch protection rule that requires "CI / test" to pass.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs: if a PR gets force-pushed or new commits
+# arrive mid-build, abandon the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build + test (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        # macos-14 ships Xcode 15 by default; the Swift 6.3 toolchain
+        # we need lives in Xcode 16. Tolerate failure in case the
+        # runner image moves forward and 16 is already default.
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app || true
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Install rmapi
+        # Not strictly required for the non-live test suite, but having
+        # it on PATH matches a real dev environment and lets doctor
+        # smoke tests run if we ever add them.
+        run: brew install io41/tap/rmapi
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            swift/.build
+            ~/.cache/org.swift.swiftpm
+          # Cache key changes on Package.resolved so dependency bumps
+          # invalidate cleanly. Source edits still rebuild incrementally.
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('swift/Package.resolved') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-
+
+      - name: Build (debug)
+        working-directory: swift
+        run: swift build
+
+      - name: Test
+        working-directory: swift
+        # Default suite only — the live-cloud smoke tests that gate on
+        # RMSYNC_LIVE=1 require rmapi to have real cloud auth, which a
+        # CI runner doesn't. They early-return when the env var is
+        # absent, so this command skips them implicitly.
+        run: swift test
+
+      - name: Verify release build
+        working-directory: swift
+        # Catch Sendable / release-only issues the debug build would
+        # miss. Universal cross-compile exercises what the release
+        # workflow will actually produce.
+        run: |
+          swift build \
+            --disable-sandbox \
+            -c release \
+            --arch arm64 \
+            --arch x86_64
+
+      - name: Verify --help output
+        # Cheap sanity: make sure the CLI binary loads its deps and
+        # ArgumentParser wiring is intact. Mirrors the test block in
+        # Formula/rmsync.rb.
+        working-directory: swift
+        run: |
+          ./.build/apple/Products/Release/rmsync --help | grep -E '^SUBCOMMANDS:'
+          ./.build/apple/Products/Release/rmsync --help | grep -E '(status|doctor|relocate)'

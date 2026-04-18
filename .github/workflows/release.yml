@@ -127,10 +127,24 @@ jobs:
     name: Bump Homebrew tap
     runs-on: ubuntu-latest
     needs: build
-    # Skip silently if the tap PAT isn't configured.
-    if: ${{ secrets.TAP_REPO_TOKEN != '' }}
+    # The `secrets` context can't be used in a job-level `if:` — we
+    # check at the first step instead and short-circuit subsequent
+    # steps when the PAT isn't configured.
     steps:
+      - name: Check for tap PAT
+        id: check
+        env:
+          TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TAP_REPO_TOKEN not configured; skipping tap bump."
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Compute source SHA
+        if: steps.check.outputs.has_token == 'true'
         id: srcsha
         run: |
           URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
@@ -140,6 +154,7 @@ jobs:
           echo "src_url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: Check out tap repo
+        if: steps.check.outputs.has_token == 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/homebrew-rmsync
@@ -147,6 +162,7 @@ jobs:
           path: tap
 
       - name: Update formula
+        if: steps.check.outputs.has_token == 'true'
         working-directory: tap
         run: |
           FORMULA="Formula/rmsync.rb"
@@ -161,6 +177,7 @@ jobs:
           git push -u origin "bump-${GITHUB_REF_NAME}"
 
       - name: Open PR on tap
+        if: steps.check.outputs.has_token == 'true'
         working-directory: tap
         env:
           GH_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
