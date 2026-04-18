@@ -1,0 +1,109 @@
+import Foundation
+
+/// Atomic-write + path-sanitization helpers.
+///
+/// Port of ``src/rm_sync/paths.py``. ``atomicWriteText`` is critical for
+/// the echo-fence contract: every write goes tmp → ``replaceItem`` so the
+/// watcher never sees a half-written file.
+enum PathUtilities {
+    /// Windows-reserved filenames we escape even on macOS. Same list the
+    /// Python code used; keeps sync folders portable.
+    private static let windowsReserved: Set<String> = {
+        var s: Set<String> = ["CON", "PRN", "AUX", "NUL"]
+        for i in 1..<10 { s.insert("COM\(i)"); s.insert("LPT\(i)") }
+        return s
+    }()
+
+    static func sanitizeSegment(_ name: String) -> String {
+        // NFC-normalize first so equivalent unicode forms hash the same.
+        var s = (name as NSString).precomposedStringWithCanonicalMapping
+
+        // Replace illegal chars with underscore. Same set as Python:
+        // control chars + / \ : ? * < > " |
+        let illegal = /[\x{00}-\x{1f}\/\\:?*<>"|]/
+        s = s.replacing(illegal, with: "_")
+
+        // Collapse runs of underscores.
+        s = s.replacing(/_+/, with: "_")
+
+        // Strip leading/trailing dots and spaces.
+        s = s.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+
+        if s.isEmpty { s = "untitled" }
+        if windowsReserved.contains(s.uppercased()) {
+            s = "_\(s)_"
+        }
+        if s.count > 200 {
+            s = String(s.prefix(200))
+        }
+        return s
+    }
+
+    static func remoteToLocal(remotePath: String, syncDir: URL, remoteFolder: String) -> URL {
+        var parts = remotePath.split(separator: "/").map(String.init)
+        if let first = parts.first, first == remoteFolder {
+            parts.removeFirst()
+        }
+        let safe = parts.map(sanitizeSegment)
+        if safe.isEmpty {
+            return syncDir.appendingPathComponent("untitled.md")
+        }
+        var url = syncDir
+        for segment in safe.dropLast() {
+            url.appendPathComponent(segment, isDirectory: true)
+        }
+        url.appendPathComponent(safe.last! + ".md")
+        return url
+    }
+
+    /// Write ``text`` to ``path`` atomically: tmp file + ``replaceItem``.
+    /// Matches the Python ``os.replace`` semantics — on POSIX the replace
+    /// is rename(2) which is atomic within a filesystem.
+    static func atomicWriteText(_ text: String, to path: URL) throws {
+        try FileManager.default.createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let tmp = path.appendingPathExtension("tmp")
+        try text.write(to: tmp, atomically: false, encoding: .utf8)
+
+        // ``replaceItemAt`` handles the case where ``path`` already
+        // exists: it atomically swaps tmp into place.
+        if FileManager.default.fileExists(atPath: path.path) {
+            _ = try FileManager.default.replaceItemAt(path, withItemAt: tmp)
+        } else {
+            try FileManager.default.moveItem(at: tmp, to: path)
+        }
+    }
+
+    /// SHA-256 of a UTF-8 string, hex-encoded. Used everywhere the daemon
+    /// checks "has this file's content changed since last sync".
+    static func sha256(_ text: String) -> String {
+        let data = Data(text.utf8)
+        return Self.sha256Hex(data)
+    }
+
+    static func sha256File(_ url: URL) throws -> String {
+        let data = try Data(contentsOf: url)
+        return Self.sha256Hex(data)
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        // CryptoKit is available on macOS 10.15+, and we target 13+.
+        let digest = _sha256(data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// CryptoKit import localized to keep the surface clean.
+#if canImport(CryptoKit)
+import CryptoKit
+private func _sha256(_ data: Data) -> [UInt8] {
+    Array(SHA256.hash(data: data))
+}
+#else
+import Crypto
+private func _sha256(_ data: Data) -> [UInt8] {
+    Array(SHA256.hash(data: data))
+}
+#endif
