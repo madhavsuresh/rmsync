@@ -185,23 +185,19 @@ final class LocalWatcher: @unchecked Sendable {
         if name.hasPrefix(".") { return true }
         if url.pathExtension == "tmp" { return true }
         if url.pathExtension == "conflict" { return true }
+        guard let rel = PathUtilities.resolvedRelativePath(from: syncDir, to: url)
+        else { return true }
 
         // Dropbox / iCloud / OneDrive conflict copies.
         let conflictCopy = /(?i)\bconflicted copy\b/
         if name.contains(conflictCopy) { return true }
 
         // Anything under .rmsync-trash / .git / .obsidian / hidden dirs.
-        let syncComponents = syncDir.standardizedFileURL.pathComponents
-        let targetComponents = url.standardizedFileURL.pathComponents
-        if targetComponents.count > syncComponents.count,
-           Array(targetComponents.prefix(syncComponents.count)) == syncComponents {
-            let rel = targetComponents.dropFirst(syncComponents.count)
-            for part in rel {
-                if ["\\.rmsync-trash", ".rmsync-trash", ".git", ".obsidian"].contains(part) {
-                    return true
-                }
-                if part.hasPrefix(".") { return true }
+        for part in rel {
+            if ["\\.rmsync-trash", ".rmsync-trash", ".git", ".obsidian"].contains(part) {
+                return true
             }
+            if part.hasPrefix(".") { return true }
         }
 
         // We only care about .md.

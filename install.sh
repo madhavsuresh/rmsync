@@ -89,28 +89,11 @@ if [[ -z "$RMAPI_BIN" ]]; then
                 [[ -n "$RMAPI_BIN" ]] && installed=1
             fi
         fi
-        if [[ "$installed" -eq 0 ]]; then
-            echo "  Fall back to downloading the release binary into ~/bin/rmapi?"
-            if confirm "  Download rmapi release binary?"; then
-                mkdir -p "$HOME/bin"
-                arch=arm64
-                [[ "$(uname -m)" == "x86_64" ]] && arch=intel
-                url="https://github.com/ddvk/rmapi/releases/latest/download/rmapi-macos-${arch}.zip"
-                tmp=$(mktemp -d)
-                curl -fsSL -o "$tmp/rmapi.zip" "$url"
-                unzip -q "$tmp/rmapi.zip" -d "$tmp"
-                mv "$tmp/rmapi" "$HOME/bin/rmapi"
-                chmod +x "$HOME/bin/rmapi"
-                rm -rf "$tmp"
-                RMAPI_BIN="$HOME/bin/rmapi"
-                installed=1
-            fi
-        fi
     fi
     if [[ "$installed" -eq 0 ]]; then
         red "rmapi is required. Install one of these ways and re-run:"
         red "    brew install io41/tap/rmapi"
-        red "    https://github.com/ddvk/rmapi/releases  (drop the binary at ~/bin/rmapi)"
+        red "    https://github.com/ddvk/rmapi/releases  (verify the release manually, then drop the binary at ~/bin/rmapi)"
         exit 1
     fi
 fi

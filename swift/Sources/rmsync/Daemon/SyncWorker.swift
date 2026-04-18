@@ -111,6 +111,13 @@ actor SyncWorker {
                 syncDir: cfg.syncDir,
                 remoteFolder: cfg.remoteFolder
             )
+        guard PathUtilities.resolvedRelativePath(from: cfg.syncDir, to: localPath) != nil else {
+            Logger.shared.warn(
+                "pull skipped: local path escapes sync_dir",
+                meta: ["doc_id": docID, "path": localPath.path]
+            )
+            return
+        }
 
         // Respect outstanding conflicts.
         if stored?.conflictState == "unresolved",
@@ -474,12 +481,9 @@ actor SyncWorker {
     private struct RelativePath { let components: [String] }
 
     private func relativePath(from base: URL, to target: URL) -> RelativePath? {
-        let baseComponents = base.standardizedFileURL.pathComponents
-        let targetComponents = target.standardizedFileURL.pathComponents
-        guard targetComponents.count > baseComponents.count,
-              Array(targetComponents.prefix(baseComponents.count)) == baseComponents
+        guard let components = PathUtilities.resolvedRelativePath(from: base, to: target)
         else { return nil }
-        return RelativePath(components: Array(targetComponents.dropFirst(baseComponents.count)))
+        return RelativePath(components: components)
     }
 
     private func looksLikeUUID(_ s: String) -> Bool {

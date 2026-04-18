@@ -60,6 +60,25 @@ struct PathUtilitiesTests {
         #expect(result.path == "/tmp/sync/Research/paper.md")
     }
 
+    @Test("resolvedRelativePath rejects symlink escapes")
+    func resolvedRelativePathRejectsSymlinkEscape() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rmsync-realpath-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let sync = tmp.appendingPathComponent("sync", isDirectory: true)
+        let outside = tmp.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: sync, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+
+        let link = sync.appendingPathComponent("escape", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+
+        let target = link.appendingPathComponent("note.md")
+        #expect(PathUtilities.resolvedRelativePath(from: sync, to: target) == nil)
+    }
+
     // MARK: - atomic write
 
     @Test("atomicWriteText creates parent + writes content")

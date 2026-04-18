@@ -56,6 +56,20 @@ enum PathUtilities {
         return url
     }
 
+    /// Resolve symlinks in both paths before checking whether ``target``
+    /// stays under ``base``. This closes the case where a symlinked
+    /// subdirectory inside the sync tree points outside it.
+    static func resolvedRelativePath(from base: URL, to target: URL) -> [String]? {
+        let resolvedBase = resolvedPath(base)
+        let resolvedTarget = resolvedPath(target)
+        let baseComponents = resolvedBase.pathComponents
+        let targetComponents = resolvedTarget.pathComponents
+        guard targetComponents.count > baseComponents.count,
+              Array(targetComponents.prefix(baseComponents.count)) == baseComponents
+        else { return nil }
+        return Array(targetComponents.dropFirst(baseComponents.count))
+    }
+
     /// Write ``text`` to ``path`` atomically: tmp file + ``replaceItem``.
     /// Matches the Python ``os.replace`` semantics — on POSIX the replace
     /// is rename(2) which is atomic within a filesystem.
@@ -92,6 +106,21 @@ enum PathUtilities {
         // CryptoKit is available on macOS 10.15+, and we target 13+.
         let digest = _sha256(data)
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func resolvedPath(_ url: URL) -> URL {
+        let fm = FileManager.default
+        var cursor = url.standardizedFileURL
+        var tail: [String] = []
+        while cursor.path != "/" && !fm.fileExists(atPath: cursor.path) {
+            tail.append(cursor.lastPathComponent)
+            cursor.deleteLastPathComponent()
+        }
+        var resolved = cursor.resolvingSymlinksInPath()
+        for component in tail.reversed() {
+            resolved.appendPathComponent(component)
+        }
+        return resolved
     }
 }
 

@@ -131,4 +131,24 @@ struct ArchiveTests {
         #expect(unpacked.pages[0].pageID == pageID)
         #expect(unpacked.pages[0].rmBytes == Data([0xDE, 0xAD, 0xBE, 0xEF]))
     }
+
+    @Test("archive entry validator rejects traversal paths")
+    func rejectsTraversalEntries() {
+        #expect(throws: Archive.UnpackError.self) {
+            try Archive.validateEntryPath("../evil")
+        }
+        #expect(throws: Archive.UnpackError.self) {
+            try Archive.validateEntryPath("/tmp/evil")
+        }
+        #expect(throws: Archive.UnpackError.self) {
+            try Archive.validateEntryPath("doc/../../evil")
+        }
+    }
+
+    @Test("archive entry validator accepts normal doc entries")
+    func acceptsNormalEntries() throws {
+        try Archive.validateEntryPath("doc-123.metadata")
+        try Archive.validateEntryPath("doc-123/")
+        try Archive.validateEntryPath("doc-123/page-1.rm")
+    }
 }

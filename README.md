@@ -32,7 +32,7 @@ cd rmsync
 
 Three interactive prompts — all safe to hit `y`:
 
-1. Install `rmapi` via Homebrew (or download the release binary).
+1. Install `rmapi` via Homebrew (or install a verified release binary manually).
 2. Authenticate `rmapi` with your reMarkable Connect account (paste an
    8-character code from `https://my.remarkable.com/device/desktop/connect`).
 3. Add `~/.local/bin` to your shell's PATH.

@@ -50,4 +50,25 @@ struct WatcherIgnoreTests {
             "/tmp/sync/.rmsync-trash/old.md", syncDir: sync
         ))
     }
+
+    @Test("symlink escapes are ignored")
+    func symlinkEscapeIgnored() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rmsync-watch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let sync = tmp.appendingPathComponent("sync", isDirectory: true)
+        let outside = tmp.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: sync, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+
+        let link = sync.appendingPathComponent("escape", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+
+        #expect(LocalWatcher.shouldIgnore(
+            link.appendingPathComponent("note.md").path,
+            syncDir: sync
+        ))
+    }
 }

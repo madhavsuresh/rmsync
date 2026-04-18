@@ -41,11 +41,16 @@ enum Archive {
 
     enum UnpackError: Error, Sendable {
         case unzipFailed(String)
+        case zipInfoFailed(String)
+        case invalidEntry(String)
         case missingMetadata
         case unreadableMetadata
     }
 
     static func unpack(_ archivePath: URL) async throws -> RmDoc {
+        let entries = try await listEntries(in: archivePath)
+        try validateEntries(entries)
+
         // Extract to a fresh tempdir and then read the files. unzip -p
         // (stream one file) would save the temp hop but complicates the
         // multi-file-per-page iteration; the cost is one tempdir per pull.
@@ -61,6 +66,7 @@ enum Archive {
         guard result.exitCode == 0 else {
             throw UnpackError.unzipFailed(result.stderr)
         }
+        try rejectSymlinks(in: tmp)
 
         // Discover doc_id from the sole .metadata file at the archive root.
         let contents = try FileManager.default.contentsOfDirectory(atPath: tmp.path)
@@ -198,6 +204,20 @@ enum Archive {
         return []
     }
 
+    static func validateEntryPath(_ entry: String) throws {
+        let raw = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = raw.hasSuffix("/") ? String(raw.dropLast()) : raw
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("/"),
+              !trimmed.contains("\\"),
+              !trimmed.contains("\0")
+        else { throw UnpackError.invalidEntry(entry) }
+        let components = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+        if components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) {
+            throw UnpackError.invalidEntry(entry)
+        }
+    }
+
     private static func metadataJSON(for doc: RmDoc) -> [String: Any] {
         [
             "deleted": false,
@@ -277,6 +297,38 @@ enum Archive {
             )
         } catch {
             throw PackError.jsonFailed("\(error)")
+        }
+    }
+
+    private static func listEntries(in archivePath: URL) async throws -> [String] {
+        let result = try await Subprocess.run(
+            executablePath: "/usr/bin/zipinfo",
+            args: ["-1", archivePath.path]
+        )
+        guard result.exitCode == 0 else {
+            throw UnpackError.zipInfoFailed(result.stderr)
+        }
+        return result.stdout.split(separator: "\n").map(String.init)
+    }
+
+    private static func validateEntries(_ entries: [String]) throws {
+        for entry in entries {
+            try validateEntryPath(entry)
+        }
+    }
+
+    private static func rejectSymlinks(in root: URL) throws {
+        let keys: Set<URLResourceKey> = [.isSymbolicLinkKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(keys)
+        ) else { return }
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: keys)
+            if values.isSymbolicLink == true {
+                let rel = String(url.path.dropFirst(root.path.count + 1))
+                throw UnpackError.invalidEntry(rel)
+            }
         }
     }
 }

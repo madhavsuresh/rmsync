@@ -57,12 +57,12 @@ actor Cloud {
     // MARK: - listing
 
     func ls(_ remotePath: String) async throws -> [(kind: String, name: String)] {
-        let out = try await shell("ls \(Self.escape(remotePath))\n")
+        let out = try await shell("ls \(try Self.escapeShellPath(remotePath))\n")
         return Self.parseListing(out)
     }
 
     func find(_ remotePath: String) async throws -> [String] {
-        let out = try await shell("find \(Self.escape(remotePath))\n")
+        let out = try await shell("find \(try Self.escapeShellPath(remotePath))\n")
         var entries: [String] = []
         for raw in out.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
@@ -77,7 +77,7 @@ actor Cloud {
     /// into a Sendable struct rather than raw ``[String: Any]`` so
     /// callers can hand results across actor boundaries.
     func stat(_ remotePath: String) async throws -> StatResult? {
-        let out = try await shell("stat \(Self.escape(remotePath))\n")
+        let out = try await shell("stat \(try Self.escapeShellPath(remotePath))\n")
         guard let braceStart = out.firstIndex(of: "{"),
               let braceEnd = out.lastIndex(of: "}")
         else { return nil }
@@ -113,7 +113,17 @@ actor Cloud {
 
             let pathSegs = parentSegs + relSegs
             let remote = "/" + pathSegs.joined(separator: "/")
-            guard let meta = try await stat(remote) else {
+            let meta: StatResult?
+            do {
+                meta = try await stat(remote)
+            } catch {
+                Logger.shared.warn(
+                    "stat failed for tree entry",
+                    meta: ["path": remote, "error": "\(error)"]
+                )
+                continue
+            }
+            guard let meta else {
                 Logger.shared.warn("stat failed for tree entry", meta: ["path": remote])
                 continue
             }
@@ -241,8 +251,15 @@ actor Cloud {
 
     // MARK: - static helpers
 
-    static func escape(_ path: String) -> String {
-        path.contains(" ") ? "\"\(path)\"" : path
+    /// The interactive rmapi shell takes raw command text over stdin.
+    /// Reject shell-significant characters we can't safely round-trip
+    /// rather than letting a crafted remote name steer parsing.
+    static func escapeShellPath(_ path: String) throws -> String {
+        let unsafeScalars = CharacterSet(charactersIn: "\"\\`$").union(.controlCharacters)
+        if path.rangeOfCharacter(from: unsafeScalars) != nil {
+            throw RmapiError.invalidShellPath(path)
+        }
+        return "\"\(path)\""
     }
 
     static func parseListing(_ shellOutput: String) -> [(kind: String, name: String)] {
@@ -331,6 +348,7 @@ struct Node: Sendable, Hashable {
 
 enum RmapiError: Error, CustomStringConvertible, Sendable {
     case invalidOutput(String, String)
+    case invalidShellPath(String)
     case nonzeroExit(command: String, exitCode: Int32, stderr: String)
     case throttled(Int32, String)
     case noArchiveProduced(String)
@@ -339,6 +357,8 @@ enum RmapiError: Error, CustomStringConvertible, Sendable {
         switch self {
         case .invalidOutput(let cmd, let out):
             return "rmapi \(cmd) produced unparseable output: \(out.prefix(200))"
+        case .invalidShellPath(let path):
+            return "rmapi shell path contains unsupported characters: \(path)"
         case .nonzeroExit(let cmd, let rc, let err):
             return "\(cmd) exited \(rc): \(err.trimmingCharacters(in: .whitespacesAndNewlines))"
         case .throttled(let rc, let err):
