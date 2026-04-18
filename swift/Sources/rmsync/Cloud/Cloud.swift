@@ -16,8 +16,11 @@ import Foundation
 ///   ``ModifiedClient`` as the change signal.
 actor Cloud {
     /// rmapi versions we've validated against. See scripts/cloud_probe*.py
-    /// in the Python tree for the details.
-    static let rmapiMin = (0, 0, 30)
+    /// in the Python tree for the details. Minimum is pinned at 0.0.29
+    /// because that's what the `io41/tap/rmapi` Homebrew formula ships;
+    /// end-to-end sync has been observed working against 0.0.29 on
+    /// real cloud data.
+    static let rmapiMin = (0, 0, 29)
     static let rmapiMaxExclusive = (0, 1, 0)
 
     private let rmapiPath: String
