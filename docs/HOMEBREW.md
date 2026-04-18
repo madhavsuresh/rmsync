@@ -184,6 +184,61 @@ git push
 
 ---
 
+## Developing against the brew install
+
+If you're using the brew-installed daemon day-to-day but still editing
+source in this repo, every change has to round-trip through
+`origin/main` — `brew install --HEAD` clones the remote, not your
+working tree. `scripts/dev-reinstall.sh` wraps the full loop:
+
+```sh
+./scripts/dev-reinstall.sh -m "Tweak the watcher debounce"
+```
+
+That expands to:
+
+1. `git add -A && git commit -m "…"` — if you have uncommitted changes
+   (`-m` is required in that case; ignored otherwise).
+2. `git push` — only if `origin/main` is behind HEAD.
+3. `brew upgrade --fetch-HEAD madhavsuresh/rmsync/rmsync` — refetches
+   origin/main and rebuilds. Falls back to `brew uninstall + install`
+   if upgrade bails out.
+4. `launchctl kickstart -k gui/<uid>/com.user.rmsync` plus the same
+   for `com.user.rmsync.menubar` so both agents reload the new binary.
+5. `rmsync status` — quick sanity check that the daemon came up.
+
+Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `--no-push` | Assume the commit is already on `origin/main` (you pushed manually). Just run the brew + launchctl steps. |
+| `--skip-brew` | Commit + push only; don't touch brew or launchd. |
+| `-y` | Non-interactive. |
+
+Pre-flight: refuses to run from a non-`main` branch (brew's HEAD
+install tracks `origin/main`, so iterating from another branch is a
+footgun). Refuses if rmsync isn't brew-installed or the tap is
+missing, with the commands to fix.
+
+### When NOT to use this
+
+For tight edit loops — fast typing cycles, experimenting with a
+feature — the push-through-origin flow is too slow. Switch to dev
+mode instead:
+
+```sh
+rmsync-uninstall-agents    # point launchd away from the brew binary
+./install.sh               # rebuild + boot from ~/code/rmsync/...
+```
+
+Now `swift build -c release && rmsync restart` is your loop. Every
+edit is live in under 10 seconds. Switch back to the brew path when
+you're done with `rmsync-install-agents` (brew stays installed the
+whole time; only the launchd plists point different places). See
+`docs/USAGE.md` for the dev-install details.
+
+---
+
 ## Testing the formula without publishing
 
 Modern Homebrew refuses to install from a bare `.rb` file — every
