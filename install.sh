@@ -163,9 +163,9 @@ if ! "$RMAPI_BIN" account >/dev/null 2>&1; then
 fi
 
 # ── 3. directories ───────────────────────────────────────────────────
-CONFIG_DIR="$HOME/.config/rm-sync"
-STATE_DIR="$HOME/Library/Application Support/rm-sync"
-LOG_DIR="$HOME/Library/Logs/rm-sync"
+CONFIG_DIR="$HOME/.config/rmsync"
+STATE_DIR="$HOME/Library/Application Support/rmsync"
+LOG_DIR="$HOME/Library/Logs/rmsync"
 AGENT_DIR="$HOME/Library/LaunchAgents"
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "$AGENT_DIR" "$BIN_DIR"
@@ -191,7 +191,7 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
 # rmsync configuration. Restart the daemon after edits:
 #   rmsync restart
 
-sync_dir      = "$HOME/rm-sync-writing"
+sync_dir      = "$HOME/rmsync-writing"
 remote_folder = "Writing"
 
 worker_pool_size               = 3
@@ -213,7 +213,7 @@ dry_run                  = false
 [log]
 level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 EOF
-    yellow "  Edit this file if you want sync_dir somewhere other than ~/rm-sync-writing."
+    yellow "  Edit this file if you want sync_dir somewhere other than ~/rmsync-writing."
 fi
 
 # ── 6. bootstrap launchd agents ──────────────────────────────────────
@@ -286,7 +286,7 @@ else
                 mkdir -p "$(dirname "$RC")"
                 echo 'fish_add_path -U $HOME/.local/bin' >> "$RC"
             else
-                printf '\n# Added by rm-sync install.sh\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC"
+                printf '\n# Added by rmsync install.sh\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC"
             fi
             echo "  added. Open a new terminal or run: source $RC"
         else

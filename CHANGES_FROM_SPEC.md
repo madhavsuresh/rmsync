@@ -23,7 +23,7 @@ loop.
 ## Page-break sentinel
 
 **Spec:** split multi-page notebooks on `^---$`.
-**Here:** split on `^<!-- rm-sync:page-break -->$`.
+**Here:** split on `^<!-- rmsync:page-break -->$`.
 
 Reason: `---` is a valid Markdown horizontal rule. Users will write it for
 legitimate reasons and get phantom page splits. The HTML-comment sentinel
@@ -91,7 +91,7 @@ requests, the subscription is fine.
 
 ## Trash-restore semantics
 
-If the user moves a file from `.rm-sync-trash/` back into `sync_dir`, the
+If the user moves a file from `.rmsync-trash/` back into `sync_dir`, the
 daemon treats it as a brand-new local document and pushes it with a new
 UUID. The original (cloud-trashed) document is not re-linked. This is
 documented behavior; restoration via the tablet's own trash UI is the
@@ -161,8 +161,8 @@ named ``<visible_name>.rmdoc``.
 **Poller and worker computed different local paths from the same
 remote path.** Poller filtered empty segments before stripping the
 remote_folder prefix; worker did it in the opposite order. Result: for
-``/Writing/foo``, poller computed ``~/rm-sync-writing/foo.md`` while
-worker computed ``~/rm-sync-writing/Writing/foo.md``. The path mismatch
+``/Writing/foo``, poller computed ``~/rmsync-writing/foo.md`` while
+worker computed ``~/rmsync-writing/Writing/foo.md``. The path mismatch
 looked like a remote rename on every poll cycle, which triggered a
 rename job on every cycle. Fixed: single ``paths.remote_to_local``
 helper used by both sides.
@@ -177,7 +177,7 @@ Initial-pull file creates fired as spurious push events in the first
 1-2 seconds after the watcher started. The fence is the first line of
 defense but its window is bounded. Second line of defense is
 ``worker._push`` refusing to push from any path outside the sync_dir
-root, from a hidden dir (``.rm-sync-trash``), or from a path whose
+root, from a hidden dir (``.rmsync-trash``), or from a path whose
 stem looks like a UUID (cascade guard).
 
 **DELETE_LOCAL with unset doc_id used to be silently dropped.** It's
@@ -186,7 +186,7 @@ NOT propagate a deletion to the cloud. Destructive cloud actions
 driven by a single unverified watcher event are too risky in v0.1.
 Deletes-from-the-tablet (poller-side tombstones) still work.
 
-**Cloud deletions should move local files to ``.rm-sync-trash/`` only;
+**Cloud deletions should move local files to ``.rmsync-trash/`` only;
 they must not fire further push events.** Walking the trash dir is
 already excluded in the watcher's ``_should_ignore``.
 

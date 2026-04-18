@@ -72,7 +72,7 @@ struct XattrsTests {
 
         // Core WhereFroms/kind/tag always get written.
         #expect((try? Xattrs.getRaw(path: file, name: Xattrs.kind)) != nil)
-        // But rm-sync.* xattrs are absent when the metadata is empty.
+        // But rmsync.* xattrs are absent when the metadata is empty.
         #expect(Xattrs.readDocID(at: file) == nil)
         #expect((try? Xattrs.getRaw(path: file, name: Xattrs.remotePathKey)) == nil)
     }

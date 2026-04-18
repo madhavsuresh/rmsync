@@ -241,7 +241,7 @@ struct Init: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "One-time setup wizard.")
     func run() throws {
         print("Run ./install.sh from the repo root.")
-        print("After that, edit ~/.config/rm-sync/config.toml and run `rmsync doctor`.")
+        print("After that, edit ~/.config/rmsync/config.toml and run `rmsync doctor`.")
     }
 }
 

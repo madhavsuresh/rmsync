@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Thread-safe wrapper over the rm-sync state database.
+/// Thread-safe wrapper over the rmsync state database.
 ///
 /// Mirrors the API of the Python ``State`` class as closely as makes sense
 /// in Swift. All methods are ``async`` even when the underlying GRDB call

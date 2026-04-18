@@ -3,7 +3,7 @@ import Testing
 @testable import rmsync
 
 /// Live push/pull smoke test. Opts in via ``RMSYNC_LIVE=1``. Uses the
-/// isolated ``/rm-sync-test`` folder on the real cloud — same pattern as
+/// isolated ``/rmsync-test`` folder on the real cloud — same pattern as
 /// the Python project's ``scripts/cloud_probe*.py``. Cleans up after
 /// itself.
 @Suite("Push smoke (live cloud)")
@@ -12,7 +12,7 @@ struct PushSmokeTests {
         ProcessInfo.processInfo.environment["RMSYNC_LIVE"] == "1"
     }
 
-    @Test("push → pull round-trip in rm-sync-test folder")
+    @Test("push → pull round-trip in rmsync-test folder")
     func pushPullRoundTrip() async throws {
         guard live() else { return }
 
@@ -30,7 +30,7 @@ struct PushSmokeTests {
 
         let cfg = Config(
             syncDir: syncDir,
-            remoteFolder: "rm-sync-test",
+            remoteFolder: "rmsync-test",
             workerPoolSize: 1,
             pollIntervalSeconds: 60,
             pollActiveIntervalSeconds: 60,
@@ -47,7 +47,7 @@ struct PushSmokeTests {
 
         // Ensure the folder exists on the cloud.
         let cloud = Cloud()
-        try? await cloud.mkdir("/rm-sync-test")
+        try? await cloud.mkdir("/rmsync-test")
 
         // Upload-side: drop a .md under sync dir, enqueue a PUSH job,
         // let the worker run it.
@@ -75,7 +75,7 @@ struct PushSmokeTests {
         // Download the doc back from the cloud and verify content.
         let pullDir = tmp.appendingPathComponent("pull", isDirectory: true)
         try FileManager.default.createDirectory(at: pullDir, withIntermediateDirectories: true)
-        let archivePath = try await cloud.get("/rm-sync-test/\(probeName)", dest: pullDir)
+        let archivePath = try await cloud.get("/rmsync-test/\(probeName)", dest: pullDir)
 
         let unpacked = try await Archive.unpack(archivePath)
         #expect(unpacked.pages.count == 1)
@@ -106,7 +106,7 @@ struct PushSmokeTests {
         #expect(contentJSON["coverPageNumber"] as? Int == -1)
 
         // Cleanup: remove the cloud doc.
-        try? await cloud.rm("/rm-sync-test/\(probeName)")
+        try? await cloud.rm("/rmsync-test/\(probeName)")
     }
 
     @Test("put --force update keeps cPages at count 1")
@@ -123,7 +123,7 @@ struct PushSmokeTests {
 
         let state = try State(path: tmp.appendingPathComponent("state.db"))
         let cfg = Config(
-            syncDir: syncDir, remoteFolder: "rm-sync-test",
+            syncDir: syncDir, remoteFolder: "rmsync-test",
             workerPoolSize: 1, pollIntervalSeconds: 60,
             pollActiveIntervalSeconds: 60, pollIdleIntervalSeconds: 120,
             debounceSeconds: 2, renameDetectWindowS: 5,
@@ -133,7 +133,7 @@ struct PushSmokeTests {
         )
 
         let cloud = Cloud()
-        try? await cloud.mkdir("/rm-sync-test")
+        try? await cloud.mkdir("/rmsync-test")
 
         let probeName = "swift-update-\(UUID().uuidString.prefix(8))"
         let mdPath = syncDir.appendingPathComponent("\(probeName).md")
@@ -169,7 +169,7 @@ struct PushSmokeTests {
         // Pull back. cPages must still have exactly one entry.
         let pullDir = tmp.appendingPathComponent("pull")
         try FileManager.default.createDirectory(at: pullDir, withIntermediateDirectories: true)
-        let archive = try await cloud.get("/rm-sync-test/\(probeName)", dest: pullDir)
+        let archive = try await cloud.get("/rmsync-test/\(probeName)", dest: pullDir)
 
         let inspectDir = tmp.appendingPathComponent("inspect")
         try FileManager.default.createDirectory(at: inspectDir, withIntermediateDirectories: true)
@@ -193,6 +193,6 @@ struct PushSmokeTests {
         let parsed = try PageCodec.parsePage(unpacked.pages[0].rmBytes)
         #expect(parsed.contains("version three final"))
 
-        try? await cloud.rm("/rm-sync-test/\(probeName)")
+        try? await cloud.rm("/rmsync-test/\(probeName)")
     }
 }

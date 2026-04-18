@@ -16,7 +16,7 @@ struct StatusSnapshot {
     let pid: Int?
 }
 
-/// Persistent Unix-socket client for the rm-sync daemon.
+/// Persistent Unix-socket client for the rmsync daemon.
 ///
 /// Uses POSIX `socket(2)` + `DispatchSourceRead` directly. Network.framework's
 /// `NWConnection` has quirks with Unix domain sockets that caused spurious
@@ -39,7 +39,7 @@ final class IPCClient {
 
     init(callback: @escaping StatusCallback) {
         self.socketPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/rm-sync/ipc.sock")
+            .appendingPathComponent("Library/Application Support/rmsync/ipc.sock")
             .path
         self.callback = callback
     }

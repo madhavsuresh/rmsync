@@ -1,4 +1,4 @@
-# rm-sync
+# rmsync
 
 Bidirectional background sync between a reMarkable tablet's `Writing/`
 folder and a local Markdown tree on macOS. Edit a note on your Mac, it
@@ -16,17 +16,17 @@ implementation is archived at `python-legacy.tar.gz`.
 ### Homebrew (recommended)
 
 ```sh
-brew install <you>/rm-sync/rm-sync
+brew install <you>/rmsync/rmsync
 rmapi                           # paste code from remarkable.com/device/desktop/connect
-rm-sync-install-agents          # boots daemon + menu bar
+rmsync-install-agents          # boots daemon + menu bar
 rmsync doctor                   # should be all ✓
 ```
 
 ### From source
 
 ```sh
-git clone https://github.com/<you>/rm-sync.git
-cd rm-sync
+git clone https://github.com/<you>/rmsync.git
+cd rmsync
 ./install.sh
 ```
 
@@ -44,7 +44,7 @@ rmsync doctor    # verify all 10 checks pass
 rmsync status    # see what the daemon is doing
 ```
 
-Edit files under your sync dir (`~/rm-sync-writing` by default) and
+Edit files under your sync dir (`~/rmsync-writing` by default) and
 they'll push to the tablet. Write on the tablet and they'll appear
 locally. The menu bar icon tells you at a glance what state the sync
 is in.
@@ -133,7 +133,7 @@ Full semantics in [`docs/USAGE.md`](docs/USAGE.md).
 
 ## Configuration
 
-Edit `~/.config/rm-sync/config.toml`, then `rmsync restart`. The daemon
+Edit `~/.config/rmsync/config.toml`, then `rmsync restart`. The daemon
 reads config once at startup and doesn't watch for changes — restart is
 required for any edit to take effect.
 
@@ -178,7 +178,7 @@ Full config reference and behavioural details in `docs/USAGE.md`.
 - **CLI** is the same `rmsync` binary with different subcommands;
   talks to the daemon over the same socket, or falls back to reading
   `state.db` directly when the daemon is down.
-- **State lives in SQLite** at `~/Library/Application Support/rm-sync/state.db`.
+- **State lives in SQLite** at `~/Library/Application Support/rmsync/state.db`.
   Tracks per-doc IDs, page IDs, hashes, timestamps, and a settings
   table (paused flag, stable author UUID).
 
@@ -187,7 +187,7 @@ Full config reference and behavioural details in `docs/USAGE.md`.
 ## Layout
 
 ```
-rm-sync/
+rmsync/
 ├── swift/                       Swift Package Manager project
 │   ├── Package.swift            3 targets: rmsync, rmsync-menubar, RMScene
 │   ├── Sources/
@@ -206,7 +206,7 @@ rm-sync/
 │   ├── LLM_CONTEXT.md           ← single-file context for LLM chats
 │   ├── HOMEBREW.md              ← setting up the brew tap
 │   └── SWIFT_PORT_PHASE1.md     the port plan we executed
-├── Formula/rm-sync.rb           Homebrew formula
+├── Formula/rmsync.rb           Homebrew formula
 ├── .github/workflows/release.yml  tag-triggered universal build + release
 ├── CHANGES_FROM_SPEC.md         invariants from the Python v0.1
 ├── README.md                    you are here
@@ -223,7 +223,7 @@ swift test                                           # 98 tests, fast
 RMSYNC_LIVE=1 PATH="$HOME/bin:$PATH" swift test      # + 2 live-cloud push smoke tests
 ```
 
-Live tests exercise a real round-trip against the `/rm-sync-test`
+Live tests exercise a real round-trip against the `/rmsync-test`
 folder on the author's cloud account; they clean up after themselves.
 Set `RMSYNC_LIVE=1` and make sure `rmapi` is authenticated.
 

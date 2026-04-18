@@ -5,7 +5,7 @@ Resolves §16 questions 1 (put --content-only update vs duplicate) and 2
 once. Cleans up after itself.
 
 Usage:
-    python scripts/cloud_probe.py [--keep] [--remote-folder /rm-sync-test]
+    python scripts/cloud_probe.py [--keep] [--remote-folder /rmsync-test]
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def make_text_rmdoc(doc_id: str, name: str, version: int, page_text: str) -> Pat
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--remote-folder", default="/rm-sync-test")
+    ap.add_argument("--remote-folder", default="/rmsync-test")
     ap.add_argument("--keep", action="store_true", help="don't clean up at end")
     args = ap.parse_args()
 

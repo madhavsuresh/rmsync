@@ -34,7 +34,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     // MARK: - construction
 
     private func buildMenu() {
-        titleItem.title = "rm-sync"
+        titleItem.title = "rmsync"
         titleItem.isEnabled = false
         menu.addItem(titleItem)
 
@@ -183,7 +183,7 @@ final class MenuController: NSObject, NSMenuDelegate {
 
     @objc private func openLogs(_ sender: Any) {
         let log = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/rm-sync/stdout.log")
+            .appendingPathComponent("Library/Logs/rmsync/stdout.log")
         if FileManager.default.fileExists(atPath: log.path) {
             NSWorkspace.shared.open(log)
         }
@@ -191,7 +191,7 @@ final class MenuController: NSObject, NSMenuDelegate {
 
     @objc private func openConfig(_ sender: Any) {
         let cfg = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/rm-sync/config.toml")
+            .appendingPathComponent(".config/rmsync/config.toml")
         if FileManager.default.fileExists(atPath: cfg.path) {
             NSWorkspace.shared.open(cfg)
         }

@@ -190,14 +190,14 @@ final class LocalWatcher: @unchecked Sendable {
         let conflictCopy = /(?i)\bconflicted copy\b/
         if name.contains(conflictCopy) { return true }
 
-        // Anything under .rm-sync-trash / .git / .obsidian / hidden dirs.
+        // Anything under .rmsync-trash / .git / .obsidian / hidden dirs.
         let syncComponents = syncDir.standardizedFileURL.pathComponents
         let targetComponents = url.standardizedFileURL.pathComponents
         if targetComponents.count > syncComponents.count,
            Array(targetComponents.prefix(syncComponents.count)) == syncComponents {
             let rel = targetComponents.dropFirst(syncComponents.count)
             for part in rel {
-                if ["\\.rm-sync-trash", ".rm-sync-trash", ".git", ".obsidian"].contains(part) {
+                if ["\\.rmsync-trash", ".rmsync-trash", ".git", ".obsidian"].contains(part) {
                     return true
                 }
                 if part.hasPrefix(".") { return true }

@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Port of ``src/rm_sync/conversion/page_splitter.py``.
 enum PageSplitter {
-    static let pageBreak = "<!-- rm-sync:page-break -->"
+    static let pageBreak = "<!-- rmsync:page-break -->"
 
     static func join(_ pages: [String]) -> String {
         let cleaned = pages.map { $0.trimmingTrailingNewlines() + "\n" }
@@ -14,7 +14,7 @@ enum PageSplitter {
     }
 
     static func split(_ markdown: String) -> [String] {
-        let pattern = /(?m)^[ \t]*<!--\s*rm-sync:page-break\s*-->[ \t]*$/
+        let pattern = /(?m)^[ \t]*<!--\s*rmsync:page-break\s*-->[ \t]*$/
         let parts = markdown.split(separator: pattern, omittingEmptySubsequences: false)
         if parts.isEmpty { return [""] }
         return parts.map { piece -> String in
