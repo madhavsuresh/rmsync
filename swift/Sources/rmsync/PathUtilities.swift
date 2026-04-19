@@ -102,6 +102,12 @@ enum PathUtilities {
         return Self.sha256Hex(data)
     }
 
+    /// SHA-256 of raw bytes, hex-encoded. Used by pull/push diagnostics
+    /// to correlate per-page ``.rm`` bytes across the cloud round-trip.
+    static func sha256(bytes: Data) -> String {
+        Self.sha256Hex(bytes)
+    }
+
     private static func sha256Hex(_ data: Data) -> String {
         // CryptoKit is available on macOS 10.15+, and we target 13+.
         let digest = _sha256(data)

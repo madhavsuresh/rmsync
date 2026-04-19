@@ -178,7 +178,47 @@ actor SyncWorker {
             }
         }
 
-        let newMD = pagesMd.isEmpty ? "" : PageSplitter.join(pagesMd)
+        // Diagnostic: correlate pushed vs pulled bytes per page so we can
+        // tell whether empty-parse results are a decoder bug, a rmapi /
+        // cloud re-serialisation, or a tablet-side edit. Paired with the
+        // "push page encoded" log on the push path.
+        let emptyCount = pagesMd.filter { $0.isEmpty }.count
+        Logger.shared.debug(
+            "pull page parse report",
+            meta: [
+                "doc_id": docID,
+                "page_count": "\(rmdoc.pages.count)",
+                "empty_parse_count": "\(emptyCount)",
+                "total_rm_bytes": "\(rmdoc.pages.reduce(0) { $0 + $1.rmBytes.count })",
+                "page_ids": rmdoc.pages.map(\.pageID).joined(separator: ","),
+                "per_page_rm_sha256": rmdoc.pages
+                    .map { PathUtilities.sha256(bytes: $0.rmBytes) }
+                    .joined(separator: ",")
+            ]
+        )
+
+        // Bug 1 guard — PageCodec.parsePage returns "" for handwriting-only
+        // and drawing pages (see PageCodec.swift:28-30), and the contract
+        // says the pull path should treat that as "skip". Prior behaviour
+        // appended the empty string and PageSplitter.join then turned a
+        // single-empty-page doc into a lone "\n", silently wiping the
+        // user's local file. Refuse to overwrite when *every* page parsed
+        // empty; surface a warning so the event is visible in logs.
+        if !rmdoc.pages.isEmpty, emptyCount == rmdoc.pages.count {
+            Logger.shared.warn(
+                "pull refused: remote parsed to empty on every page (possible data-loss guard)",
+                meta: [
+                    "doc_id": docID,
+                    "path": localPath.path,
+                    "page_count": "\(rmdoc.pages.count)"
+                ]
+            )
+            return
+        }
+        // Drop empty pages (handwriting-only / drawing) before join so
+        // they don't contribute a blank section to the rendered markdown.
+        let nonEmpty = pagesMd.filter { !$0.isEmpty }
+        let newMD = nonEmpty.isEmpty ? "" : PageSplitter.join(nonEmpty)
         let newHash = PathUtilities.sha256(newMD)
 
         // Short-circuit: content hasn't changed since we last synced.
@@ -197,13 +237,43 @@ actor SyncWorker {
             localChanged = true
         }
 
-        if localChanged {
+        // Bug 2 guard — remote shrank catastrophically since our last
+        // sync. Even after Bug 1's empty-page filter, a partial regression
+        // could still hand us (say) 20 bytes of markdown to replace 10 KB
+        // of user content. Treat that like a local-diverged conflict
+        // rather than silently overwriting: write a ``.conflict`` file,
+        // notify, and let the user pick a side. Thresholds are tuned to
+        // skip genuinely short notes (``lastBytes >= shrinkMinPrev``) and
+        // only trigger on a clearly pathological ratio (<10% of previous).
+        // We use the local file's on-disk size as a proxy for "what we
+        // last synced" — safe because ``!localChanged`` means the file
+        // still matches ``lastSyncedMDHash``.
+        let shrinkMinPrev = 64
+        let shrinkMaxRatio = 0.1
+        var remoteShrank = false
+        if !localChanged,
+           stored?.lastSyncedMDHash != nil,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: localPath.path),
+           let lastBytes = (attrs[.size] as? NSNumber)?.intValue,
+           lastBytes >= shrinkMinPrev,
+           Double(newMD.utf8.count) / Double(lastBytes) < shrinkMaxRatio {
+            remoteShrank = true
+        }
+
+        if localChanged || remoteShrank {
             let localText = (try? String(contentsOf: localPath, encoding: .utf8)) ?? ""
             _ = try Conflict.write(md: localPath, local: localText, remote: newMD)
             try await state.setConflict(docID: docID, state: "unresolved")
             Logger.shared.warn(
                 "conflict written",
-                meta: ["doc_id": docID, "path": localPath.path]
+                meta: [
+                    "doc_id": docID,
+                    "path": localPath.path,
+                    "reason": remoteShrank && !localChanged
+                        ? "remote_shrank_catastrophically"
+                        : "local_diverged",
+                    "new_bytes": "\(newMD.utf8.count)"
+                ]
             )
             // Surface the conflict in Notification Center — otherwise it
             // silently lives in a .conflict file the user never checks.
@@ -393,6 +463,27 @@ actor SyncWorker {
             Archive.RmDocPage(pageID: pid, rmBytes: bytes)
         }
         let nextVersion = (stored?.remoteVersion ?? 0) + 1
+
+        // Diagnostic: per-page SHA256 of the bytes we're about to put.
+        // Pairs with "pull page parse report" so we can see whether bytes
+        // survive the rmapi / cloud round-trip unchanged. Author UUID is
+        // truncated to the first 8 chars so UUID drift across daemon
+        // restarts is visible without leaking the full identity.
+        for (i, bytes) in pageBytes.enumerated() {
+            Logger.shared.debug(
+                "push page encoded",
+                meta: [
+                    "doc_id": docID,
+                    "page_index": "\(i)",
+                    "page_id": pageIDs[i],
+                    "author_uuid_prefix": String(authorUUID.prefix(8)),
+                    "rm_bytes_len": "\(bytes.count)",
+                    "rm_sha256": PathUtilities.sha256(bytes: bytes),
+                    "input_md_len": "\(pagesMd[i].utf8.count)",
+                    "input_md_sha256": PathUtilities.sha256(pagesMd[i])
+                ]
+            )
+        }
 
         // rmapi v0.0.32 names the cloud doc after the .rmdoc filename,
         // not the ``visibleName`` inside the archive. So pack the file

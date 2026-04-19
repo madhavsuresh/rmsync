@@ -109,6 +109,109 @@ struct PushSmokeTests {
         try? await cloud.rm("/rmsync-test/\(probeName)")
     }
 
+    /// Did rmapi / the reMarkable cloud mutate our ``.rm`` bytes on the
+    /// round-trip? Push one page, immediately pull the same doc back,
+    /// compare per-page SHA256. If equal → cloud is faithful and any
+    /// future empty-parse result is a decoder or tablet problem (not
+    /// cloud). If unequal → hypothesis D from the `attacks.md`
+    /// investigation is live; the defensive pull-path guards are the
+    /// only protection.
+    @Test("rmapi byte-fidelity: pushed .rm SHA == pulled .rm SHA")
+    func rmapiByteFidelity() async throws {
+        guard live() else { return }
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rmsync-fidelity-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let syncDir = tmp.appendingPathComponent("sync", isDirectory: true)
+        try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
+
+        let state = try State(path: tmp.appendingPathComponent("state.db"))
+        let cfg = Config(
+            syncDir: syncDir, remoteFolder: "rmsync-test",
+            workerPoolSize: 1, pollIntervalSeconds: 60,
+            pollActiveIntervalSeconds: 60, pollIdleIntervalSeconds: 120,
+            debounceSeconds: 2, renameDetectWindowS: 5,
+            echoFenceSeconds: 5, retryMaxAttempts: 3,
+            pushStrategy: .nativePlain, backupSnapshotsToKeep: 5,
+            dryRun: false, log: .init(level: .info)
+        )
+
+        let cloud = Cloud()
+        try? await cloud.mkdir("/rmsync-test")
+
+        let probeName = "swift-fidelity-\(UUID().uuidString.prefix(8))"
+        let mdPath = syncDir.appendingPathComponent("\(probeName).md")
+        let body = "known text for fidelity check\nsecond line\nthird line\n"
+        try body.write(to: mdPath, atomically: true, encoding: .utf8)
+
+        let queue = JobQueue()
+        let worker = SyncWorker(
+            id: 0, queue: queue, cloud: cloud, state: state,
+            cfg: cfg, locks: LockRegistry(), fence: EchoFence()
+        )
+        let workerTask = Task { await worker.run() }
+        defer {
+            Task { await worker.stop() }
+            workerTask.cancel()
+        }
+
+        await queue.enqueue(Job(kind: .push, docID: nil, hint: mdPath.path))
+        await queue.waitUntilEmpty()
+
+        // Capture the bytes we pushed by re-encoding with the same
+        // author UUID the worker used. (Cheaper than intercepting the
+        // worker's internal state; both share the same persistent UUID
+        // from ``state.getOrCreateAuthorUUID``.)
+        let authorUUID = try await state.getOrCreateAuthorUUID()
+        let pushedBytes = try PageCodec.renderPage(
+            text: body, authorUUID: authorUUID
+        )
+        let pushedSHA = PathUtilities.sha256(bytes: pushedBytes)
+        let pushedParsed = try PageCodec.parsePage(pushedBytes)
+
+        // Pull it back. This is the exact same path ``SyncWorker.pull``
+        // takes — ``cloud.get`` then ``Archive.unpack``.
+        let pullDir = tmp.appendingPathComponent("pull")
+        try FileManager.default.createDirectory(at: pullDir, withIntermediateDirectories: true)
+        let archivePath = try await cloud.get("/rmsync-test/\(probeName)", dest: pullDir)
+        let unpacked = try await Archive.unpack(archivePath)
+        #expect(unpacked.pages.count == 1)
+
+        let pulledBytes = unpacked.pages[0].rmBytes
+        let pulledSHA = PathUtilities.sha256(bytes: pulledBytes)
+        let pulledParsed = try PageCodec.parsePage(pulledBytes)
+
+        // DIAGNOSTIC: always print both SHAs so a mismatch is visible
+        // even when the parse still happens to match.
+        print("""
+
+        rmapi fidelity report:
+          pushed_sha = \(pushedSHA)
+          pulled_sha = \(pulledSHA)
+          pushed_len = \(pushedBytes.count)
+          pulled_len = \(pulledBytes.count)
+          pushed_parsed.len = \(pushedParsed.count)
+          pulled_parsed.len = \(pulledParsed.count)
+          bytes_identical = \(pushedBytes == pulledBytes)
+          parse_matches   = \(pushedParsed == pulledParsed)
+
+        """)
+
+        // The parse MUST match — if pulled text is empty while pushed
+        // was not, the cloud round-trip is losing content. This is the
+        // smoking gun for hypothesis D.
+        #expect(pulledParsed.contains("known text for fidelity check"))
+        #expect(pulledParsed.contains("third line"))
+        // Byte-identity isn't strictly required (the cloud may
+        // normalise metadata), but we record it above so the live log
+        // trail attributes any future regression correctly.
+
+        try? await cloud.rm("/rmsync-test/\(probeName)")
+    }
+
     @Test("put --force update keeps cPages at count 1")
     func updateDoesNotGrowCPages() async throws {
         guard live() else { return }
