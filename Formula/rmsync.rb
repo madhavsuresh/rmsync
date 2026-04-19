@@ -23,14 +23,15 @@ class Rmsync < Formula
   license "MIT"
   head "https://github.com/madhavsuresh/rmsync.git", branch: "main"
 
+  # Swift 6+ lives in Xcode 16. Command-line tools work too but brew
+  # can't enforce that distinction. Build-time dep declared first per
+  # brew style (symbol-keyed deps sort before string deps).
+  depends_on xcode: ["16.0", :build]
+  depends_on macos: :ventura
+
   # rmapi is required at runtime; we shell out to it for all cloud access.
   # io41/tap maintains a recent formula for the Go binary.
   depends_on "io41/tap/rmapi"
-
-  # Swift 6+ lives in Xcode 16. Command-line tools work too but brew
-  # can't enforce that distinction.
-  depends_on xcode: ["16.0", :build]
-  depends_on macos: :ventura
 
   def install
     cd "swift" do
@@ -42,9 +43,11 @@ class Rmsync < Formula
 
       # Universal-binary output lives under .build/apple for multi-arch
       # builds; SPM switches layouts silently based on --arch flags.
-      release = Dir[".build/apple/Products/Release/*"].any? \
-        ? ".build/apple/Products/Release" \
-        : ".build/release"
+      release = if Dir[".build/apple/Products/Release/*"].any?
+        ".build/apple/Products/Release"
+      else
+        ".build/release"
+      end
 
       bin.install "#{release}/rmsync"
       bin.install "#{release}/rmsync-menubar"
