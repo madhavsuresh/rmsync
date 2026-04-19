@@ -23,15 +23,18 @@ class Rmsync < Formula
   license "MIT"
   head "https://github.com/madhavsuresh/rmsync.git", branch: "main"
 
+  # Brew audit expects a specific dep order: build-time deps first,
+  # then runtime formula deps, then OS constraints.
+
   # Swift 6+ lives in Xcode 16. Command-line tools work too but brew
-  # can't enforce that distinction. Build-time dep declared first per
-  # brew style (symbol-keyed deps sort before string deps).
+  # can't enforce that distinction.
   depends_on xcode: ["16.0", :build]
-  depends_on macos: :ventura
 
   # rmapi is required at runtime; we shell out to it for all cloud access.
   # io41/tap maintains a recent formula for the Go binary.
   depends_on "io41/tap/rmapi"
+
+  depends_on macos: :ventura
 
   def install
     cd "swift" do
