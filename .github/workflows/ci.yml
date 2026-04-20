@@ -58,7 +58,20 @@ jobs:
         # RMSYNC_LIVE=1 require rmapi to have real cloud auth, which a
         # CI runner doesn't. They early-return when the env var is
         # absent, so this command skips them implicitly.
-        run: swift test
+        #
+        # ``--no-parallel`` + explicit stdout pipe work around a
+        # swift-testing hang on Swift 6.0 / macos-15 runners: the
+        # default parallel test dispatch hangs indefinitely with
+        # zero output, until the runner force-kills the orphan
+        # ``swiftpm-testing`` process. Seen on runs from 2026-04-18
+        # onward, predates the SyncWorker data-loss fix. Serialising
+        # the run AND piping stdout through ``cat`` bypasses both
+        # the dispatch deadlock and any non-TTY buffering issue.
+        # Total runtime is still under 30s because the suite is tiny.
+        # 10-minute hard timeout so a regression fails fast instead
+        # of burning an hour of CI minutes.
+        timeout-minutes: 10
+        run: swift test --no-parallel 2>&1 | cat
 
       - name: Verify release build
         working-directory: swift

@@ -51,8 +51,15 @@ jobs:
         # as a CLI arg and bails. XCTest tests still ran but swift-testing
         # @Test suites were skipped entirely, silently. Using the default
         # debug config runs both test runners correctly.
+        #
+        # ``--no-parallel`` + piping through ``cat`` works around a
+        # separate swift-testing / macos-15 hang where the default
+        # parallel dispatch deadlocks with zero output. See ci.yml
+        # for the full write-up; both workflows need the same
+        # invocation.
         working-directory: swift
-        run: swift test
+        timeout-minutes: 10
+        run: swift test --no-parallel 2>&1 | cat
 
       - name: Package binaries
         id: package
