@@ -165,6 +165,15 @@ jobs:
           echo "src_sha=$SRC_SHA" >> "$GITHUB_OUTPUT"
           echo "src_url=$URL" >> "$GITHUB_OUTPUT"
 
+      - name: Check out main repo (for canonical Formula body)
+        if: steps.check.outputs.has_token == 'true'
+        uses: actions/checkout@v4
+        with:
+          # Default ``ref`` is the tag that triggered this workflow, so
+          # the Formula body we pick up matches the source tarball the
+          # tap will point at. No version-skew window.
+          path: main-repo
+
       - name: Check out tap repo
         if: steps.check.outputs.has_token == 'true'
         uses: actions/checkout@v4
@@ -177,7 +186,21 @@ jobs:
         if: steps.check.outputs.has_token == 'true'
         working-directory: tap
         run: |
+          # Copy the full Formula body from the main repo — NOT just
+          # url+sha. The previous behaviour (two sed lines only) meant
+          # any change to def install / def post_install / caveats here
+          # never propagated to the tap; users installed stale Formula
+          # logic against new source tarballs. Fixed 2026-04-20 after
+          # the ``rmsync --version``-prints-``dev`` bug:
+          # ``inreplace`` + ``post_install`` in v0.2.5's Formula never
+          # ran on the installed binary because the tap's Formula
+          # still matched v0.2.0's shape.
           FORMULA="Formula/rmsync.rb"
+          cp "${GITHUB_WORKSPACE}/main-repo/Formula/rmsync.rb" "$FORMULA"
+          # Rewrite the canonical upstream ``url``/``sha256`` placeholders
+          # to this tag's values. The upstream Formula ships with
+          # ``v0.2.0`` + an all-zeros sha as the placeholder — no other
+          # Formula line matches both regexes, so this is safe.
           sed -i -E "s|url \".*\"|url \"${{ steps.srcsha.outputs.src_url }}\"|" "$FORMULA"
           sed -i -E "s|sha256 \"[0-9a-f]{64}\"|sha256 \"${{ steps.srcsha.outputs.src_sha }}\"|" "$FORMULA"
 
