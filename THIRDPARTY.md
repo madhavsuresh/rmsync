@@ -7,6 +7,36 @@ and invokes one external binary at runtime. Every piece is covered
 by a permissive or weakly-copyleft license compatible with MIT
 redistribution.
 
+## How this project was built
+
+Nearly everything in this repository was produced through
+LLM-assisted coding: Swift source, tests, CI workflow YAML, the
+Homebrew formula, release-automation scripts, and most long-form
+documentation (including the file you're reading now). The author
+directed the architecture, reviewed and merged every change, and is
+the responsible copyright holder for the human-direction portions
+of that work.
+
+Why this section is here:
+
+- **Transparency about authorship** — it's reasonable for users and
+  redistributors to know how the code was written.
+- **The `RMScene` port in particular** is an LLM translation of
+  Rick Lupton's Python `rmscene` into Swift. A language port is a
+  derivative work under copyright; we treat the upstream MIT notice
+  as load-bearing regardless of whether the translator was human
+  or machine. See
+  [`swift/Sources/RMScene/LICENSE`](swift/Sources/RMScene/LICENSE)
+  for the dual-attribution text.
+- **The MIT license still applies.** US Copyright Office guidance
+  holds that purely-AI-generated work isn't copyrightable on its
+  own, but work with meaningful human selection, editing, and
+  integration is. This repo's copyright claim rests on the
+  direction + review + integration — standard practice for
+  LLM-assisted projects today. Even where that claim is weak, the
+  MIT notice still serves as requested attribution, and the Rick
+  Lupton MIT obligation on the port is uncontested.
+
 ## In-repo derivative work
 
 ### `swift/Sources/RMScene/`
@@ -22,9 +52,11 @@ copyright. The upstream MIT notice therefore travels with the port
 and is preserved in `swift/Sources/RMScene/LICENSE`. The port
 itself is also MIT — dual attribution, single permissive license.
 
-The port was produced with LLM assistance against the Python
-reference; the reMarkable community's format work stands on Rick
-Lupton's prior reverse-engineering and should be credited as such.
+See "How this project was built" above for the broader context on
+LLM-assisted authorship. The specific `RMScene` port sits on Rick
+Lupton's prior reverse-engineering of the reMarkable v6 format;
+that work predates any LLM involvement here and should be credited
+to him.
 
 ## Swift package dependencies (resolved at build)
 
