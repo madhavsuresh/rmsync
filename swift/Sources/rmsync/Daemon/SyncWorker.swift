@@ -431,6 +431,56 @@ actor SyncWorker {
             return
         }
 
+        // Cloud-provider-eviction guard — a macOS File Provider (Dropbox,
+        // iCloud, OneDrive, Google Drive) can move local bytes to
+        // "online-only" storage when disk is tight, leaving a dataless
+        // placeholder at the file path. ``String(contentsOf:)`` then
+        // reads empty bytes, which our hash-and-push pipeline would
+        // faithfully propagate to the reMarkable cloud, wiping the doc.
+        //
+        // Heuristic: if the just-read text is empty (or whitespace-only)
+        // AND we previously synced non-empty content for this doc, treat
+        // it as a conflict rather than an intentional clear. Write the
+        // ``.conflict`` file with the remote content so the user can
+        // recover; the live cloud copy is untouched.
+        //
+        // False-positive risk: a user *does* intend to empty a tracked
+        // file. They can either delete it (``rmsync`` routes deletion
+        // through the DELETE path) or delete the ``.conflict`` file and
+        // save — we clear the conflict state on that re-push.
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty,
+           let stored,
+           let lastHash = stored.lastSyncedMDHash,
+           !lastHash.isEmpty,
+           lastHash != PathUtilities.sha256("") {
+            Logger.shared.warn(
+                "push refused: local reads empty but previously synced non-empty (possible cloud-provider eviction)",
+                meta: [
+                    "doc_id": stored.docID,
+                    "path": localPath.path,
+                    "bytes_on_disk": "\(text.utf8.count)",
+                    "prev_hash": lastHash
+                ]
+            )
+            // Write a .conflict file so the user knows something's up
+            // and has a recovery path. Remote content isn't available
+            // here without a pull; leave the "remote" side as a stub
+            // pointing at the last-synced marker. A subsequent pull
+            // will populate it properly if the user hasn't resolved yet.
+            let placeholder = "[rmsync refused to push an empty file while a non-empty copy is synced.\n" +
+                              "Possible cause: your cloud-storage provider (Dropbox / iCloud / etc.)\n" +
+                              "evicted the local bytes. Right-click the sync folder in Finder and\n" +
+                              "pick 'Always keep on this device' to prevent this.]\n"
+            _ = try Conflict.write(md: localPath, local: text, remote: placeholder)
+            try await state.setConflict(docID: stored.docID, state: "unresolved")
+            Notifications.notifyConflict(
+                docTitle: localPath.deletingPathExtension().lastPathComponent,
+                localPath: localPath
+            )
+            return
+        }
+
         // Persistent author UUID — same across every push from this
         // install, to keep the tablet's CRDT engine treating our writes
         // as "same author updating its own item" rather than a
