@@ -9,6 +9,29 @@ don't have to think about it once it's installed.
 **v0.2 — Swift daemon, zero Python runtime.** The v0.1 Python
 implementation is archived at `python-legacy.tar.gz`.
 
+> ### 🤖 Built with LLM assistance
+>
+> Almost everything in this repo — Swift source, tests, CI workflows,
+> Homebrew formula, this README — was produced through LLM-assisted
+> coding. The author directs architecture, reviews every merge, and is
+> the responsible party for behavior and licensing, but much of the
+> literal text and code (including this paragraph) was drafted by an
+> LLM. The `RMScene` target in particular is an LLM-generated Swift
+> port of Rick Lupton's Python [rmscene](https://github.com/ricklupton/rmscene).
+>
+> Practical implications:
+>
+> - Correctness is defended by the test suite, CI, and `brew audit` —
+>   not by intuition. 75+ tests plus a live-cloud smoke test gate the
+>   release pipeline.
+> - The MIT license and third-party attributions in
+>   [LICENSE](LICENSE) / [THIRDPARTY.md](THIRDPARTY.md) apply regardless
+>   of authorship source. Derivative-work obligations (Rick Lupton's
+>   MIT notice on the rmscene port) are preserved.
+> - Bug reports welcome. LLM-assisted code has the same bug distribution
+>   as any other code; the surface area and review depth is just
+>   different.
+
 ---
 
 ## Quick start
