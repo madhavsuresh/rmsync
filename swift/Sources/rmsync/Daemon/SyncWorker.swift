@@ -182,20 +182,34 @@ actor SyncWorker {
         // tell whether empty-parse results are a decoder bug, a rmapi /
         // cloud re-serialisation, or a tablet-side edit. Paired with the
         // "push page encoded" log on the push path.
+        //
+        // Log level gets promoted to ``warn`` when *any* page parses to
+        // empty — that's the actionable signature of the attacks.md
+        // class of bugs. Default ``debug`` for the normal case keeps
+        // the log quiet on healthy pulls. We checked hypothesis D
+        // (rmapi/cloud re-serialisation) empirically via the
+        // ``rmapiByteFidelity`` live test on 2026-04-20: the cloud is
+        // byte-faithful, so every empty_parse_count > 0 is either a
+        // tablet-side edit that flipped typed text to handwriting
+        // (hypothesis C — expected, defended against in the Bug 1
+        // guard below) or a decoder bug on a specific input shape
+        // (hypothesis A — actionable, fix in-tree).
         let emptyCount = pagesMd.filter { $0.isEmpty }.count
-        Logger.shared.debug(
-            "pull page parse report",
-            meta: [
-                "doc_id": docID,
-                "page_count": "\(rmdoc.pages.count)",
-                "empty_parse_count": "\(emptyCount)",
-                "total_rm_bytes": "\(rmdoc.pages.reduce(0) { $0 + $1.rmBytes.count })",
-                "page_ids": rmdoc.pages.map(\.pageID).joined(separator: ","),
-                "per_page_rm_sha256": rmdoc.pages
-                    .map { PathUtilities.sha256(bytes: $0.rmBytes) }
-                    .joined(separator: ",")
-            ]
-        )
+        let meta: [String: String] = [
+            "doc_id": docID,
+            "page_count": "\(rmdoc.pages.count)",
+            "empty_parse_count": "\(emptyCount)",
+            "total_rm_bytes": "\(rmdoc.pages.reduce(0) { $0 + $1.rmBytes.count })",
+            "page_ids": rmdoc.pages.map(\.pageID).joined(separator: ","),
+            "per_page_rm_sha256": rmdoc.pages
+                .map { PathUtilities.sha256(bytes: $0.rmBytes) }
+                .joined(separator: ",")
+        ]
+        if emptyCount > 0 {
+            Logger.shared.warn("pull page parse report", meta: meta)
+        } else {
+            Logger.shared.debug("pull page parse report", meta: meta)
+        }
 
         // Bug 1 guard — PageCodec.parsePage returns "" for handwriting-only
         // and drawing pages (see PageCodec.swift:28-30), and the contract
