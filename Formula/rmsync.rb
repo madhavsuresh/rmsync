@@ -110,6 +110,7 @@ class Rmsync < Formula
       # ``launchctl print`` exits 0 iff the label is bootstrapped.
       # We don't care about the printed payload — only the exit code.
       next unless quiet_system "/bin/launchctl", "print", domain
+
       # ``-k`` sends SIGTERM (fallback SIGKILL after 5s), then
       # bootstraps the label again. Same PID label; new process,
       # new exec → new on-disk binary gets loaded.
