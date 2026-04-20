@@ -38,6 +38,24 @@ class Rmsync < Formula
 
   def install
     cd "swift" do
+      # Bake the Homebrew-known version into both targets' Version.swift
+      # before compilation. The source file ships with ``"dev"`` as a
+      # placeholder for local ``swift build`` users; brew installs
+      # produce binaries that self-identify as the tag version at
+      # ``rmsync --version`` and on the menu bar's version line.
+      #
+      # The pattern is anchored on ``let current`` (rather than the
+      # bare ``"dev"`` literal) so doc-comment mentions of ``"dev"``
+      # aren't rewritten. inreplace errors out if the literal isn't
+      # present, which is the check we want — a future refactor that
+      # renames ``current`` will fail loudly here instead of shipping
+      # a mystery-version binary.
+      %w[Sources/rmsync/Version.swift Sources/rmsync-menubar/Version.swift].each do |path|
+        inreplace path,
+                  'static let current: String = "dev"',
+                  "static let current: String = \"#{version}\""
+      end
+
       system "swift", "build",
              "--disable-sandbox",
              "-c", "release",
@@ -72,6 +90,31 @@ class Rmsync < Formula
     # source-tree cleanup that doesn't apply to brew installs.
     (bin/"rmsync-uninstall-agents").write agent_uninstaller_script
     chmod 0755, bin/"rmsync-uninstall-agents"
+  end
+
+  def post_install
+    # After an upgrade the new binary sits at
+    # ``#{opt_bin}/rmsync``, but launchd holds the OLD binary mmap'd
+    # in memory because the process never exits — ``KeepAlive`` only
+    # restarts on crash. Users would keep running the previous
+    # version's code indefinitely (we hit this at v0.2.0 → v0.2.4
+    # and it silently masked a data-loss fix). Kick both agents if
+    # they're bootstrapped so the new binary gets loaded.
+    #
+    # Fresh installs: neither label is bootstrapped yet — the
+    # ``launchctl print`` guard no-ops cleanly. Users finish setup
+    # via ``rmsync-install-agents`` as usual.
+    uid = Process.uid.to_s
+    %w[com.user.rmsync com.user.rmsync.menubar].each do |label|
+      domain = "gui/#{uid}/#{label}"
+      # ``launchctl print`` exits 0 iff the label is bootstrapped.
+      # We don't care about the printed payload — only the exit code.
+      next unless quiet_system "/bin/launchctl", "print", domain
+      # ``-k`` sends SIGTERM (fallback SIGKILL after 5s), then
+      # bootstraps the label again. Same PID label; new process,
+      # new exec → new on-disk binary gets loaded.
+      quiet_system "/bin/launchctl", "kickstart", "-k", domain
+    end
   end
 
   def caveats

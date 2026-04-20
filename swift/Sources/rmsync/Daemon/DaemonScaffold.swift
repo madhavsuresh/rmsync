@@ -183,6 +183,7 @@ enum DaemonScaffold {
             s.lastPushAt = lastPush
             s.paused = paused
             s.pid = Int(getpid())
+            s.version = Version.current
         }
     }
 
@@ -198,6 +199,7 @@ enum DaemonScaffold {
             "paused": .bool(snap.paused),
             "updated_at": .string(snap.updatedAt),
             "pid": .int(snap.pid),
+            "version": .string(snap.version),
             "last_pull_at": snap.lastPullAt.map { .string($0) } ?? .null,
             "last_push_at": snap.lastPushAt.map { .string($0) } ?? .null,
             "last_error": snap.lastError.map { .string($0) } ?? .null,

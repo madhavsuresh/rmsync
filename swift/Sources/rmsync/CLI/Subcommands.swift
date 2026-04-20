@@ -47,6 +47,21 @@ struct Status: AsyncParsableCommand {
             print("queue depth:    \(live.queueDepth)")
             print("last pull:      \(live.lastPullAt ?? "(never)")")
             print("last push:      \(live.lastPushAt ?? "(never)")")
+            // Version line shows BOTH the running daemon's version
+            // (from IPC) and this CLI binary's version. Divergence
+            // means the on-disk binary was upgraded but the daemon
+            // process is still running the old one in memory — classic
+            // post-brew-upgrade state. Also flags when you've built a
+            // new binary in-tree but forgot to kickstart.
+            let daemonVersion = live.version.isEmpty ? "unknown" : live.version
+            if daemonVersion == Version.current {
+                print("version:        \(daemonVersion)")
+            } else {
+                print("version:        cli \(Version.current) · daemon \(daemonVersion)")
+                print("                ⚠ mismatch — daemon is running an older binary;")
+                print("                  restart to pick up the new one:")
+                print("                    launchctl kickstart -k gui/$(id -u)/com.user.rmsync")
+            }
             return
         }
 

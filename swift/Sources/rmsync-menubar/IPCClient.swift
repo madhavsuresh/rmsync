@@ -14,6 +14,11 @@ struct StatusSnapshot {
     let lastError: String?
     let updatedAt: String
     let pid: Int?
+    /// Version string reported by the daemon over IPC. Empty if the
+    /// daemon is older than the field (pre-Swift-version-stamp) or
+    /// didn't send it. Separate from this menubar binary's own
+    /// ``Version.current`` — divergence between the two is actionable.
+    let daemonVersion: String
 }
 
 /// Persistent Unix-socket client for the rmsync daemon.
@@ -225,7 +230,8 @@ final class IPCClient {
             lastPushAt: raw["last_push_at"] as? String,
             lastError: raw["last_error"] as? String,
             updatedAt: raw["updated_at"] as? String ?? "",
-            pid: raw["pid"] as? Int
+            pid: raw["pid"] as? Int,
+            daemonVersion: raw["version"] as? String ?? ""
         )
     }
 

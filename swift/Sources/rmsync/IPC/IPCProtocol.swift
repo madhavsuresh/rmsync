@@ -4,7 +4,11 @@ import Foundation
 /// Python and Swift daemons — the menu bar built for the Python version
 /// works against the Swift daemon unchanged.
 enum IPC {
-    /// Mirrors the Python ``StateBus.Status`` payload.
+    /// Mirrors the Python ``StateBus.Status`` payload, plus a daemon
+    /// ``version`` field added in the Swift rewrite so clients can tell
+    /// which binary the running daemon was loaded from (separate
+    /// question from ``rmsync --version``, which reports the CLI's own
+    /// compile-time version).
     struct Status: Codable, Sendable {
         var state: String                      // idle|syncing|paused|error|stopped
         var syncDir: String
@@ -19,6 +23,7 @@ enum IPC {
         var paused: Bool
         var updatedAt: String
         var pid: Int
+        var version: String
 
         enum CodingKeys: String, CodingKey {
             case state
@@ -34,13 +39,14 @@ enum IPC {
             case paused
             case updatedAt = "updated_at"
             case pid
+            case version
         }
 
         static let empty = Status(
             state: "idle", syncDir: "", remoteFolder: "", trackedDocs: 0,
             conflicts: 0, errors: 0, queueDepth: 0, lastPullAt: nil,
             lastPushAt: nil, lastError: nil, paused: false,
-            updatedAt: "", pid: 0
+            updatedAt: "", pid: 0, version: ""
         )
     }
 }
