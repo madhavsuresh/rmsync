@@ -104,7 +104,8 @@ enum IPCClientSync {
             lastError: optionalString("last_error"),
             paused: boolValue("paused"),
             updatedAt: stringValue("updated_at"),
-            pid: intValue("pid")
+            pid: intValue("pid"),
+            version: stringValue("version")
         )
     }
 

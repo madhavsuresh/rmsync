@@ -9,6 +9,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     let menu = NSMenu()
 
     private let titleItem = NSMenuItem()
+    private let versionItem = NSMenuItem()
     private let statusItem = NSMenuItem()
     private let pullItem = NSMenuItem()
     private let pushItem = NSMenuItem()
@@ -37,6 +38,17 @@ final class MenuController: NSObject, NSMenuDelegate {
         titleItem.title = "rmsync"
         titleItem.isEnabled = false
         menu.addItem(titleItem)
+
+        // Version line — shows this menubar binary's version always,
+        // and appends the daemon's reported version if it differs. A
+        // mismatch usually means ``brew upgrade`` ran but the daemon
+        // hasn't been kicked yet. The post_install hook in the Formula
+        // covers the normal path; this line is the visual canary when
+        // the hook didn't fire (e.g. manual ``./install.sh`` dev
+        // install, or a launchd race during upgrade).
+        versionItem.title = "v\(Version.current)"
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
 
         statusItem.title = "Loading…"
         statusItem.isEnabled = false
@@ -107,6 +119,7 @@ final class MenuController: NSObject, NSMenuDelegate {
             pullItem.title = "Last pull: \(shortTime(s.lastPullAt))"
             pushItem.title = "Last push: \(shortTime(s.lastPushAt))"
             pauseItem.title = s.state == "paused" ? "Resume" : "Pause"
+            versionItem.title = versionLine(menubar: Version.current, daemon: s.daemonVersion)
 
             if s.conflicts > 0 {
                 conflictsItem.title = "Show Conflicts (\(s.conflicts))"
@@ -122,9 +135,20 @@ final class MenuController: NSObject, NSMenuDelegate {
             pullItem.title = "Last pull: —"
             pushItem.title = "Last push: —"
             pauseItem.title = "Pause"
+            versionItem.title = "v\(Version.current)"
             conflictsItem.isHidden = true
             openFolderItem.title = "Open Sync Folder"
         }
+    }
+
+    /// Render the version menu-item text. Keeps the common case
+    /// (matching versions) terse, and makes the actionable mismatch
+    /// case visible without extra menu items.
+    private func versionLine(menubar: String, daemon: String) -> String {
+        if daemon.isEmpty || daemon == menubar {
+            return "v\(menubar)"
+        }
+        return "v\(menubar) · daemon v\(daemon) ⚠"
     }
 
     private func humanState(_ s: StatusSnapshot) -> String {
