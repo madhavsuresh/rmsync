@@ -231,10 +231,23 @@ Set `RMSYNC_LIVE=1` and make sure `rmapi` is authenticated.
 
 ## License / credits
 
-- `swift/Sources/RMScene/` is a direct copy of
-  [ricklupton/rmscene-swift](https://github.com/ricklupton/rmscene-swift)
-  (MIT). It's the part that knows how to read and write the v6 `.rm`
-  format the tablet uses.
-- `rmapi` is [ddvk/rmapi](https://github.com/ddvk/rmapi) (AGPL-3.0),
-  which we shell out to for cloud access.
-- The rest of this repo is the author's own. Do what you want with it.
+rmsync itself is **MIT-licensed** — see [LICENSE](LICENSE). Copy it,
+fork it, resell it, embed it in anything. The only attribution required
+is preserving the MIT copyright notice.
+
+Third-party components each carry their own terms. Full accounting in
+[THIRDPARTY.md](THIRDPARTY.md); the short version:
+
+- **`swift/Sources/RMScene/`** — vendored verbatim from Rick Lupton's
+  [rmscene-swift](https://github.com/ricklupton/rmscene-swift) (MIT).
+  Upstream notice is preserved at
+  [`swift/Sources/RMScene/LICENSE`](swift/Sources/RMScene/LICENSE).
+- **`swift-argument-parser`** (Apple, Apache-2.0), **`GRDB.swift`**
+  (Gwendal Roué, MIT), **`TOMLDecoder`** (Daniel Duan, MIT) — SwiftPM
+  dependencies fetched at build time. Not redistributed in source.
+- **`rmapi`** — [ddvk/rmapi](https://github.com/ddvk/rmapi) (AGPL-3.0).
+  rmsync shells out to it as a separate process; it's a runtime
+  dependency that users install themselves (`brew install io41/tap/rmapi`).
+  AGPL-3.0 governs rmapi; it does not reach rmsync, per the standard
+  subprocess-aggregation reading. See THIRDPARTY.md for the detailed
+  argument.
