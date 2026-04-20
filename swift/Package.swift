@@ -22,8 +22,13 @@ let package = Package(
         // project) is entirely visible in this repo — see
         // ``Sources/RMScene/LICENSE`` for the dual-attribution text.
         // Tests moved to ``Tests/RMSceneTests``.
+        //
+        // ``exclude`` tells SPM the LICENSE file is intentional metadata,
+        // not a source or resource to bundle. Without this, ``swift
+        // build`` emits a "unhandled file" warning every compile.
         .target(
-            name: "RMScene"
+            name: "RMScene",
+            exclude: ["LICENSE"]
         ),
         .executableTarget(
             name: "rmsync",
