@@ -26,9 +26,12 @@ This project ships with vendored third-party source and depends on external
 components that are each governed by their own licenses. See THIRDPARTY.md
 for the full list and each dependency's terms. In particular:
 
-  - swift/Sources/RMScene/ is a direct copy of Rick Lupton's rmscene-swift
-    (MIT; see swift/Sources/RMScene/LICENSE for the preserved upstream
-    copyright notice).
+  - swift/Sources/RMScene/ is a Swift port of Rick Lupton's Python
+    rmscene (https://github.com/ricklupton/rmscene, MIT). A language
+    port is a derivative work under copyright, so the original MIT
+    notice travels with the port; see swift/Sources/RMScene/LICENSE
+    for the dual-attribution text (Rick Lupton 2023 for the original
+    design, Madhav Suresh 2026 for the port).
   - rmapi (ddvk/rmapi, AGPL-3.0) is a runtime dependency invoked as a
     separate process via subprocess. rmsync does not link to, embed, or
     redistribute rmapi source or binaries — users install it themselves

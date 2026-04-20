@@ -1,24 +1,30 @@
 # Third-party components
 
-rmsync is MIT-licensed (see [LICENSE](LICENSE)). It bundles one
-third-party source tree in-repo, depends on three Swift packages fetched
-by SwiftPM at build time, and invokes one external binary at runtime.
-Every piece is covered by a permissive or weakly-copyleft license
-compatible with MIT redistribution.
+rmsync is MIT-licensed (see [LICENSE](LICENSE)). It contains one
+in-repo derivative work based on an external MIT-licensed project,
+depends on three Swift packages fetched by SwiftPM at build time,
+and invokes one external binary at runtime. Every piece is covered
+by a permissive or weakly-copyleft license compatible with MIT
+redistribution.
 
-## In-repo (vendored source)
+## In-repo derivative work
 
 ### `swift/Sources/RMScene/`
-- **Upstream**: [github.com/ricklupton/rmscene-swift](https://github.com/ricklupton/rmscene-swift)
-  (a Swift port of [rmscene](https://github.com/ricklupton/rmscene), the
-  reference implementation of the reMarkable v6 `.rm` CRDT codec)
-- **Author**: Rick Lupton
-- **License**: MIT
+- **Based on**: [github.com/ricklupton/rmscene](https://github.com/ricklupton/rmscene)
+  (the reference Python implementation of the reMarkable v6 `.rm`
+  CRDT codec, Copyright 2023 Rick Lupton, MIT)
+- **Swift port**: part of this project, Copyright 2026 Madhav Suresh, MIT
 - **License text**: [swift/Sources/RMScene/LICENSE](swift/Sources/RMScene/LICENSE)
+  (carries both notices)
 
-The files in that directory are vendored verbatim. The upstream MIT
-notice is preserved alongside the code. Do not edit those files in a way
-that changes the licensing story without updating the upstream notice.
+A language port of MIT-licensed source is a derivative work under
+copyright. The upstream MIT notice therefore travels with the port
+and is preserved in `swift/Sources/RMScene/LICENSE`. The port
+itself is also MIT — dual attribution, single permissive license.
+
+The port was produced with LLM assistance against the Python
+reference; the reMarkable community's format work stands on Rick
+Lupton's prior reverse-engineering and should be credited as such.
 
 ## Swift package dependencies (resolved at build)
 
@@ -72,8 +78,8 @@ You can fork, modify, bundle, or resell rmsync under MIT terms so long as:
 1. The top-level [LICENSE](LICENSE) is included (MIT attribution to
    Madhav Suresh).
 2. [swift/Sources/RMScene/LICENSE](swift/Sources/RMScene/LICENSE) is
-   preserved if you keep the vendored code (MIT attribution to Rick
-   Lupton).
+   preserved if you keep the port (MIT dual attribution: Rick Lupton
+   for the original Python design, Madhav Suresh for the Swift port).
 3. You do not bundle `rmapi` binaries or source alongside the
    redistribution unless you accept AGPL-3.0 for that bundled copy. Tell
    users to install rmapi themselves (the rmsync Formula does this via

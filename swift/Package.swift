@@ -15,10 +15,13 @@ let package = Package(
         .package(url: "https://github.com/dduan/TOMLDecoder.git", from: "0.2.2"),
     ],
     targets: [
-        // Vendored in-tree from github.com/madhav/rmscene-swift. Keeping
-        // the package local (no external git dep) so builds are hermetic
-        // and a git submodule dance is avoided. The sources are copied
-        // verbatim; their tests moved to ``Tests/RMSceneTests``.
+        // Swift port of Rick Lupton's Python ``rmscene``
+        // (https://github.com/ricklupton/rmscene, MIT). Lives in-tree
+        // rather than as a git-submodule dep so builds are hermetic
+        // and the licensing story (a derivative work of an MIT-licensed
+        // project) is entirely visible in this repo — see
+        // ``Sources/RMScene/LICENSE`` for the dual-attribution text.
+        // Tests moved to ``Tests/RMSceneTests``.
         .target(
             name: "RMScene"
         ),
