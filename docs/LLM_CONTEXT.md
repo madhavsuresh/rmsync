@@ -538,8 +538,8 @@ tool) makes the daemon re-track it as a new doc on next edit.
 
 Swift 6 strict concurrency. Actors for IPC, GRDB write queue. Three
 SPM targets: `rmsync` (executable), `rmsync-menubar` (executable),
-`RMScene` (library, vendored v6 CRDT codec from
-ricklupton/rmscene-swift).
+`RMScene` (library, Swift port of the v6 CRDT codec from
+[ricklupton/rmscene](https://github.com/ricklupton/rmscene), MIT).
 
 ---
 
@@ -616,7 +616,7 @@ GitHub issues on the repo the user cloned from. Include:
 ## What this doc does NOT cover
 
 - Internal code organization beyond the three targets.
-- The v6 `.rm` CRDT format details (see rmscene-swift upstream).
+- The v6 `.rm` CRDT format details (see ricklupton/rmscene upstream).
 - Port history (see `docs/SWIFT_PORT_PHASE1.md`).
 - Deviations from the original Python spec (see
   `CHANGES_FROM_SPEC.md`).

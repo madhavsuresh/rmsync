@@ -3,11 +3,12 @@ import RMScene
 
 /// In-process encoder/decoder for reMarkable v6 ``.rm`` pages.
 ///
-/// Replaces the previous Python subprocess bridge: the vendored
-/// ``RMScene`` target (copied from
-/// https://github.com/ricklupton/rmscene-swift) gives us byte-identical
-/// output to Python's ``rmscene`` library when encoding at
-/// ``RemarkableVersion("3.4")``, which is what we use across the daemon.
+/// Replaces the previous Python subprocess bridge. The ``RMScene``
+/// target in this repo is a Swift port of Rick Lupton's Python
+/// ``rmscene`` (https://github.com/ricklupton/rmscene, MIT) and
+/// produces byte-identical output when encoding at
+/// ``RemarkableVersion("3.4")``, which is what we use across the
+/// daemon.
 ///
 /// Two operations mirror the Python bridge's ``parse_page`` and
 /// ``render_page`` commands, minus the base64 + JSON framing:

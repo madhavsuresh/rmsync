@@ -98,9 +98,10 @@ reference, troubleshooting, and rough edges to know about.
   subscription is *not* required — free tier works fine.
 
 No Python runtime required. reMarkable's v6 CRDT format is handled by
-a native Swift library ([`swift/Sources/RMScene`](swift/Sources/RMScene)),
-vendored in-tree from
-[ricklupton/rmscene-swift](https://github.com/ricklupton/rmscene-swift).
+a native Swift library ([`swift/Sources/RMScene`](swift/Sources/RMScene))
+— a port of Rick Lupton's Python
+[rmscene](https://github.com/ricklupton/rmscene) (MIT), implemented
+in this repo and dual-attributed.
 
 Three Swift packages are fetched from their git repos during the first
 build: Apple's `swift-argument-parser`, GRDB, and TOMLDecoder. No
@@ -238,10 +239,12 @@ is preserving the MIT copyright notice.
 Third-party components each carry their own terms. Full accounting in
 [THIRDPARTY.md](THIRDPARTY.md); the short version:
 
-- **`swift/Sources/RMScene/`** — vendored verbatim from Rick Lupton's
-  [rmscene-swift](https://github.com/ricklupton/rmscene-swift) (MIT).
-  Upstream notice is preserved at
-  [`swift/Sources/RMScene/LICENSE`](swift/Sources/RMScene/LICENSE).
+- **`swift/Sources/RMScene/`** — a Swift port of Rick Lupton's Python
+  [rmscene](https://github.com/ricklupton/rmscene) (MIT). A language
+  port is a derivative work under copyright, so the original MIT
+  notice travels with the code alongside the port's own copyright;
+  see [`swift/Sources/RMScene/LICENSE`](swift/Sources/RMScene/LICENSE)
+  for the dual-attribution text.
 - **`swift-argument-parser`** (Apple, Apache-2.0), **`GRDB.swift`**
   (Gwendal Roué, MIT), **`TOMLDecoder`** (Daniel Duan, MIT) — SwiftPM
   dependencies fetched at build time. Not redistributed in source.
