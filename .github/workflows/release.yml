@@ -45,8 +45,14 @@ jobs:
             --arch x86_64
 
       - name: Run tests (non-live)
+        # Tests run in debug config. ``swift test -c release`` combined
+        # with swift-testing on macos-15 / Swift 6.0 mis-invokes the
+        # test bundle — the release rmsync binary gets ``--test-bundle-path``
+        # as a CLI arg and bails. XCTest tests still ran but swift-testing
+        # @Test suites were skipped entirely, silently. Using the default
+        # debug config runs both test runners correctly.
         working-directory: swift
-        run: swift test -c release
+        run: swift test
 
       - name: Package binaries
         id: package
