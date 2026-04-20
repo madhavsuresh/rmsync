@@ -100,40 +100,53 @@ brew uninstall rmsync
 
 ---
 
-## Automating releases (optional)
+## Automated releases (default path)
 
-`.github/workflows/release.yml` in this repo runs on every `v*` tag
-push and:
+`.github/workflows/release.yml` runs on every `v*` tag push and:
 
-1. Builds a universal release binary on `macos-14`.
-2. Runs the non-live test suite.
+1. Builds universal (arm64 + x86_64) release binaries on `macos-15`.
+2. Runs the non-live test suite (`swift test --no-parallel`, serial
+   + piped-through-`cat` — see the comment in `release.yml` for why
+   the flags are load-bearing on Swift 6.0 / macos-15).
 3. Creates a GitHub Release with a pre-built tarball attached.
 4. Opens a PR on the tap repo that bumps `url` + `sha256`.
 
-Step 4 needs a secret. In the main repo's Settings → Secrets and
-variables → Actions, add:
+Step 4 needs a secret. Without it, the workflow skips the
+bump-formula job silently and you'd fall back to the manual tap
+bump in the "Updating to a new version" section below. This repo
+has the secret configured (`TAP_REPO_TOKEN`, a fine-grained PAT
+scoped to `madhavsuresh/homebrew-rmsync`, expires Jan 1 2027).
 
-| Name | Value |
-|---|---|
-| `TAP_REPO_TOKEN` | A fine-grained PAT with Contents:write and Pull requests:write on the `<you>/homebrew-rmsync` repo |
+### Rotating the PAT
 
-Without the secret, the workflow skips the bump-formula job silently
-— you do steps 4 manually each release.
-
-### Creating the PAT
+When the fine-grained PAT expires, regenerate in place and refresh
+the secret:
 
 ```
 GitHub → Settings → Developer settings → Personal access tokens
-  → Fine-grained tokens → Generate new token
-    Resource owner: <you>
-    Repository access: Only select repositories → homebrew-rmsync
-    Repository permissions:
-      Contents: Read and write
-      Pull requests: Read and write
+  → Fine-grained tokens → rmsync-tap-bump → Regenerate token
 ```
 
-Copy the token into `TAP_REPO_TOKEN` on the main repo. Don't reuse it
-for anything else.
+Copy the new value, then:
+
+```sh
+gh secret set TAP_REPO_TOKEN --repo madhavsuresh/rmsync
+# paste at the interactive prompt (avoids clipboard truncation
+# that silently stored a partial token once — seen 2026-04-20)
+```
+
+If you ever need to create the PAT from scratch:
+
+```
+Resource owner: <you>
+Repository access: Only select repositories → homebrew-rmsync
+Repository permissions:
+  Contents: Read and write
+  Pull requests: Read and write
+  (Metadata: Read — auto-selected)
+```
+
+Don't reuse the token for anything else.
 
 ---
 
@@ -159,28 +172,35 @@ The cost: two lines in the caveats (`rmsync-install-agents` and
 
 ## Updating to a new version
 
-On the main repo:
+With the PAT configured (the default — see "Automated releases"
+above), shipping a release is one step from this repo:
 
 ```sh
-git tag -a v0.3.0 -m "..."
-git push origin v0.3.0
+git tag -a vX.Y.Z -m "..."
+git push origin vX.Y.Z
 ```
 
-If you configured the PAT, the Action opens a PR on the tap repo.
-Review and merge. Users `brew upgrade rmsync`.
+The Action builds the binaries, publishes the GitHub Release, and
+opens a PR on the tap. Review the PR, merge, done. Users then
+`brew upgrade rmsync`.
 
-Without the PAT, update the tap manually:
+### Manual tap bump (fallback)
+
+If the Action is broken or the PAT has expired and you need to ship
+anyway:
 
 ```sh
 cd ~/src/homebrew-rmsync
-sed -i '' 's/v0.2.0/v0.3.0/g' Formula/rmsync.rb
-# new sha:
-curl -sL https://github.com/<you>/rmsync/archive/refs/tags/v0.3.0.tar.gz \
+# new sha — verify against the tag you just pushed:
+curl -sL https://github.com/madhavsuresh/rmsync/archive/refs/tags/vX.Y.Z.tar.gz \
   | shasum -a 256
-$EDITOR Formula/rmsync.rb   # paste new sha256
-git commit -am "rmsync v0.3.0"
+# edit Formula/rmsync.rb: bump the url's vX.Y.Z and replace sha256 with
+# the value above.
+git commit -am "rmsync vX.Y.Z"
 git push
 ```
+
+Then open a PR (or push direct to main if you trust yourself).
 
 ---
 
@@ -262,18 +282,16 @@ The symlink means edits in your checkout show up immediately — no copy
 needed between iterations. `brew uninstall` + `brew untap` when you're
 done.
 
-Note: while `sha256` in the formula still points at `0000…` /
-whatever the placeholder is, `brew install` will fail the checksum
-check on the tagged tarball. Work around it one of two ways:
+The published tap carries a real `sha256` for the latest tagged
+release, so `brew install madhavsuresh/rmsync/rmsync` just works.
+When you're iterating on the formula against an untagged state —
+or the formula's `url`/`sha256` are mid-bump — install from the
+main branch instead, which ignores both:
 
-- **Add `head "https://github.com/<you>/rmsync.git"`** (already in
-  the formula) and install with `--HEAD`:
-    ```sh
-    brew install --HEAD madhavsuresh/rmsync/rmsync
-    ```
-  This clones the main branch at install time, ignoring `url`/`sha256`.
+```sh
+brew install --HEAD madhavsuresh/rmsync/rmsync
+```
 
-- **Tag a real release** and bump the SHA. See the "Handling a new
-  version" section above.
-
-`--HEAD` is the fastest path for iterating on the formula itself.
+`--HEAD` clones `origin/main` at install time. Pairs naturally
+with the local-tap symlink trick above: edit the formula, `brew
+reinstall --HEAD`, done.
