@@ -164,10 +164,33 @@ enum DaemonScaffold {
     ) async throws {
         let docs = try await state.allDocuments()
         let tracked = docs.filter { $0.docType == "DocumentType" }.count
-        let conflicts = docs.filter { $0.conflictState == "unresolved" }.count
-        let errors = docs.filter { $0.errorState != nil }.count
-        let lastPull = docs.compactMap(\.lastPullAt).max()
-        let lastPush = docs.compactMap(\.lastPushAt).max()
+
+        // Reconcile any docs whose state.db says "unresolved" but whose
+        // ``.conflict`` marker file on disk has since been deleted by
+        // the user. Deleting the marker is the canonical "I resolved
+        // this" gesture per the conflict workflow; previously the
+        // state.db row was only cleared on the NEXT push of that doc,
+        // which could be hours away and left the menubar stuck on
+        // ``conflicts: N`` even after all ``.conflict`` files were
+        // gone. Do it here so every status refresh self-heals.
+        let unresolvedFromDB = docs.filter { $0.conflictState == "unresolved" }
+        for doc in unresolvedFromDB {
+            let path = URL(fileURLWithPath: doc.localPath)
+            if !Conflict.hasUnresolvedConflictFile(at: path) {
+                try? await state.setConflict(docID: doc.docID, state: nil)
+                Logger.shared.info(
+                    "auto-cleared conflict state (marker file deleted)",
+                    meta: ["doc_id": doc.docID, "path": doc.localPath]
+                )
+            }
+        }
+        // Re-read after the reconciliation pass so the count matches
+        // the post-cleanup state.
+        let liveDocs = try await state.allDocuments()
+        let conflicts = liveDocs.filter { $0.conflictState == "unresolved" }.count
+        let errors = liveDocs.filter { $0.errorState != nil }.count
+        let lastPull = liveDocs.compactMap(\.lastPullAt).max()
+        let lastPush = liveDocs.compactMap(\.lastPushAt).max()
         let paused = try await state.isPaused()
         let queueDepth = await queue.size()
 
