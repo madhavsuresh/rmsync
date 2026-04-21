@@ -439,15 +439,29 @@ actor SyncWorker {
         // faithfully propagate to the reMarkable cloud, wiping the doc.
         //
         // Heuristic: if the just-read text is empty (or whitespace-only)
-        // AND we previously synced non-empty content for this doc, treat
-        // it as a conflict rather than an intentional clear. Write the
-        // ``.conflict`` file with the remote content so the user can
-        // recover; the live cloud copy is untouched.
+        // AND we previously synced non-empty content for this doc,
+        // refuse the push. This is NOT a conflict in the usual "local
+        // and remote diverged" sense — the real content lives on the
+        // reMarkable cloud, and as soon as the provider re-materialises
+        // the local bytes (user clicks the file in Finder, opens it,
+        // or the OS decides disk is no longer tight), the next push
+        // cycle sees a non-empty local and proceeds normally.
         //
-        // False-positive risk: a user *does* intend to empty a tracked
-        // file. They can either delete it (``rmsync`` routes deletion
-        // through the DELETE path) or delete the ``.conflict`` file and
-        // save — we clear the conflict state on that re-push.
+        // So we intentionally do NOT:
+        //   - Write a ``.conflict`` file (nothing to diff; local is a
+        //     known-empty placeholder, remote is the last synced state).
+        //   - Mutate ``conflictState`` in state.db (no user action is
+        //     required to resolve; it self-resolves when the provider
+        //     re-materialises).
+        //
+        // We just warn + notify and return. The next poll cycle will
+        // re-attempt the push automatically.
+        //
+        // False-positive: user deliberately emptied the file. Those
+        // cases route through rm (DELETE path) or a save of whitespace;
+        // the heuristic will keep refusing until the user removes the
+        // file from state.db via a delete, which is the same pattern
+        // as an intentional delete.
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty,
            let stored,
@@ -463,20 +477,13 @@ actor SyncWorker {
                     "prev_hash": lastHash
                 ]
             )
-            // Write a .conflict file so the user knows something's up
-            // and has a recovery path. Remote content isn't available
-            // here without a pull; leave the "remote" side as a stub
-            // pointing at the last-synced marker. A subsequent pull
-            // will populate it properly if the user hasn't resolved yet.
-            let placeholder = "[rmsync refused to push an empty file while a non-empty copy is synced.\n" +
-                              "Possible cause: your cloud-storage provider (Dropbox / iCloud / etc.)\n" +
-                              "evicted the local bytes. Right-click the sync folder in Finder and\n" +
-                              "pick 'Always keep on this device' to prevent this.]\n"
-            _ = try Conflict.write(md: localPath, local: text, remote: placeholder)
-            try await state.setConflict(docID: stored.docID, state: "unresolved")
-            Notifications.notifyConflict(
-                docTitle: localPath.deletingPathExtension().lastPathComponent,
-                localPath: localPath
+            let docTitle = localPath.deletingPathExtension().lastPathComponent
+            Notifications.notify(
+                title: "rmsync: push skipped",
+                body: "\(docTitle) read as empty on disk; the cloud copy is " +
+                      "untouched. This usually means your cloud-storage provider " +
+                      "evicted the local bytes. Open the file to re-download it.",
+                subtitle: localPath.deletingLastPathComponent().path
             )
             return
         }
