@@ -432,57 +432,93 @@ actor SyncWorker {
         }
 
         // Cloud-provider-eviction guard — a macOS File Provider (Dropbox,
-        // iCloud, OneDrive, Google Drive) can move local bytes to
-        // "online-only" storage when disk is tight, leaving a dataless
-        // placeholder at the file path. ``String(contentsOf:)`` then
-        // reads empty bytes, which our hash-and-push pipeline would
-        // faithfully propagate to the reMarkable cloud, wiping the doc.
+        // iCloud, OneDrive, Google Drive, Box) can demote a local file
+        // to a dataless placeholder when disk is tight, even if the
+        // user has ticked "Always keep on this device". The placeholder
+        // keeps the logical size in stat() but has zero physical blocks
+        // allocated. ``String(contentsOf:)`` then returns empty bytes
+        // without surfacing a proper I/O error — which our hash-and-
+        // push pipeline would happily propagate to the reMarkable
+        // cloud, wiping the doc.
         //
-        // Heuristic: if the just-read text is empty (or whitespace-only)
-        // AND we previously synced non-empty content for this doc,
-        // refuse the push. This is NOT a conflict in the usual "local
-        // and remote diverged" sense — the real content lives on the
-        // reMarkable cloud, and as soon as the provider re-materialises
-        // the local bytes (user clicks the file in Finder, opens it,
-        // or the OS decides disk is no longer tight), the next push
-        // cycle sees a non-empty local and proceeds normally.
+        // Two-layer detection, both have to vote "empty" for us to
+        // refuse:
         //
-        // So we intentionally do NOT:
-        //   - Write a ``.conflict`` file (nothing to diff; local is a
-        //     known-empty placeholder, remote is the last synced state).
-        //   - Mutate ``conflictState`` in state.db (no user action is
-        //     required to resolve; it self-resolves when the provider
-        //     re-materialises).
+        //   Layer 1 (precise, provider-agnostic): FileProvider.status()
+        //     reads stat() and reports ``.dataless`` when
+        //     ``st_size > 0 && st_blocks == 0`` — the APFS signature
+        //     of a placeholder file whose bytes were demoted. This
+        //     is the authoritative signal; it distinguishes evicted
+        //     files from genuinely-empty ones with no ambiguity.
         //
-        // We just warn + notify and return. The next poll cycle will
-        // re-attempt the push automatically.
+        //   Layer 2 (text-read sanity): even if stat() somehow lies
+        //     (exotic filesystem, racing eviction), if the in-memory
+        //     text trims empty AND we previously synced non-empty
+        //     content for this doc, the push would destroy data. So
+        //     we fall back to refusing on that basis too.
         //
-        // False-positive: user deliberately emptied the file. Those
-        // cases route through rm (DELETE path) or a save of whitespace;
-        // the heuristic will keep refusing until the user removes the
-        // file from state.db via a delete, which is the same pattern
-        // as an intentional delete.
+        // The two layers converge on the same "refuse the push"
+        // decision but produce different log / notification text so
+        // the user can tell whether this was a provider eviction
+        // (self-healing) or something weirder (investigate).
+        //
+        // We intentionally do NOT write a ``.conflict`` file or mutate
+        // ``conflictState`` — see v0.2.8 for the reasoning (there's
+        // nothing to merge; the case self-resolves when the provider
+        // re-materialises the bytes).
+        let providerStatus = FileProvider.status(of: localPath)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty,
-           let stored,
-           let lastHash = stored.lastSyncedMDHash,
-           !lastHash.isEmpty,
-           lastHash != PathUtilities.sha256("") {
+        let previouslyNonEmpty = stored?.lastSyncedMDHash.map { !$0.isEmpty && $0 != PathUtilities.sha256("") } ?? false
+
+        if providerStatus.isDataless, let stored {
+            // Authoritative path: APFS + stat() are unambiguous.
+            let providerName: String
+            if case .dataless(_, let p) = providerStatus {
+                providerName = p?.rawValue ?? "your cloud-storage provider"
+            } else {
+                providerName = "your cloud-storage provider"
+            }
             Logger.shared.warn(
-                "push refused: local reads empty but previously synced non-empty (possible cloud-provider eviction)",
+                "push refused: local file is a dataless placeholder (cloud-provider eviction confirmed via stat)",
                 meta: [
                     "doc_id": stored.docID,
                     "path": localPath.path,
-                    "bytes_on_disk": "\(text.utf8.count)",
-                    "prev_hash": lastHash
+                    "detected_provider": providerName,
+                    "logical_size": {
+                        if case .dataless(let size, _) = providerStatus { return "\(size)" }
+                        return "?"
+                    }()
                 ]
             )
             let docTitle = localPath.deletingPathExtension().lastPathComponent
             Notifications.notify(
                 title: "rmsync: push skipped",
-                body: "\(docTitle) read as empty on disk; the cloud copy is " +
-                      "untouched. This usually means your cloud-storage provider " +
-                      "evicted the local bytes. Open the file to re-download it.",
+                body: "\(docTitle) has been demoted to online-only by \(providerName). " +
+                      "The cloud copy is untouched. Open the file in Finder to re-download it.",
+                subtitle: localPath.deletingLastPathComponent().path
+            )
+            return
+        }
+
+        if trimmed.isEmpty, previouslyNonEmpty, let stored {
+            // Fallback path: stat didn't give a clear dataless signal,
+            // but the read came back empty against a doc we know used
+            // to have content. Rare but worth catching.
+            Logger.shared.warn(
+                "push refused: local reads empty but previously synced non-empty (possible provider eviction, stat check inconclusive)",
+                meta: [
+                    "doc_id": stored.docID,
+                    "path": localPath.path,
+                    "bytes_on_disk": "\(text.utf8.count)",
+                    "prev_hash": stored.lastSyncedMDHash ?? ""
+                ]
+            )
+            let docTitle = localPath.deletingPathExtension().lastPathComponent
+            Notifications.notify(
+                title: "rmsync: push skipped",
+                body: "\(docTitle) read as empty but was previously non-empty. " +
+                      "The cloud copy is untouched. Open the file to verify; if this " +
+                      "persists, see the README's 'Cloud-storage sync folders' section.",
                 subtitle: localPath.deletingLastPathComponent().path
             )
             return

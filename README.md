@@ -78,6 +78,52 @@ reference, troubleshooting, and rough edges to know about.
 
 ---
 
+## ⚠️ If your sync folder is inside Dropbox / iCloud / OneDrive / Google Drive
+
+Read this before you set `sync_dir` to a cloud-storage folder. This
+has bitten real users (including ours) with real data loss.
+
+macOS File Provider (the kernel shim that Dropbox, iCloud Drive,
+OneDrive, Google Drive, and Box all use on modern macOS) can demote
+a local file to an **online-only placeholder** when disk is tight.
+The filesystem then shows the file at its original logical size but
+with zero physical blocks allocated. Reads return empty bytes
+without surfacing an error. If rmsync pushed that empty read to the
+reMarkable cloud, your doc would be wiped on every device.
+
+**Two independent defenses ship in rmsync** (v0.2.7+):
+
+1. **Push-side guard** (`SyncWorker.doPush`). `FileProvider.status(of:)`
+   uses `stat()` to detect the dataless signature — `st_size > 0
+   && st_blocks == 0` — which is unambiguous on APFS regardless of
+   which provider is responsible. If it's dataless and we've
+   previously synced non-empty content, the push is refused, a
+   banner fires, and the cloud copy is untouched. The push
+   automatically resumes once the provider re-materializes the file.
+
+2. **`rmsync doctor` warning.** Path-substring match against known
+   File Provider roots. If your `sync_dir` is inside one, doctor
+   emits a warn-level line telling you to tick the provider's
+   "Always keep on this device" equivalent.
+
+**The provider-level offline setting is not sufficient on its own.**
+Dropbox in particular is known to ignore "Always keep on this device"
+under disk pressure or across app restarts. The software guards are
+there because this is a *product* limitation of the cloud-storage
+provider, not something we can fully prevent from our side.
+
+**If you want zero risk**: use a non-cloud sync directory. The
+default (`~/rmsync-writing`) is local-only and never triggers any
+of this. `rmsync relocate ~/rmsync-writing` moves everything there
+in place, no data loss.
+
+**If you want cloud backup of your notes anyway**: keep rmsync's
+`sync_dir` local, and point a separate backup tool (Time Machine,
+Arq, rclone) at that local dir. That way your notes are backed up
+without being subject to File Provider eviction.
+
+---
+
 ## What it does (and doesn't)
 
 **Does:**
