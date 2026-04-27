@@ -52,41 +52,85 @@ its contents.
 ### CI live-smoke setup (one-time)
 
 The CI live-smoke job in `.github/workflows/ci.yml` runs the same
-suite on every push to main, against a dedicated test account whose
-auth token is stored as a repo secret. To provision:
+suite on every push to main, against a reMarkable account whose
+auth token is stored as a repo secret.
 
-1. Create a separate reMarkable account for the test fixture. Free
-   tier is enough; the daemon doesn't need Connect.
+**Decision: which account?**
 
-2. Authenticate `rmapi` against that account on your dev machine,
-   in a place that won't disturb your personal install:
-   ```sh
-   RMAPI_HOME=/tmp/rmapi-test rmapi
-   # paste the 8-char code from
-   # https://my.remarkable.com/device/desktop/connect
-   ```
-   The auth token now lives at `/tmp/rmapi-test/rmapi.conf`.
+Two options. Either is defensible for a personal-use repo:
 
-3. Base64-encode the config:
-   ```sh
-   base64 -i /tmp/rmapi-test/rmapi.conf | pbcopy
-   ```
+| | Separate test account | Your personal account |
+|---|---|---|
+| Setup | Two accounts to manage | Just encode existing conf |
+| Risk if secret leaks | Zero — recreate the account | Token could read/write your real notes |
+| Test isolation | Total | Tests use `/rmsync-test`, separate from `/Writing/` |
 
-4. Add as a repo secret. From the rmsync repo on GitHub:
-   `Settings → Secrets and variables → Actions → New repository secret`
-   - **Name**: `TEST_RMAPI_CONFIG`
-   - **Value**: paste from clipboard
+If you go with a separate test account: free tier is fine; create
+it at https://my.remarkable.com.
 
-5. Verify on the next push: the `live-smoke` job should now run and
-   pass. If the secret is missing or wrong, the job either skips
-   silently (missing) or fails on the `rmapi account` verification
-   (wrong).
+**Capturing the rmapi config**
+
+The complication: `rmapi` reads `~/.config/rmapi/rmapi.conf` directly
+and won't write a new one if you already have one there. So you have
+to move your live config out of the way, auth fresh, then restore.
+
+If using a **separate test account**:
+
+```sh
+# 1. Save your personal auth out of the way
+mv ~/.config/rmapi ~/.config/rmapi.personal
+
+# 2. Auth fresh — this paths to ~/.config/rmapi/rmapi.conf
+rmapi
+# paste 8-char code from https://my.remarkable.com/device/desktop/connect
+
+# 3. Encode and copy to clipboard
+base64 -i ~/.config/rmapi/rmapi.conf | pbcopy
+
+# 4. Tuck the test config aside, restore your real install
+mv ~/.config/rmapi      ~/.config/rmapi.test
+mv ~/.config/rmapi.personal ~/.config/rmapi
+
+# 5. Sanity check
+rmapi account   # should print YOUR email
+```
+
+If using **your own account** (simpler):
+
+```sh
+# Just encode the existing config
+base64 -i ~/.config/rmapi/rmapi.conf | pbcopy
+```
+
+**Adding the secret**
+
+From the rmsync repo on GitHub:
+
+`Settings → Secrets and variables → Actions → New repository secret`
+
+- **Name**: `TEST_RMAPI_CONFIG`
+- **Value**: paste from clipboard
+
+**Verifying**
+
+On the next push to main, the `live-smoke` job runs. Look for:
+
+- Job skipped with notice "TEST_RMAPI_CONFIG not configured" → secret
+  isn't seeing your value, double-check you saved it.
+- Job fails at the `rmapi account` step → token is invalid, capture
+  again.
+- Job passes → live cloud smoke is now active.
 
 ### Rotating the test token
 
 Tokens issued by my.remarkable.com don't have a published TTL but
-do invalidate eventually. If the live-smoke job starts failing on
-auth, repeat steps 2–4.
+do invalidate eventually (and definitely when the device is
+"disconnected" via the web UI). If the live-smoke job starts failing
+on auth, recapture and re-add the secret. With `gh`:
+
+```sh
+base64 -i ~/.config/rmapi/rmapi.conf | gh secret set TEST_RMAPI_CONFIG --repo madhavsuresh/rmsync
+```
 
 ---
 
