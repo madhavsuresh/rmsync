@@ -57,6 +57,17 @@ actor Cloud {
         }
     }
 
+    /// Calls ``rmapi account`` and returns the cloud account email.
+    /// Auth check: succeeds iff rmapi has a valid stored token. Used by
+    /// ``rmsync doctor`` instead of ``find("/")`` because ``account``
+    /// runs as a normal subcommand (proper exit code, no interactive
+    /// shell), so it can't false-positive on the throttle-detection
+    /// regex applied to listing output.
+    func account() async throws -> String {
+        let out = try await run(args: ["account"])
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - listing
 
     func ls(_ remotePath: String) async throws -> [(kind: String, name: String)] {
@@ -282,12 +293,38 @@ actor Cloud {
     }
 
     static func isThrottled(_ s: String) -> Bool {
-        // Same story — per-call Regex construction keeps us Sendable-clean.
+        // Patterns are deliberately conservative: false positives surface
+        // as "rmapi throttled" errors that block the user even though
+        // nothing's wrong, which is much worse than missing a real
+        // throttle (the daemon retries either way, and the next call
+        // will catch a sustained throttle from a different signal).
+        //
+        // Why we don't match bare \b429\b / \b503\b anymore: those word
+        // boundaries fire on UUID segments (``…-429-…``) and on doc
+        // names containing those numbers, producing false positives in
+        // shell-mode output where ``rmapi find /`` lists user content.
+        // Reported by an external tester 2026-04-27.
+        //
+        // Per-call Regex construction keeps the function Sendable-clean.
         let patterns: [Regex<Substring>] = [
-            /\b429\b/,
-            /\b503\b/,
-            /(?i)too many requests/,
-            /(?i)rate.{0,5}limit/,
+            // HTTP status codes only when they appear in HTTP-response
+            // context — the literal "HTTP" prefix or "status" label is
+            // what makes these patterns specific to error output. The
+            // optional ``/<version>`` group accepts ``HTTP 429``,
+            // ``HTTP/1.1 429``, and ``HTTP/2 429`` alike. The
+            // ``#/.../#`` extended literal is required because the
+            // pattern contains a literal ``/``.
+            #/(?i)\bHTTP(?:\/\d(?:\.\d)?)?\s+(?:429|503)\b/#,
+            /(?i)\bstatus[ :]+(?:429|503)\b/,
+            // The literal HTTP reason phrase. Rare in user content.
+            /(?i)\btoo many requests\b/,
+            // "rate limit" / "rate-limit" / "rate-limited" / "rate
+            // limiting", but NOT "rate" or "limit" alone or "rate of
+            // X has limits Y" — the previous /(?i)rate.{0,5}limit/
+            // matched the latter, breaking on plain English doc text.
+            /(?i)\brate[\- ]limit(?:ed|ing)?\b/,
+            // The literal word "throttle" / "throttled" / "throttling".
+            /(?i)\bthrottl(?:ed|ing)?\b/,
         ]
         for r in patterns {
             if s.contains(r) { return true }

@@ -91,15 +91,23 @@ struct DoctorRun {
     }
 
     private static func rmapiAuthed() async -> CheckResult {
+        // We probe via ``rmapi account`` rather than ``rmapi find /``.
+        // ``find`` runs in interactive-shell mode (exit code is always 0,
+        // so we scan stdout for throttle keywords); names of the user's
+        // own documents have triggered false positives there. ``account``
+        // is a normal subcommand: rc=0 + email on auth, rc!=0 + clear
+        // error otherwise. Reported as a doctor false-positive on
+        // 2026-04-27 — the user's `rmapi find /` worked when invoked
+        // directly, but doctor's wrapper flagged it as throttled.
         let cloud = Cloud()
         do {
-            _ = try await cloud.find("/")
+            _ = try await cloud.account()
             return CheckResult(name: "rmapi authenticated", status: .ok, message: "")
         } catch {
             return CheckResult(
                 name: "rmapi authenticated",
                 status: .fail,
-                message: "`rmapi find /` failed: \(error). Run `rmapi` once to authenticate."
+                message: "`rmapi account` failed: \(error). Run `rmapi` once to authenticate."
             )
         }
     }
