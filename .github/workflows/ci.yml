@@ -138,16 +138,26 @@ jobs:
         env:
           TEST_RMAPI_CONFIG: ${{ secrets.TEST_RMAPI_CONFIG }}
         run: |
-          # The secret is the base64-encoded contents of a real
-          # ~/.config/rmapi/rmapi.conf, generated locally after auth.
-          # The config holds an auth token bound to a dedicated
-          # test reMarkable account — never your personal account.
+          # The secret is the base64-encoded contents of an authed
+          # ~/.config/rmapi/rmapi.conf. For a personal-use repo this
+          # may be your personal account's config — see
+          # docs/TESTING.md for the trade-off discussion. The verify
+          # step below routes ``rmapi account``'s output through grep
+          # rather than letting it print to the workflow log so the
+          # account email isn't surfaced publicly.
           mkdir -p "$HOME/.config/rmapi"
           printf '%s' "$TEST_RMAPI_CONFIG" | base64 -D > "$HOME/.config/rmapi/rmapi.conf"
           chmod 0600 "$HOME/.config/rmapi/rmapi.conf"
-          # Verify the token works before burning a build slot.
-          rmapi account
-          echo "✓ rmapi authenticated"
+          # Verify auth without printing the email. ``rmapi account``
+          # prints something like ``Logged in as: foo@bar.com``; we
+          # match the prefix and discard the value. Exit code is 0 iff
+          # the rest of the workflow can use rmapi.
+          if rmapi account 2>&1 | grep -q '^Logged in as'; then
+            echo "✓ rmapi authenticated"
+          else
+            echo "✗ rmapi auth failed; secret is invalid or expired"
+            exit 1
+          fi
 
       - name: Live cloud smoke test
         if: steps.check.outputs.has_secret == 'true'

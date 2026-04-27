@@ -57,59 +57,37 @@ auth token is stored as a repo secret.
 
 **Decision: which account?**
 
-Two options. Either is defensible for a personal-use repo:
+In theory you'd use a "test" reMarkable account separate from your
+personal one, but in practice reMarkable's auth flow only issues
+codes for accounts bound to an activated tablet. You can't make a
+codeless test account without owning a second tablet. The realistic
+choice for most users:
 
-| | Separate test account | Your personal account |
-|---|---|---|
-| Setup | Two accounts to manage | Just encode existing conf |
-| Risk if secret leaks | Zero — recreate the account | Token could read/write your real notes |
-| Test isolation | Total | Tests use `/rmsync-test`, separate from `/Writing/` |
+**Use your personal account.** The risk profile for a personal repo:
 
-If you go with a separate test account: free tier is fine; create
-it at https://my.remarkable.com.
+- The secret is encrypted at rest in GitHub Actions and only decoded
+  inside ephemeral runners.
+- The workflow reads the conf, runs auth verification (without
+  echoing the email — see workflow comments), and runs the live
+  smoke tests against `/rmsync-test/` only.
+- If the secret somehow did leak, the consequence is rmapi-level
+  access to your reMarkable cloud — same blast radius as if your
+  laptop were stolen with rmapi already authed. Rotate by
+  disconnecting the desktop client at
+  https://my.remarkable.com/list/desktop and re-authing.
 
-**Capturing the rmapi config**
+Tests intentionally only touch `/rmsync-test/` (well-isolated from
+your real `/Writing/` tree) and clean up after themselves.
 
-The complication: `rmapi` reads `~/.config/rmapi/rmapi.conf` directly
-and won't write a new one if you already have one there. So you have
-to move your live config out of the way, auth fresh, then restore.
-
-If using a **separate test account**:
-
-```sh
-# 1. Save your personal auth out of the way
-mv ~/.config/rmapi ~/.config/rmapi.personal
-
-# 2. Auth fresh — this paths to ~/.config/rmapi/rmapi.conf
-rmapi
-# paste 8-char code from https://my.remarkable.com/device/desktop/connect
-
-# 3. Encode and copy to clipboard
-base64 -i ~/.config/rmapi/rmapi.conf | pbcopy
-
-# 4. Tuck the test config aside, restore your real install
-mv ~/.config/rmapi      ~/.config/rmapi.test
-mv ~/.config/rmapi.personal ~/.config/rmapi
-
-# 5. Sanity check
-rmapi account   # should print YOUR email
-```
-
-If using **your own account** (simpler):
+**The one-line setup:**
 
 ```sh
-# Just encode the existing config
-base64 -i ~/.config/rmapi/rmapi.conf | pbcopy
+base64 -i ~/.config/rmapi/rmapi.conf \
+  | gh secret set TEST_RMAPI_CONFIG --repo madhavsuresh/rmsync
 ```
 
-**Adding the secret**
-
-From the rmsync repo on GitHub:
-
-`Settings → Secrets and variables → Actions → New repository secret`
-
-- **Name**: `TEST_RMAPI_CONFIG`
-- **Value**: paste from clipboard
+That's it. Your existing already-authed `rmapi.conf` becomes the
+CI test fixture.
 
 **Verifying**
 
@@ -117,19 +95,19 @@ On the next push to main, the `live-smoke` job runs. Look for:
 
 - Job skipped with notice "TEST_RMAPI_CONFIG not configured" → secret
   isn't seeing your value, double-check you saved it.
-- Job fails at the `rmapi account` step → token is invalid, capture
-  again.
+- Job fails at the auth verification step → token is invalid; rotate.
 - Job passes → live cloud smoke is now active.
 
-### Rotating the test token
+### Rotating the token
 
-Tokens issued by my.remarkable.com don't have a published TTL but
-do invalidate eventually (and definitely when the device is
-"disconnected" via the web UI). If the live-smoke job starts failing
-on auth, recapture and re-add the secret. With `gh`:
+If the token invalidates (you disconnect the desktop client, or
+reMarkable issues a security-driven invalidation), reauth locally
+and refresh the secret:
 
 ```sh
-base64 -i ~/.config/rmapi/rmapi.conf | gh secret set TEST_RMAPI_CONFIG --repo madhavsuresh/rmsync
+rmapi   # reauth interactively
+base64 -i ~/.config/rmapi/rmapi.conf \
+  | gh secret set TEST_RMAPI_CONFIG --repo madhavsuresh/rmsync
 ```
 
 ---
