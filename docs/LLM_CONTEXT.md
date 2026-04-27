@@ -75,25 +75,54 @@ The sync dir is configurable via `rmsync relocate`; check
 
 ## Install
 
-One command:
+Two supported paths.
+
+### Homebrew (recommended for most users)
 
 ```sh
-git clone <repo> ~/code/rm && cd ~/code/rm && ./install.sh
+brew install madhavsuresh/rmsync/rmsync
+rmapi                            # interactive auth: paste 8-char code
+rmsync-install-agents            # seeds config + boots daemon + menu bar
+rmsync doctor                    # all ✓
+```
+
+The brew formula declares `io41/tap/rmapi` as a dependency, so rmapi
+is installed transitively. The post-install helper
+`rmsync-install-agents` writes a default `~/.config/rmsync/config.toml`,
+mkdir's `~/rmsync-writing`, renders both launchd plists with
+brew-relative paths, and bootstraps both agents.
+
+Updates: `brew upgrade rmsync`. The formula's `post_install` kicks
+both running agents so they reload the new binary without a separate
+restart command.
+
+### From source
+
+```sh
+git clone https://github.com/madhavsuresh/rmsync.git ~/code/rmsync
+cd ~/code/rmsync
+./install.sh
 ```
 
 The installer:
 
-1. Verifies Swift 6.3+ is available (Xcode command-line tools).
-2. Offers to install `rmapi` via Homebrew or GitHub release binary.
+1. Verifies Swift 6.0+ is available (Xcode command-line tools).
+2. Offers to install `rmapi` via Homebrew.
 3. Walks the user through `rmapi` cloud authentication — open
    `https://my.remarkable.com/device/desktop/connect`, sign in, paste
    the 8-character code.
 4. Builds `rmsync` + `rmsync-menubar` in release mode.
 5. Installs + loads both launchd plists, sets `~/.local/bin` on PATH.
 
+Re-run `./install.sh` to pick up local code changes. The launchd
+agents are kicked on every run.
+
+### Either way: rmapi auth is required
+
 If `rmapi` isn't authenticated, the daemon runs but every sync
 operation fails. `rmsync doctor`'s "rmapi authenticated" check catches
-this.
+this. The brew install path doesn't run an interactive auth flow —
+the user must invoke `rmapi` themselves and paste the code.
 
 ---
 

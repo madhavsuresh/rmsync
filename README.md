@@ -39,16 +39,18 @@ implementation is archived at `python-legacy.tar.gz`.
 ### Homebrew (recommended)
 
 ```sh
-brew install <you>/rmsync/rmsync
+brew install madhavsuresh/rmsync/rmsync
 rmapi                           # paste code from remarkable.com/device/desktop/connect
-rmsync-install-agents          # boots daemon + menu bar
+rmsync-install-agents           # seeds default config + boots daemon + menu bar
 rmsync doctor                   # should be all ✓
 ```
+
+`brew upgrade rmsync` from then on for new versions.
 
 ### From source
 
 ```sh
-git clone https://github.com/<you>/rmsync.git
+git clone https://github.com/madhavsuresh/rmsync.git
 cd rmsync
 ./install.sh
 ```
@@ -154,7 +156,7 @@ without being subject to File Provider eviction.
 
 - **macOS 13+** on Apple Silicon or Intel.
 - **Xcode command-line tools** (`xcode-select --install`). Provides
-  Swift 6.3+. If the installer errors "swift not found," run that
+  Swift 6.0+. If the installer errors "swift not found," run that
   command first.
 - **rmapi** — the reMarkable cloud CLI. The installer offers to fetch
   this automatically (Homebrew preferred, GitHub release binary as
