@@ -18,7 +18,37 @@ import Foundation
 ///   8. Park until SIGTERM.
 enum DaemonScaffold {
     static func run() async throws {
-        let cfg = try Config.load()
+        // First thing: announce we got off the ground. If the user's
+        // log file is empty later, that means we crashed before this
+        // line — almost always a config-load or filesystem permission
+        // problem, NOT a sync issue. Without this line, an empty log
+        // is ambiguous between "daemon never started" and "daemon
+        // started but had nothing to say yet"; with it, the question
+        // collapses to "is this line present?".
+        Logger.shared.info("daemon starting", meta: [
+            "pid": "\(getpid())",
+            "version": Version.current,
+            "executable": Bundle.main.executablePath ?? "(unknown)",
+        ])
+
+        let cfg: Config
+        do {
+            cfg = try Config.load()
+        } catch {
+            // Surface the config error explicitly. Without this, the
+            // daemon dies and the user sees a launchd auto-restart
+            // loop in stderr.log without a clear cause.
+            Logger.shared.error("config load failed; daemon exiting", meta: [
+                "error": "\(error)",
+                "expected_path": Paths.configPath.path,
+            ])
+            throw error
+        }
+        Logger.shared.info("config loaded", meta: [
+            "sync_dir": cfg.syncDir.path,
+            "remote_folder": cfg.remoteFolder,
+        ])
+
         try FileManager.default.createDirectory(
             at: cfg.syncDir, withIntermediateDirectories: true
         )

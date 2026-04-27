@@ -169,11 +169,18 @@ struct SyncNow: AsyncParsableCommand {
 struct Logs: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Tail the daemon's log.")
     @Flag(name: .shortAndLong) var follow: Bool = false
+    @Flag(name: .long, help: "Print log paths, sizes, last-modified, and a tail of each log file. Useful when 'logs is empty' is the actual user-facing complaint and you need to figure out whether the daemon ran at all.")
+    var diagnose: Bool = false
 
     func run() throws {
+        if diagnose {
+            try runDiagnose()
+            return
+        }
         let path = Paths.logDir.appendingPathComponent("stdout.log")
         guard FileManager.default.fileExists(atPath: path.path) else {
             print("no log file at \(path.path)")
+            print("(run `rmsync logs --diagnose` if you expect this file to exist)")
             throw ExitCode(1)
         }
         if !follow {
@@ -187,10 +194,96 @@ struct Logs: ParsableCommand {
         try task.run()
         task.waitUntilExit()
     }
+
+    /// Diagnostic mode: print everything we know about logging state.
+    /// Designed for users reporting "the logs are blank" — the output
+    /// distinguishes "daemon never wrote a log" from "daemon wrote a
+    /// log but the menu bar's Open Logs button is opening the wrong
+    /// file" from "daemon is running but the IPC bus is wedged".
+    private func runDiagnose() throws {
+        print("=== rmsync logs --diagnose ===")
+        print("")
+
+        // 1. Log paths and sizes.
+        print("Log files:")
+        let logFiles = ["stdout.log", "stderr.log", "menubar.log"]
+        let fm = FileManager.default
+        for name in logFiles {
+            let url = Paths.logDir.appendingPathComponent(name)
+            if fm.fileExists(atPath: url.path) {
+                let attrs = (try? fm.attributesOfItem(atPath: url.path)) ?? [:]
+                let size = (attrs[.size] as? Int) ?? 0
+                let mod = (attrs[.modificationDate] as? Date)?.description ?? "?"
+                print("  \(url.path)")
+                print("    size: \(size) bytes, modified: \(mod)")
+            } else {
+                print("  \(url.path)  (DOES NOT EXIST)")
+            }
+        }
+        print("")
+
+        // 2. Daemon process state via launchctl.
+        print("Daemon launchd state:")
+        let uid = String(getuid())
+        let domain = "gui/\(uid)/com.user.rmsync"
+        let lc = Process()
+        lc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        lc.arguments = ["print", domain]
+        let pipe = Pipe()
+        lc.standardOutput = pipe
+        lc.standardError = pipe
+        try? lc.run()
+        lc.waitUntilExit()
+        let lcOut = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if lc.terminationStatus != 0 {
+            print("  ✗ launchctl print \(domain) failed — agent is NOT bootstrapped")
+            print("    fix: rmsync-install-agents")
+        } else {
+            // Pull just the interesting fields rather than dumping everything.
+            for needle in ["state =", "last exit reason", "last exit code", "program ="] {
+                if let line = lcOut.split(separator: "\n").first(where: { $0.contains(needle) }) {
+                    print("  \(line.trimmingCharacters(in: .whitespaces))")
+                }
+            }
+        }
+        print("")
+
+        // 3. Tail of each log file.
+        print("Tail of each log (last 20 lines):")
+        for name in logFiles {
+            let url = Paths.logDir.appendingPathComponent(name)
+            guard fm.fileExists(atPath: url.path) else { continue }
+            print("--- \(name) ---")
+            let tail = Process()
+            tail.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
+            tail.arguments = ["-n", "20", url.path]
+            try? tail.run()
+            tail.waitUntilExit()
+            print("")
+        }
+
+        // 4. Quick interpretation.
+        let stdoutEmpty = (try? Data(contentsOf: Paths.logDir.appendingPathComponent("stdout.log")).isEmpty) ?? true
+        let stderrEmpty = (try? Data(contentsOf: Paths.logDir.appendingPathComponent("stderr.log")).isEmpty) ?? true
+        if stdoutEmpty && stderrEmpty {
+            print("Interpretation: BOTH logs empty.")
+            print("  This means the daemon never wrote anything — most likely it never ran")
+            print("  (launchd plist missing, binary path wrong, or pre-execution crash).")
+            print("  Fix: rmsync-install-agents, then 'rmsync logs --diagnose' again.")
+        } else if stdoutEmpty && !stderrEmpty {
+            print("Interpretation: stdout empty, stderr has content.")
+            print("  The daemon crashed before its first Logger.shared.info call.")
+            print("  Read stderr.log above for the crash trace.")
+        }
+    }
 }
 
 struct Conflicts: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "List unresolved conflicts.")
+
+    @Flag(name: .long, help: "Clear conflict_state on every doc whose .conflict file no longer exists. Use this when the menubar shows a conflict count but you've already deleted the .conflict files. The daemon's periodic refresh does the same self-heal every 5s; this lets you do it now and see what changed.")
+    var resolveStale: Bool = false
+
     func run() async throws {
         guard FileManager.default.fileExists(atPath: Paths.stateDBPath.path) else {
             print("no state DB")
@@ -200,13 +293,40 @@ struct Conflicts: AsyncParsableCommand {
         let docs = try await state.allDocuments()
         let conflicts = docs.filter { $0.conflictState == "unresolved" }
         if conflicts.isEmpty { print("no unresolved conflicts"); return }
+
+        if resolveStale {
+            // Walk every doc the DB thinks has an unresolved conflict;
+            // if the .conflict marker file is gone from disk, clear it.
+            // Identical logic to DaemonScaffold.refreshBus's auto-heal,
+            // exposed here as an explicit user-callable command for
+            // when the user wants immediate feedback (vs waiting for
+            // the next 5s tick) or when the daemon isn't running.
+            var cleared = 0
+            for d in conflicts {
+                let md = URL(fileURLWithPath: d.localPath)
+                let cp = md.appendingPathExtension("conflict")
+                if !FileManager.default.fileExists(atPath: cp.path) {
+                    try await state.setConflict(docID: d.docID, state: nil)
+                    print("cleared \(d.docID)  (\(md.lastPathComponent))")
+                    cleared += 1
+                }
+            }
+            if cleared == 0 {
+                print("no stale conflict states — every doc with conflict_state=unresolved")
+                print("still has its .conflict file on disk.")
+            } else {
+                print("\(cleared) cleared. Restart rmsync or wait 5s for the menubar to refresh.")
+            }
+            return
+        }
+
         for d in conflicts {
             let md = URL(fileURLWithPath: d.localPath)
             let cp = md.appendingPathExtension("conflict")
             print(d.docID)
             print("  live:     \(md.path)")
             let present = FileManager.default.fileExists(atPath: cp.path)
-            print("  conflict: \(cp.path) \(present ? "(present)" : "(MISSING)")")
+            print("  conflict: \(cp.path) \(present ? "(present)" : "(MISSING — run with --resolve-stale to clear)")")
         }
     }
 }

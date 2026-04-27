@@ -93,3 +93,73 @@ jobs:
         run: |
           ./.build/apple/Products/Release/rmsync --help | grep -E '^SUBCOMMANDS:'
           ./.build/apple/Products/Release/rmsync --help | grep -E '(status|doctor|relocate)'
+
+  # Live-cloud smoke test against a dedicated rmapi test account.
+  #
+  # Why this exists: the offline ``test`` job above can't catch
+  # "works on my machine, breaks on a fresh install" because it has
+  # no real cloud roundtrip. Bugs like the v0.2.10 missing-config
+  # issue and v0.2.11 throttle false-positive both surfaced first
+  # on a tester's fresh install — exactly the kind of state CI
+  # didn't have.
+  #
+  # Setup (one-time): see docs/TESTING.md for how to provision the
+  # TEST_RMAPI_CONFIG secret. Without it, this job no-ops cleanly.
+  #
+  # Skipped on pull_request from forks since secrets don't leak to
+  # forked-PR runs anyway, but we make the gate explicit so the
+  # behavior is obvious from this file.
+  live-smoke:
+    name: Live cloud smoke
+    needs: test
+    runs-on: macos-15
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for rmapi test config
+        id: check
+        env:
+          TOKEN: ${{ secrets.TEST_RMAPI_CONFIG }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "has_secret=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TEST_RMAPI_CONFIG not configured; skipping live cloud smoke."
+          else
+            echo "has_secret=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install rmapi
+        if: steps.check.outputs.has_secret == 'true'
+        run: brew install io41/tap/rmapi
+
+      - name: Decode rmapi config
+        if: steps.check.outputs.has_secret == 'true'
+        env:
+          TEST_RMAPI_CONFIG: ${{ secrets.TEST_RMAPI_CONFIG }}
+        run: |
+          # The secret is the base64-encoded contents of a real
+          # ~/.config/rmapi/rmapi.conf, generated locally after auth.
+          # The config holds an auth token bound to a dedicated
+          # test reMarkable account — never your personal account.
+          mkdir -p "$HOME/.config/rmapi"
+          printf '%s' "$TEST_RMAPI_CONFIG" | base64 -D > "$HOME/.config/rmapi/rmapi.conf"
+          chmod 0600 "$HOME/.config/rmapi/rmapi.conf"
+          # Verify the token works before burning a build slot.
+          rmapi account
+          echo "✓ rmapi authenticated"
+
+      - name: Live cloud smoke test
+        if: steps.check.outputs.has_secret == 'true'
+        working-directory: swift
+        timeout-minutes: 15
+        env:
+          RMSYNC_LIVE: "1"
+        run: |
+          # PushSmokeTests + CloudSmokeTests gate on RMSYNC_LIVE=1.
+          # They write probe docs into ``/rmsync-test`` on the test
+          # account, verify roundtrip, then clean up. Running them
+          # against a real cloud catches any regression in the push
+          # path (the kind that wouldn't show up offline because
+          # we'd need to actually shell to rmapi for it to fail).
+          swift test --no-parallel --filter '(?i)(cloud|push)' 2>&1 | cat
