@@ -158,11 +158,14 @@ jobs:
              "$HOME/.config/rmapi/rmapi.conf"
           chmod 0600 "$HOME/.config/rmapi/rmapi.conf" \
                      "$HOME/Library/Application Support/rmapi/rmapi.conf"
-          # Verify auth without printing the email. ``rmapi account``
-          # prints something like ``Logged in as: foo@bar.com``; we
-          # match the prefix and discard the value. Exit code is 0 iff
-          # the rest of the workflow can use rmapi.
-          if rmapi account 2>&1 | grep -q '^Logged in as'; then
+          # Verify auth without printing the email. rmapi v0.0.29's
+          # ``account`` prints ``User: <email>, SyncVersion: 1.5`` to
+          # stdout on success and a non-zero exit on failure. We
+          # discard the entire output line and rely on rmapi's exit
+          # code (which is reliable: 0 = authed, non-zero = not). The
+          # earlier guess of ``Logged in as`` was wrong and broke
+          # this verification on a real run.
+          if rmapi account >/dev/null 2>&1; then
             echo "✓ rmapi authenticated"
           else
             echo "✗ rmapi auth failed; secret is invalid or expired"
