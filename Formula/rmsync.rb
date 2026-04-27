@@ -190,7 +190,42 @@ class Rmsync < Formula
       mkdir -p "$LA" \\
                "$HOME/Library/Logs/rmsync" \\
                "$HOME/Library/Application Support/rmsync" \\
-               "$HOME/.config/rmsync"
+               "$HOME/.config/rmsync" \\
+               "$HOME/rmsync-writing"
+
+      # Seed a default config if missing. Mirrors install.sh's block so
+      # source-install and brew-install converge on the same defaults.
+      if [ ! -f "$HOME/.config/rmsync/config.toml" ]; then
+        echo "Writing default config to $HOME/.config/rmsync/config.toml"
+        cat > "$HOME/.config/rmsync/config.toml" <<TOML
+      # rmsync configuration. Restart the daemon after edits:
+      #   rmsync restart
+
+      sync_dir      = "$HOME/rmsync-writing"
+      remote_folder = "Writing"
+
+      worker_pool_size               = 3
+      poll_interval_seconds          = 30
+      poll_active_interval_seconds   = 15
+      poll_idle_interval_seconds     = 120
+      debounce_seconds               = 2.0
+      echo_fence_seconds             = 5.0
+      retry_max_attempts             = 3
+
+      # native_plain: plain text only (recommended)
+      # native_formatted: experimental, not fully implemented
+      # pdf: read-only on tablet, not fully implemented
+      push_strategy = "native_plain"
+
+      backup_snapshots_to_keep = 30
+      dry_run                  = false
+
+      [log]
+      level = "INFO"   # DEBUG | INFO | WARNING | ERROR
+      TOML
+        echo "  Edit it if you want sync_dir somewhere other than ~/rmsync-writing"
+        echo "  (or run 'rmsync relocate <new-path>' after the daemon comes up)."
+      fi
 
       render() {
         # $1 template, $2 destination, $3 binary path
