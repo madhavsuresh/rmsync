@@ -82,9 +82,15 @@ your real `/Writing/` tree) and clean up after themselves.
 **The one-line setup:**
 
 ```sh
-base64 -i ~/.config/rmapi/rmapi.conf \
+base64 -i "$HOME/Library/Application Support/rmapi/rmapi.conf" \
   | gh secret set TEST_RMAPI_CONFIG --repo madhavsuresh/rmsync
 ```
+
+(Path note: rmapi on macOS stores its config at
+`~/Library/Application Support/rmapi/rmapi.conf` — the Go-native
+`os.UserConfigDir()` location. On Linux it lives at
+`~/.config/rmapi/rmapi.conf`. The CI workflow seeds both locations
+on the runner so it works either way.)
 
 That's it. Your existing already-authed `rmapi.conf` becomes the
 CI test fixture.
@@ -106,7 +112,7 @@ and refresh the secret:
 
 ```sh
 rmapi   # reauth interactively
-base64 -i ~/.config/rmapi/rmapi.conf \
+base64 -i "$HOME/Library/Application Support/rmapi/rmapi.conf" \
   | gh secret set TEST_RMAPI_CONFIG --repo madhavsuresh/rmsync
 ```
 

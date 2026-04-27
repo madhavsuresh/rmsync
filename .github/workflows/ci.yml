@@ -139,15 +139,25 @@ jobs:
           TEST_RMAPI_CONFIG: ${{ secrets.TEST_RMAPI_CONFIG }}
         run: |
           # The secret is the base64-encoded contents of an authed
-          # ~/.config/rmapi/rmapi.conf. For a personal-use repo this
-          # may be your personal account's config — see
-          # docs/TESTING.md for the trade-off discussion. The verify
-          # step below routes ``rmapi account``'s output through grep
-          # rather than letting it print to the workflow log so the
-          # account email isn't surfaced publicly.
-          mkdir -p "$HOME/.config/rmapi"
-          printf '%s' "$TEST_RMAPI_CONFIG" | base64 -D > "$HOME/.config/rmapi/rmapi.conf"
-          chmod 0600 "$HOME/.config/rmapi/rmapi.conf"
+          # rmapi.conf. For a personal-use repo this is the dev's
+          # personal account; see docs/TESTING.md for the risk
+          # discussion.
+          #
+          # Path note: rmapi on macOS uses Go's os.UserConfigDir(),
+          # which resolves to ``~/Library/Application Support/rmapi/``
+          # on macOS — NOT ``~/.config/rmapi/`` like Linux. We write
+          # to BOTH paths so the workflow works on either runner OS
+          # without forking. Documented after a v0.2.12 verification
+          # run failed because the workflow only wrote to the Linux
+          # path and the macOS rmapi binary couldn't find it.
+          mkdir -p "$HOME/.config/rmapi" \
+                   "$HOME/Library/Application Support/rmapi"
+          printf '%s' "$TEST_RMAPI_CONFIG" | base64 -D \
+            > "$HOME/Library/Application Support/rmapi/rmapi.conf"
+          cp "$HOME/Library/Application Support/rmapi/rmapi.conf" \
+             "$HOME/.config/rmapi/rmapi.conf"
+          chmod 0600 "$HOME/.config/rmapi/rmapi.conf" \
+                     "$HOME/Library/Application Support/rmapi/rmapi.conf"
           # Verify auth without printing the email. ``rmapi account``
           # prints something like ``Logged in as: foo@bar.com``; we
           # match the prefix and discard the value. Exit code is 0 iff
