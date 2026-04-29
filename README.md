@@ -107,6 +107,51 @@ reference, troubleshooting, and rough edges to know about.
 
 ---
 
+## Optional features (off by default)
+
+Both are turned on by adding a small block to `config.toml` and
+restarting the daemon. Existing installs are unaffected until you
+opt in.
+
+### 📥 Inbox folder — drag PDFs / EPUBs to send to the tablet
+
+```toml
+[inbox]
+local_dir         = "~/rmsync-writing/_inbox"   # any path
+remote_folder     = "Inbox"
+delete_after_push = true                         # set false to keep a copy
+```
+
+Drop a `.pdf` or `.epub` into `local_dir`. Within ~5 seconds the
+daemon pushes it to `Inbox/` on your reMarkable cloud and removes
+the local file. No email, no rmapi-by-hand. Watcher reuses the
+same FSEvents (macOS) / inotify (Linux) code path as the main
+sync, just with a `.inbox` mode that filters to PDF/EPUB and
+emits a one-way push job.
+
+### 🌐 Web dashboard — browser UI for status / actions
+
+```toml
+[web]
+enabled    = true
+bind_addr  = "127.0.0.1"   # "0.0.0.0" to expose to LAN
+port       = 7878
+# auth_token = ""          # leave empty → daemon generates one
+```
+
+Restart, then open `http://127.0.0.1:7878/?token=...` (the token
+is at `$STATE_DIR/web-token` after first start, or whatever you
+set in config). Live status, recent docs, conflicts list, and
+sync-now / pause / resume buttons. Token-authed; works as a
+menubar replacement for Linux/Docker users, or as a parity
+option for macOS users who prefer the browser.
+
+Full reference for both features in
+[`docs/USAGE.md`](docs/USAGE.md) and
+[`docs/DOCKER.md`](docs/DOCKER.md).
+
+---
+
 ## ⚠️ If your sync folder is inside Dropbox / iCloud / OneDrive / Google Drive
 
 Read this before you set `sync_dir` to a cloud-storage folder. This
@@ -163,9 +208,25 @@ without being subject to File Provider eviction.
   markers, never silently merges.
 - Works from a Dropbox / iCloud / anywhere folder (via `rmsync relocate`).
 - Survives reboots, network drops, rmapi throttling, and daemon crashes
-  (launchd auto-restarts on crash).
+  (launchd auto-restarts on crash; Docker compose restarts the container).
 - Tags pulled files with Finder/Spotlight metadata so you can see where
-  they came from.
+  they came from (macOS only).
+- **Runs on macOS (menubar) or Linux (Docker, headless)** — same daemon
+  binary, same commands, same sync logic. Multi-arch image at
+  [`ghcr.io/madhavsuresh/rmsync`](https://github.com/madhavsuresh/rmsync/pkgs/container/rmsync).
+- **Inbox folder for sending PDFs / EPUBs to the tablet.** Drop a file
+  into a configured directory; daemon pushes it to the cloud and
+  removes the local copy. Closes the "send paper to tablet" loop. Opt-in
+  via `[inbox]` in config.toml.
+- **Optional web dashboard.** Embed an HTTP server in the daemon (off by
+  default) for a browser-based status / sync-now / pause UI. Useful for
+  Linux/Docker users without a menubar; a parity option for macOS users
+  who prefer the browser. Token-authed.
+- **Diagnosable.** `rmsync logs --diagnose` distinguishes "daemon
+  never ran" / "crashed pre-logging" / "running but quiet" in one
+  command. `rmsync conflicts --resolve-stale` clears stuck conflict
+  markers. `scripts/fresh-install-test.sh` wipes-and-reinstalls
+  locally to reproduce fresh-install bugs.
 
 **Doesn't:**
 
@@ -304,7 +365,10 @@ rmsync/
 ├── swift/                       Swift Package Manager project
 │   ├── Package.swift            3 targets: rmsync, rmsync-menubar (macOS), RMScene
 │   ├── Sources/
-│   │   ├── rmsync/              daemon + CLI (~5000 LoC, cross-platform)
+│   │   ├── rmsync/              daemon + CLI (~6000 LoC, cross-platform)
+│   │   │   ├── Watcher/          FSEvents (macOS) + inotify (Linux); shared
+│   │   │   │                       filter handles markdown + inbox modes
+│   │   │   └── Web/              embedded HTTP dashboard (opt-in)
 │   │   ├── rmsync-menubar/      menu bar app (macOS-only)
 │   │   └── RMScene/             vendored v6 CRDT codec (cross-platform)
 │   └── Tests/                   ~110 tests (Swift Testing + XCTest)
