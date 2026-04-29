@@ -37,6 +37,17 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.4.0"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
         .package(url: "https://github.com/dduan/TOMLDecoder.git", from: "0.2.2"),
+        // swift-crypto is the Linux-side fallback for CryptoKit. The
+        // ``rmsync`` target's ``PathUtilities.sha256Hex`` uses
+        // ``CryptoKit.SHA256`` on macOS and ``Crypto.SHA256`` on
+        // Linux (same API surface). We declare the dependency
+        // unconditionally because SPM manifest-time ``#if os(...)``
+        // is awkward to combine with Linux-only target deps; macOS
+        // builds pull the framework but never import ``Crypto`` (the
+        // ``canImport(CryptoKit)`` branch wins first), so the cost
+        // is negligible. Pinned to 3.x — same major as the latest
+        // upstream release at the time of writing.
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
     targets: [
         // Swift port of Rick Lupton's Python ``rmscene``
@@ -60,6 +71,12 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "TOMLDecoder", package: "TOMLDecoder"),
+                // ``Crypto`` is only ``import``ed on Linux (see
+                // PathUtilities.swift's ``canImport(CryptoKit)`` /
+                // ``#else import Crypto`` block); macOS uses the
+                // built-in CryptoKit. Listing it as a dep here is
+                // required for the import to resolve on Linux.
+                .product(name: "Crypto", package: "swift-crypto"),
                 "RMScene",
             ],
             path: "Sources/rmsync",
