@@ -196,6 +196,41 @@ Non-`.pdf`/`.epub` files in the inbox dir are ignored with a one-
 time warning. Multiple drops in quick succession are debounced
 and processed serially.
 
+## Rename / move / delete propagation (opt-in)
+
+Off by default for safety. When enabled, deletes and renames in
+the sync dir or on the tablet propagate to the other side. Local
+files are soft-deleted into `<sync_dir>/.rmsync-trash/<utc-stamp>/`
+first; recovery via `rmsync trash list / restore`. A bulk-delete
+brake refuses operations that would remove more than
+`bulk_delete_threshold` of tracked docs in
+`bulk_delete_window_seconds` — caps the blast radius of a runaway
+event storm or accidental `rm -rf`.
+
+Enable in `data/config/config.toml`:
+
+```toml
+[deletion]
+enable_propagation         = true
+trash_retention_days       = 30      # 0 keeps trash forever
+bulk_delete_threshold      = 0.5     # >50% of tracked → refuse
+bulk_delete_window_seconds = 30
+```
+
+Then `docker compose restart rmsync`. Recovery commands:
+
+```sh
+docker exec rmsync rmsync trash list
+docker exec rmsync rmsync trash restore "old/note.md"
+docker exec rmsync rmsync trash restore --all
+docker exec rmsync rmsync trash prune          # one-shot manual prune
+docker exec rmsync rmsync trash prune --days 7 # one-off override
+```
+
+Trash auto-prunes at daemon startup. Refused deletes show up as
+`error_state = "bulk_delete_refused"` in `rmsync status` and the
+web dashboard.
+
 ## Operational commands
 
 All `rmsync` subcommands work via `docker exec` against the

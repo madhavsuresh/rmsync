@@ -9,6 +9,81 @@ don't have to think about it once it's installed.
 **v0.2 — Swift daemon, zero Python runtime.** The v0.1 Python
 implementation is archived at `python-legacy.tar.gz`.
 
+---
+
+## Quick use
+
+Once installed (see [Quick start](#quick-start) below):
+
+```sh
+# everyday — usually all you ever need
+rmsync status                        # is the daemon healthy? what's queued?
+rmsync doctor                        # full self-check (10 items)
+rmsync sync-now                      # force an immediate cycle
+rmsync logs --tail                   # follow the daemon log
+rmsync conflicts                     # list any unresolved .md.conflict files
+
+# pause / resume — useful before bulk-editing a tree
+rmsync pause
+rmsync resume
+
+# move the sync dir without losing state
+rmsync relocate ~/path/to/new/dir
+```
+
+**Just edit Markdown files under your sync dir** (`~/rmsync-writing`
+by default). Pushes happen ~5s after you save; pulls land within
+15–120s after a tablet edit. The menu bar icon (macOS) or web
+dashboard (`[web] enabled = true`) shows live status.
+
+**v0.2.19 — rename / move / delete propagation (opt-in).** Add
+this block to `~/.config/rmsync/config.toml` and `rmsync restart`:
+
+```toml
+[deletion]
+enable_propagation         = true   # off by default — opt in
+trash_retention_days       = 30     # 0 keeps trash forever
+bulk_delete_threshold      = 0.5    # >50% of tracked → refuse
+bulk_delete_window_seconds = 30
+```
+
+With propagation on, all four directions sync:
+
+- **Local delete → cloud trash.** `rm hello.md` parks the file in
+  `<sync_dir>/.rmsync-trash/<utc-stamp>/` and moves the cloud doc
+  to the reMarkable cloud's trash.
+- **Cloud delete → local trash.** Deleting on the tablet drops the
+  local file into `.rmsync-trash/` on the next poll.
+- **Local rename → cloud rename.** `mv old.md new.md` calls
+  `rmapi mv` to match.
+- **Cloud rename → local rename.** Renaming on the tablet moves
+  the local file to match.
+
+Recovery and inspection:
+
+```sh
+rmsync trash list                    # everything currently parked
+rmsync trash restore "old/note.md"   # put one file back
+rmsync trash restore --all           # bulk restore
+rmsync trash prune                   # drop entries past retention
+```
+
+A bulk-delete brake refuses any operation that would remove more
+than `bulk_delete_threshold` of tracked docs in
+`bulk_delete_window_seconds` — caps the blast radius of an
+accidental `rm -rf`. Refused deletes show up as
+`error_state = "bulk_delete_refused"` in `rmsync status` and the
+web dashboard.
+
+If you'd rather keep the v0.2.18 behavior (local delete logs but
+doesn't propagate), leave the `[deletion]` block out — the
+default is `enable_propagation = false`.
+
+Full guide: [`docs/USAGE.md`](docs/USAGE.md) → "Rename / move /
+delete propagation is opt-in".
+
+---
+
 > ### 🤖 Built with LLM assistance
 >
 > Almost everything in this repo — Swift source, tests, CI workflows,
@@ -222,6 +297,11 @@ without being subject to File Provider eviction.
   default) for a browser-based status / sync-now / pause UI. Useful for
   Linux/Docker users without a menubar; a parity option for macOS users
   who prefer the browser. Token-authed.
+- **Optional rename / move / delete propagation (v0.2.19+).** Opt in
+  via `[deletion] enable_propagation = true` and the daemon mirrors
+  deletes and renames in both directions, with soft-delete into
+  `<sync_dir>/.rmsync-trash/` and a bulk-delete brake. `rmsync
+  trash list / restore` recovers; default 30-day retention auto-prunes.
 - **Diagnosable.** `rmsync logs --diagnose` distinguishes "daemon
   never ran" / "crashed pre-logging" / "running but quiet" in one
   command. `rmsync conflicts --resolve-stale` clears stuck conflict
@@ -235,13 +315,9 @@ without being subject to File Provider eviction.
   can't convert those annotations to Markdown.
 - Image / drawing round-trip.
 - Anything outside `Writing/` on your tablet.
-- Real-time delete / rename propagation **by default** — opt in via
-  `[deletion] enable_propagation = true` (v0.2.19+). When enabled,
-  deletes and renames in the sync dir or on the tablet propagate
-  to the other side, with soft-delete to `.rmsync-trash/` and a
-  bulk-delete brake that caps the blast radius. See `rmsync trash
-  list / restore` and the "Rename / move / delete propagation"
-  section in [`docs/USAGE.md`](docs/USAGE.md).
+- Propagate deletes / renames *by default*. The `[deletion]` block
+  above turns it on; without it, local deletes are logged but don't
+  touch the cloud — same behavior as v0.2.18 and earlier.
 
 ---
 

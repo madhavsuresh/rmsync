@@ -288,6 +288,42 @@ Config keys and defaults (all paths relative to your home):
 | `push_strategy` | `native_plain` | Also: `native_formatted` (stub), `pdf` (stub) |
 | `dry_run` | `false` | Log intent, don't execute |
 | `[log].level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `[deletion].enable_propagation` | `false` | Master switch for rename/delete propagation. v0.2.19+. See "Rough edges". |
+| `[deletion].trash_retention_days` | `30` | Auto-prune cadence (`0` = keep forever). |
+| `[deletion].bulk_delete_threshold` | `0.5` | Refuse if `>N` of tracked docs would be deleted in window. |
+| `[deletion].bulk_delete_window_seconds` | `30` | Rolling window for the bulk-delete brake. |
+
+### …recover a file I deleted by mistake
+
+If `[deletion] enable_propagation = true` is set, every local
+delete (and tablet-side delete) parks the file under
+`<sync_dir>/.rmsync-trash/<utc-stamp>/<rel-path>` before doing
+anything irreversible. To inspect and recover:
+
+```sh
+rmsync trash list                       # everything currently parked
+rmsync trash restore "old/note.md"      # one-file restore
+rmsync trash restore --all              # bulk restore
+```
+
+Restored files reappear at their original location; the daemon's
+watcher sees them on its next tick and re-pushes to the cloud as
+if newly created.
+
+The reMarkable cloud also keeps its own trash for cloud-side
+deletes, recoverable via the cloud UI within reMarkable's
+retention window. So a delete can be undone from either side
+within the relevant window.
+
+To prune the trash on demand:
+
+```sh
+rmsync trash prune                       # honors trash_retention_days
+rmsync trash prune --days 7              # one-off override
+```
+
+The daemon also auto-prunes at startup based on
+`trash_retention_days` (set to 0 to keep forever).
 
 ---
 

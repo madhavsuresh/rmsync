@@ -207,6 +207,9 @@ on Docker (`docker exec -it rmsync rmapi`).
 | `rmsync restart` | launchctl | `kickstart -k`. Use after config edits or rebuilds. | ✗ — `docker compose restart rmsync` |
 | `rmsync relocate <path>` | composite | Move sync dir + rewrite state + update config + restart. | ✗ — edit `/config/config.toml` and `docker compose restart` |
 | `rmsync uninstall` | script | Remove launchd agent. Keeps config/state. `--purge` wipes all. | ✗ — `docker compose down` |
+| `rmsync trash list` | filesystem | List soft-deleted files under `<sync_dir>/.rmsync-trash/`. | ✓ |
+| `rmsync trash restore <rel>` | filesystem | Move a trashed file back; daemon re-pushes on next watcher tick. `--all` for bulk. | ✓ |
+| `rmsync trash prune` | filesystem | Drop trash entries past `trash_retention_days`. Auto-runs at daemon startup. | ✓ |
 
 Internal-only subcommands: `daemon` (invoked by launchd), `init`
 (legacy pointer to `install.sh`).
@@ -311,6 +314,17 @@ daemon does not watch the file.
 | `push_strategy` | `native_plain` | Also: `native_formatted` (stub), `pdf` (stub) |
 | `dry_run` | `false` | Log intent, don't touch cloud or disk |
 | `[log].level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `[inbox].local_dir` | unset | PDF/EPUB drop folder. Files pushed to cloud + (by default) removed locally. Block absent → feature off. |
+| `[inbox].remote_folder` | `Inbox` | Cloud folder for pushed PDFs/EPUBs. |
+| `[inbox].delete_after_push` | `true` | Drain the local inbox after successful push. |
+| `[web].enabled` | `false` | Embedded HTTP dashboard. Token-authed. |
+| `[web].bind_addr` | `127.0.0.1` | `0.0.0.0` to expose to LAN. |
+| `[web].port` | `7878` | TCP port. |
+| `[web].auth_token` | unset | Empty → daemon generates one in `$STATE_DIR/web-token`. |
+| `[deletion].enable_propagation` | `false` | Master switch for rename/delete propagation. v0.2.19+. |
+| `[deletion].trash_retention_days` | `30` | Reaped at daemon startup. `0` keeps forever. |
+| `[deletion].bulk_delete_threshold` | `0.5` | Refuse if `> N%` of tracked docs would be deleted in window. |
+| `[deletion].bulk_delete_window_seconds` | `30` | Rolling window for the brake. |
 
 ### `relocate` vs editing `sync_dir`
 
@@ -372,13 +386,25 @@ Or just run `./install.sh` — it's idempotent.
 
 ### Delete a doc from the cloud
 
-Local-delete doesn't propagate (safety gate). To actually remove:
+By default, local-delete doesn't propagate (safety gate). To
+actually remove:
 
 ```sh
 rmapi rm /Writing/foo
 ```
 
-The next poll removes it locally (moves to `~/.rmsync-trash/`).
+The next poll removes it locally (moves to
+`<sync_dir>/.rmsync-trash/<utc-stamp>/foo.md`).
+
+**v0.2.19+ alternative — opt-in propagation.** Add
+`[deletion] enable_propagation = true` to config.toml and
+`rmsync restart`; from then on `rm foo.md` propagates to the
+cloud (rmapi rm), and tablet-side deletes propagate to local.
+Local files soft-delete into `.rmsync-trash/`; recover via
+`rmsync trash list / restore`. A bulk-delete brake refuses
+operations exceeding `bulk_delete_threshold` of tracked docs in
+`bulk_delete_window_seconds`. See "Rename / move / delete
+propagation" in `docs/USAGE.md`.
 
 ### Change log level for debugging
 
@@ -561,8 +587,16 @@ FROM documents ORDER BY last_push_at DESC;
 SELECT * FROM settings;
 # -> paused (bool), author_uuid (UUID)
 
-# Schema version — should be 4
+# Schema version — 5 as of v0.2.19 (added `pending_op` column on
+# documents to mark in-flight rename/delete operations across
+# daemon restarts; older DBs migrate forward in place).
 SELECT version FROM schema_version;
+
+# Any rows currently mid-rename/delete (Reconcile resumes these
+# at startup):
+SELECT doc_id, local_path, remote_path, pending_op
+FROM documents
+WHERE pending_op IS NOT NULL;
 ```
 
 ### Xattrs
@@ -586,9 +620,14 @@ tool) makes the daemon re-track it as a new doc on next edit.
 
 ## Rough edges (things that surprise people)
 
-- **Local delete of a `.md` does NOT delete the cloud doc.** FSEvents
-  can misfire; destroying a cloud doc on an unverified single event
-  is too risky. Use `rmapi rm /Writing/foo` explicitly.
+- **Local delete of a `.md` does NOT delete the cloud doc by
+  default.** FSEvents can misfire and a single unverified event
+  is too risky to drive a destructive cloud action. Either:
+  (a) use `rmapi rm /Writing/foo` explicitly, or (b) opt in to
+  propagation via `[deletion] enable_propagation = true` in
+  config.toml — files soft-delete into `<sync_dir>/.rmsync-trash/`
+  with a bulk-delete brake, and `rmsync trash list / restore`
+  recovers. v0.2.19+.
 - **Handwriting pages pull as empty.** Only typed text extracts. A
   notebook mixing typed text and handwriting keeps only typed text.
 - **Never hand-invoke `rmapi put --content-only`.** That flag is
