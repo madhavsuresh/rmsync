@@ -15,8 +15,9 @@ section when a deep issue surfaces (e.g. ghost pages on the tablet).
 
 ## What rmsync is
 
-A macOS LaunchAgent that bidirectionally syncs a reMarkable tablet's
-`Writing/` cloud folder with a local Markdown tree.
+A bidirectional sync daemon between a reMarkable tablet's
+`Writing/` cloud folder and a local Markdown tree. Runs on macOS
+(via launchd, with a menubar app) and on Linux (via Docker, headless).
 
 - **Local → tablet:** you save a `.md` file; within ~5 seconds it
   gets packed into a reMarkable v6 `.rmdoc` archive and pushed to the
@@ -30,15 +31,28 @@ A macOS LaunchAgent that bidirectionally syncs a reMarkable tablet's
 No handwriting OCR. Pen strokes come through as empty markdown. Only
 typed-text notebooks round-trip.
 
-The daemon is a Swift 6 binary. Two launchd agents run it:
-`com.user.rmsync` (daemon) and `com.user.rmsync.menubar` (menu bar
-app). They talk via a Unix-domain socket.
+The daemon is a Swift 6 binary, identical core code on both
+platforms. Platform differences are confined to:
+
+- **macOS:** FSEventStream watcher; launchd-managed daemon (label
+  `com.user.rmsync`); menubar app (label `com.user.rmsync.menubar`);
+  Spotlight metadata + Finder folder icon on pulled files.
+- **Linux:** inotify watcher; Docker-supervised daemon (no
+  launchd / systemd interaction); no menubar; no Finder/Spotlight
+  integration. Same daemon binary just behind `#if os(Linux)` guards.
+
+Both platforms talk to the daemon over a Unix-domain socket
+(`ipc.sock` under the state dir). CLI commands (`rmsync status`,
+`sync-now`, `pause`, `doctor`, etc.) work identically.
 
 ---
 
 ## Canonical file locations
 
-Use these exact paths when helping the user.
+Use these exact paths when helping the user. macOS first; Linux
+(Docker) second.
+
+### macOS
 
 ```
 # binaries
@@ -68,14 +82,34 @@ Use these exact paths when helping the user.
 ~/rmsync-writing/
 ```
 
-The sync dir is configurable via `rmsync relocate`; check
-`config.toml`'s `sync_dir` to see the current value.
+### Linux (Docker container layout)
+
+```
+# inside the container
+/usr/local/bin/rmsync                              # daemon + CLI binary
+/usr/local/bin/rmapi                               # rmapi (Go binary, bundled)
+/usr/local/bin/rmsync-entrypoint.sh                # PID-1 init wrapper
+
+# volume mounts (host paths come from docker-compose.yml; defaults below)
+/config/config.toml                                # config (TOML)
+/config/rmapi/rmapi.conf                           # cloud auth
+/state/state.db                                    # SQLite state
+/state/ipc.sock                                    # live IPC socket
+/sync/                                             # your reMarkable Markdown tree
+```
+
+No menubar. No launchd plists. Logs go to stdout/stderr (the
+daemon's structured-JSON sink), captured via `docker logs`.
+
+The sync dir is configurable via `rmsync relocate` on macOS; on
+Linux/Docker, edit `/config/config.toml`'s `sync_dir` and
+`docker compose restart`.
 
 ---
 
 ## Install
 
-Two supported paths.
+Three supported paths: macOS (Homebrew or source) and Linux (Docker).
 
 ### Homebrew (recommended for most users)
 
@@ -117,12 +151,41 @@ The installer:
 Re-run `./install.sh` to pick up local code changes. The launchd
 agents are kicked on every run.
 
+### Docker (Linux mini-PC / NAS / homelab)
+
+For users without a Mac. Headless service; no menubar. Multi-arch
+image (amd64 + arm64) published on every release tag to
+`ghcr.io/madhavsuresh/rmsync`.
+
+```sh
+mkdir -p data/{config,state,sync}
+curl -fsSL -o docker-compose.yml \
+    https://raw.githubusercontent.com/madhavsuresh/rmsync/main/docker-compose.yml
+docker compose up -d
+docker exec -it rmsync rmapi   # one-time auth
+docker exec rmsync rmsync doctor
+```
+
+Volume layout: `/config` (rmapi.conf + config.toml), `/state`
+(state.db, ipc.sock), `/sync` (your `.md` tree).
+
+Operational commands run via `docker exec rmsync rmsync <command>`
+(uses the IPC socket on the volume). Lifecycle commands
+(`start/stop/restart`, `relocate`) error on Linux because the
+container runtime owns those — use `docker compose restart` etc.
+
+Linux uses inotify instead of FSEventStream. Same daemon code path
+otherwise. File watcher needs `fs.inotify.max_user_watches` ≥ tree
+size on the host (default 8192; large trees need
+`sudo sysctl fs.inotify.max_user_watches=524288`).
+
 ### Either way: rmapi auth is required
 
 If `rmapi` isn't authenticated, the daemon runs but every sync
 operation fails. `rmsync doctor`'s "rmapi authenticated" check catches
 this. The brew install path doesn't run an interactive auth flow —
-the user must invoke `rmapi` themselves and paste the code.
+the user must invoke `rmapi` themselves and paste the code. Same
+on Docker (`docker exec -it rmsync rmapi`).
 
 ---
 
@@ -130,20 +193,20 @@ the user must invoke `rmapi` themselves and paste the code.
 
 11 subcommands. All are idempotent.
 
-| Command | Talks to | What it does |
-|---|---|---|
-| `rmsync status` | IPC | Live state: tracked docs, last pull/push, conflicts, queue |
-| `rmsync pause` | IPC | Sets paused flag. Survives daemon restart. |
-| `rmsync resume` | IPC | Clears paused flag. |
-| `rmsync sync-now` | IPC | Forces immediate poll. |
-| `rmsync conflicts` | state DB | Lists unresolved `.md.conflict` files. |
-| `rmsync doctor` | direct | Runs 10 health checks; exits 1 on any ✗. |
-| `rmsync logs -f` | file tail | Tails `stdout.log`. Ctrl+C to stop. |
-| `rmsync start` | launchctl | Bootstraps the agent. |
-| `rmsync stop` | launchctl | Boots out the agent. |
-| `rmsync restart` | launchctl | `kickstart -k`. Use after config edits or rebuilds. |
-| `rmsync relocate <path>` | composite | Move sync dir + rewrite state + update config + restart. |
-| `rmsync uninstall` | script | Remove launchd agent. Keeps config/state. `--purge` wipes all. |
+| Command | Talks to | What it does | Linux/Docker |
+|---|---|---|---|
+| `rmsync status` | IPC | Live state: tracked docs, last pull/push, conflicts, queue | ✓ |
+| `rmsync pause` | IPC | Sets paused flag. Survives daemon restart. | ✓ |
+| `rmsync resume` | IPC | Clears paused flag. | ✓ |
+| `rmsync sync-now` | IPC | Forces immediate poll. | ✓ |
+| `rmsync conflicts` | state DB | Lists unresolved `.md.conflict` files. | ✓ |
+| `rmsync doctor` | direct | Runs 10 health checks; exits 1 on any ✗. | ✓ |
+| `rmsync logs -f` | file tail | Tails `stdout.log`. Ctrl+C to stop. | use `docker logs -f rmsync` |
+| `rmsync start` | launchctl | Bootstraps the agent. | ✗ — `docker compose up -d` |
+| `rmsync stop` | launchctl | Boots out the agent. | ✗ — `docker compose stop rmsync` |
+| `rmsync restart` | launchctl | `kickstart -k`. Use after config edits or rebuilds. | ✗ — `docker compose restart rmsync` |
+| `rmsync relocate <path>` | composite | Move sync dir + rewrite state + update config + restart. | ✗ — edit `/config/config.toml` and `docker compose restart` |
+| `rmsync uninstall` | script | Remove launchd agent. Keeps config/state. `--purge` wipes all. | ✗ — `docker compose down` |
 
 Internal-only subcommands: `daemon` (invoked by launchd), `init`
 (legacy pointer to `install.sh`).
