@@ -87,9 +87,29 @@ struct Status: AsyncParsableCommand {
 
 // MARK: - start / stop / restart
 
+/// On Linux, ``rmsync start/stop/restart`` are meaningless — the
+/// daemon's lifecycle belongs to the container runtime (Docker
+/// restart policies, systemd, a shell wrapper). We surface a clear
+/// error pointing the user at the right tool. Same for all three
+/// subcommands; central helper to avoid copy-paste drift.
+#if os(Linux)
+private func linuxLifecycleErrorAndExit() throws -> Never {
+    FileHandle.standardError.write(Data((
+        "rmsync start/stop/restart are not applicable in Docker / systemd mode.\n" +
+        "Use the container or service supervisor instead — for example:\n" +
+        "    docker restart rmsync\n" +
+        "    systemctl --user restart rmsync\n"
+    ).utf8))
+    throw ExitCode(2)
+}
+#endif
+
 struct StartCmd: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "start", abstract: "Start the launchd agent.")
     func run() throws {
+        #if os(Linux)
+        try linuxLifecycleErrorAndExit()
+        #else
         if Launchd.isRunning() { print("already running"); return }
         let r = Launchd.start()
         if r.ok { print("started") }
@@ -97,13 +117,18 @@ struct StartCmd: ParsableCommand {
             print("failed to start: \(r.error ?? "unknown")")
             throw ExitCode(1)
         }
+        #endif
     }
 }
 
 struct StopCmd: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "stop", abstract: "Stop the launchd agent.")
     func run() throws {
+        #if os(Linux)
+        try linuxLifecycleErrorAndExit()
+        #else
         print(Launchd.stop() ? "stopped" : "was not running")
+        #endif
     }
 }
 
@@ -113,11 +138,15 @@ struct RestartCmd: ParsableCommand {
         abstract: "Kick the launchd agent (use after code changes)."
     )
     func run() throws {
+        #if os(Linux)
+        try linuxLifecycleErrorAndExit()
+        #else
         let r = Launchd.restart()
         if r.ok { print("restarted") } else {
             print("restart failed: \(r.error ?? "unknown")")
             throw ExitCode(1)
         }
+        #endif
     }
 }
 

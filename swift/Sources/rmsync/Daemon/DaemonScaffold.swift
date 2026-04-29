@@ -153,13 +153,25 @@ enum DaemonScaffold {
         }
 
         // Watcher and poller start only AFTER reconcile so they don't
-        // observe the initial flurry of writes.
+        // observe the initial flurry of writes. The watcher
+        // implementation is platform-specific: FSEventStream on
+        // macOS, inotify on Linux. Both expose the same init/start/stop
+        // surface so the rest of the daemon doesn't care.
+        #if os(macOS)
         let watcher = LocalWatcher(
             syncDir: cfg.syncDir,
             queue: queue,
             fence: fence,
             debounceSeconds: cfg.debounceSeconds
         )
+        #else
+        let watcher = INotifyWatcher(
+            syncDir: cfg.syncDir,
+            queue: queue,
+            fence: fence,
+            debounceSeconds: cfg.debounceSeconds
+        )
+        #endif
         watcher.start()
         let pollerTask = Task.detached { await poller.run() }
 

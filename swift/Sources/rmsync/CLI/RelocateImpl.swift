@@ -45,6 +45,26 @@ enum RelocateImpl {
         force: Bool,
         keepStopped: Bool
     ) async throws -> Outcome {
+        // ``relocate`` orchestrates a stop / move / rewrite / restart
+        // sequence around the launchd agent. On Linux/Docker the
+        // restart is the container supervisor's job, not ours; just
+        // editing config.toml + restarting the container achieves the
+        // same effect with simpler ownership. Bail out clearly here
+        // rather than running half the sequence and leaving the user
+        // wondering why the agent didn't come back up.
+        #if os(Linux)
+        FileHandle.standardError.write(Data((
+            "rmsync relocate is not applicable in Docker / systemd mode.\n" +
+            "Edit sync_dir in /config/config.toml directly, then restart\n" +
+            "the container so the daemon picks up the new value:\n" +
+            "    docker restart rmsync\n"
+        ).utf8))
+        return Outcome(
+            movedEntries: 0, stateRowsRewritten: 0,
+            configUpdated: false, restarted: false
+        )
+        #else
+
         let cfg: Config
         do {
             cfg = try Config.load()
@@ -111,6 +131,7 @@ enum RelocateImpl {
             configUpdated: true,
             restarted: restarted
         )
+        #endif
     }
 
     // MARK: - move

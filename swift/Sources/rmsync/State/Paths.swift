@@ -21,16 +21,34 @@ enum Paths {
         if let override = ProcessInfo.processInfo.environment["RM_SYNC_STATE_DIR"] {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
+        #if os(macOS)
         return home.appendingPathComponent(
             "Library/Application Support/rmsync", isDirectory: true
         )
+        #else
+        // Linux: follow XDG. ``XDG_STATE_HOME`` defaults to
+        // ``~/.local/state``. Docker users typically set
+        // ``RM_SYNC_STATE_DIR=/state`` directly to bypass this.
+        let xdg = ProcessInfo.processInfo.environment["XDG_STATE_HOME"]
+            ?? home.appendingPathComponent(".local/state").path
+        return URL(fileURLWithPath: xdg, isDirectory: true)
+            .appendingPathComponent("rmsync", isDirectory: true)
+        #endif
     }
 
     static var logDir: URL {
         if let override = ProcessInfo.processInfo.environment["RM_SYNC_LOG_DIR"] {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
+        #if os(macOS)
         return home.appendingPathComponent("Library/Logs/rmsync", isDirectory: true)
+        #else
+        // Linux: live alongside state. The Docker entrypoint sets
+        // ``RM_SYNC_LOG_STDOUT=1`` and lets ``Logger`` skip the file
+        // sink entirely; this default only matters for bare-metal
+        // Linux daemon installs.
+        return stateDir.appendingPathComponent("logs", isDirectory: true)
+        #endif
     }
 
     static var stateDBPath: URL { stateDir.appendingPathComponent("state.db") }

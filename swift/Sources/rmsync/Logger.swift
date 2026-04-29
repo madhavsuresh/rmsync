@@ -1,16 +1,25 @@
 import Foundation
+
+// ``os.Logger`` is macOS / iOS / tvOS / watchOS only — it's the
+// Apple unified logging system, not available in Linux Foundation.
+// The cross-platform path (every line below the ``#if`` block) is
+// stderr-only, which is exactly what Docker captures via
+// ``docker logs`` and what launchd's ``StandardErrorPath`` writes
+// to ``~/Library/Logs/rmsync/stderr.log`` on macOS.
+#if canImport(os)
 import os
+#endif
 
 /// Structured-ish JSON logger that writes to stderr. Matches the shape of
 /// the Python daemon's structlog output so existing log-tailing scripts
-/// keep working. Backed by ``os.Logger`` for Console.app integration.
-///
-/// Full port of ``src/rm_sync/logging_setup.py`` arrives in a later week;
-/// this is just enough to give every module something to call into.
+/// keep working. On macOS, also surfaces events via ``os.Logger`` so they
+/// appear in Console.app.
 final class Logger: Sendable {
     static let shared = Logger()
 
+    #if canImport(os)
     private let system = os.Logger(subsystem: "com.user.rmsync", category: "daemon")
+    #endif
 
     private init() {}
 
@@ -46,12 +55,17 @@ final class Logger: Sendable {
             FileHandle.standardError.write(Data((line + "\n").utf8))
         }
 
-        // Also surface via os.Logger so Console.app sees it.
+        // Also surface via os.Logger so Console.app sees it. On Linux,
+        // there is no analogue — the JSON stderr write above is the
+        // single sink, and Docker / journald / a redirected file
+        // captures it for the user.
+        #if canImport(os)
         switch level {
         case "error": system.error("\(event, privacy: .public)")
         case "warning": system.warning("\(event, privacy: .public)")
         case "debug": system.debug("\(event, privacy: .public)")
         default: system.info("\(event, privacy: .public)")
         }
+        #endif
     }
 }

@@ -228,6 +228,18 @@ struct DoctorRun {
     }
 
     private static func launchdLoaded() -> CheckResult {
+        // Linux has no launchctl. Daemon supervision is Docker / systemd
+        // / shell — none of which we can probe portably from inside the
+        // daemon. Emit an informational ``ok`` so the doctor still
+        // exits cleanly, with a label that's honest about the
+        // platform difference.
+        #if os(Linux)
+        return CheckResult(
+            name: "supervisor",
+            status: .ok,
+            message: "external (Docker / systemd / shell)"
+        )
+        #else
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         task.arguments = ["print", "gui/\(getuid())/\(Launchd.label)"]
@@ -245,6 +257,7 @@ struct DoctorRun {
             )
         }
         return CheckResult(name: "launchd plist loaded", status: .ok, message: "")
+        #endif
     }
 
     private static func diskSpace(cfg: Config?) -> CheckResult {
