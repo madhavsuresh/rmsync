@@ -182,7 +182,9 @@ services:
 
 ## Building the image yourself
 
-If you'd rather not pull from `ghcr.io`:
+If you'd rather not pull from `ghcr.io`, or you need an arm64 image
+(the published one is amd64-only — see "Architecture support"
+below):
 
 ```sh
 git clone https://github.com/madhavsuresh/rmsync.git
@@ -191,12 +193,28 @@ docker build -t rmsync:local .
 # Then in docker-compose.yml, replace the image: line with image: rmsync:local
 ```
 
-The build takes ~5 minutes (Swift toolchain compiling release-mode
-rmsync from source, plus rmapi download). Multi-arch build:
+The build takes ~5 minutes on a native-arch host (Swift toolchain
+compiling release-mode rmsync from source, plus rmapi download).
+On Apple Silicon: building an arm64 image natively is fast.
+
+For a multi-arch build (cross-arch via QEMU is slow — 30+ min for
+arm64-on-x86):
 
 ```sh
 docker buildx build --platform linux/amd64,linux/arm64 -t rmsync:local .
 ```
+
+## Architecture support
+
+The published `ghcr.io/madhavsuresh/rmsync` image is currently
+`linux/amd64` only. arm64 was attempted in CI but Swift compilation
+under QEMU x86→arm64 emulation didn't finish in a reasonable time
+(>1 hour), so the release workflow ships amd64 first.
+
+If you're on an arm64 Linux host (Raspberry Pi 4/5, AWS Graviton,
+arm-based mini-PC, Apple Silicon Mac running Linux containers),
+build locally with `docker build -t rmsync:local .` — your host's
+native arm64 Swift toolchain compiles in normal time.
 
 ---
 

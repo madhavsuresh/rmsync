@@ -61,9 +61,12 @@ docker exec -it rmsync rmapi   # one-time reMarkable auth
 docker exec rmsync rmsync doctor
 ```
 
-Multi-arch image (amd64 + arm64) published on every release to
+Image (`linux/amd64`) published on every release to
 [ghcr.io/madhavsuresh/rmsync](https://github.com/madhavsuresh/rmsync/pkgs/container/rmsync).
-Full operational guide in [`docs/DOCKER.md`](docs/DOCKER.md).
+arm64 hosts: build locally — `docker build -t rmsync:local .`
+(arm64 swift compilation under QEMU emulation is too slow for CI;
+native arm64 build is fast). Full guide in
+[`docs/DOCKER.md`](docs/DOCKER.md).
 
 ### From source
 
