@@ -64,18 +64,23 @@ RUN apt-get update \
 # Pull rmapi from upstream releases. Pinned version — bump explicitly
 # when upstream releases a new one. Architecture-aware via TARGETARCH
 # (set automatically by buildx during multi-arch builds).
+#
+# Naming convention from ddvk/rmapi releases: ``.zip`` archives named
+# ``rmapi-linux-{amd64,arm64}.zip`` (matches the macOS install.sh
+# pattern, which uses ``rmapi-macos-{arm64,intel}.zip``). Bumping to
+# v0.0.30 to match the version pinned by macOS CI.
 ARG RMAPI_VERSION=v0.0.30
 ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
-        amd64) RMAPI_ARCH=linux-x86_64 ;; \
+        amd64) RMAPI_ARCH=linux-amd64 ;; \
         arm64) RMAPI_ARCH=linux-arm64 ;; \
         *) echo "Unsupported arch: ${TARGETARCH}"; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/rmapi.tar.gz \
-        "https://github.com/ddvk/rmapi/releases/download/${RMAPI_VERSION}/rmapi-${RMAPI_ARCH}.tar.gz"; \
-    tar -xzf /tmp/rmapi.tar.gz -C /usr/local/bin rmapi; \
-    rm /tmp/rmapi.tar.gz; \
+    curl -fsSL -o /tmp/rmapi.zip \
+        "https://github.com/ddvk/rmapi/releases/download/${RMAPI_VERSION}/rmapi-${RMAPI_ARCH}.zip"; \
+    unzip -o /tmp/rmapi.zip -d /usr/local/bin rmapi; \
+    rm /tmp/rmapi.zip; \
     chmod +x /usr/local/bin/rmapi; \
     rmapi version
 
