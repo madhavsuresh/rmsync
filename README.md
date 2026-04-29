@@ -235,8 +235,13 @@ without being subject to File Provider eviction.
   can't convert those annotations to Markdown.
 - Image / drawing round-trip.
 - Anything outside `Writing/` on your tablet.
-- Real-time delete propagation (local deletes are safety-gated; see
-  [`docs/USAGE.md`](docs/USAGE.md) "Rough edges").
+- Real-time delete / rename propagation **by default** — opt in via
+  `[deletion] enable_propagation = true` (v0.2.19+). When enabled,
+  deletes and renames in the sync dir or on the tablet propagate
+  to the other side, with soft-delete to `.rmsync-trash/` and a
+  bulk-delete brake that caps the blast radius. See `rmsync trash
+  list / restore` and the "Rename / move / delete propagation"
+  section in [`docs/USAGE.md`](docs/USAGE.md).
 
 ---
 
