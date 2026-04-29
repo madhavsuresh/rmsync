@@ -507,14 +507,57 @@ to remove those manually.
 
 ## Rough edges to know about
 
-### Local-delete of a tracked `.md` does NOT remove the cloud doc
+### Rename / move / delete propagation is opt-in
 
-Safety gate. FSEvents can misfire in editor/finder-rename scenarios and
-destroying a cloud doc from an unverified single event is too risky.
-If you delete `hello.md` locally, the daemon logs `local delete
-detected; cloud removal deferred`. The cloud copy stays put.
+Available as of v0.2.19. **Off by default** — the daemon does not
+delete or rename anything on either side until you flip
+`enable_propagation = true` in `~/.config/rmsync/config.toml`:
 
-To actually delete:
+```toml
+[deletion]
+enable_propagation         = true
+trash_retention_days       = 30
+bulk_delete_threshold      = 0.5    # >50% of tracked → refuse
+bulk_delete_window_seconds = 30
+```
+
+After restarting (`rmsync restart`):
+
+- **Local delete → cloud trash.** Removing `hello.md` from
+  `sync_dir` parks the file in `<sync_dir>/.rmsync-trash/` and
+  moves the cloud doc to the reMarkable cloud's trash (rmapi rm
+  is a soft-delete — recoverable from the cloud UI within
+  reMarkable's retention window).
+- **Cloud delete → local trash.** Deleting a doc on the tablet
+  (or via `rmapi rm`) drops the local file into
+  `<sync_dir>/.rmsync-trash/` on the next poll cycle.
+- **Local rename → cloud rename.** `mv old.md new.md` calls
+  `rmapi mv` to move the cloud doc to match.
+- **Cloud rename → local rename.** Renaming on the tablet moves
+  the local file to match.
+
+Recovery: `rmsync trash list` shows recent deletions;
+`rmsync trash restore <rel-path>` puts a file back (the daemon
+re-pushes it to the cloud on the next watcher tick). The trash
+auto-prunes at daemon startup based on `trash_retention_days`;
+set to 0 to keep forever.
+
+Safety gates that protect against runaway events:
+- **Bulk-delete brake.** Refuses to apply more than
+  `bulk_delete_threshold` of tracked docs in a
+  `bulk_delete_window_seconds` window. An accidental
+  `rm -rf sync_dir` parks the bulk in trash, refuses the cloud
+  side, and surfaces `error_state = "bulk_delete_refused"` in
+  `rmsync status`.
+- **Per-doc lock.** Rename + delete + push on the same doc
+  serialize through `LockRegistry`.
+- **Echo fence.** Cloud→local rename seeds the fence so the
+  watcher's resulting filesystem event for our own move is
+  suppressed (otherwise we'd ping-pong forever).
+
+If you'd rather keep the v0.2.18 behavior — local delete logs but
+doesn't propagate — leave `enable_propagation` at its default
+(`false`) and use `rmapi rm` by hand:
 
 ```sh
 ~/bin/rmapi rm /Writing/hello
