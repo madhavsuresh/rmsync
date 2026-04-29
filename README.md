@@ -172,6 +172,8 @@ without being subject to File Provider eviction.
 
 ## Requirements
 
+### macOS install path
+
 - **macOS 13+** on Apple Silicon or Intel.
 - **Xcode command-line tools** (`xcode-select --install`). Provides
   Swift 6.0+. If the installer errors "swift not found," run that
@@ -183,6 +185,18 @@ without being subject to File Provider eviction.
   brew install io41/tap/rmapi                     # recommended
   # or download from https://github.com/ddvk/rmapi/releases
   ```
+
+### Linux / Docker install path
+
+- **Docker engine** (with compose plugin) on any Linux host. Tested
+  on amd64 + arm64.
+- **rmapi** is bundled into the image — no host-side install.
+- For large sync trees (>5000 subdirs): bump
+  `fs.inotify.max_user_watches` on the host. Default 8192 is enough
+  for typical use.
+
+### Both paths
+
 - **A reMarkable tablet with cloud sync enabled.** Connect
   subscription is *not* required — free tier works fine.
 
