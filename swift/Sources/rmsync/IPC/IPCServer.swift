@@ -41,7 +41,10 @@ actor IPCServer {
             withIntermediateDirectories: true
         )
 
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        // ``SOCK_STREAM_I32`` from PosixCompat.swift normalises the
+        // Darwin (Int32) vs Glibc (__socket_type enum) type
+        // difference for ``socket(2)``'s second argument.
+        let fd = socket(AF_UNIX, SOCK_STREAM_I32, 0)
         guard fd >= 0 else { throw IPCError.socketCreateFailed(errno: errno) }
 
         var addr = sockaddr_un()

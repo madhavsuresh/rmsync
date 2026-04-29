@@ -268,8 +268,20 @@ struct DoctorRun {
             ? cfg.syncDir
             : cfg.syncDir.deletingLastPathComponent()
         do {
+            // ``volumeAvailableCapacityForImportantUsageKey`` is a
+            // Darwin Foundation extension — Linux Foundation has only
+            // ``volumeAvailableCapacityKey``. The "important usage"
+            // variant is the macOS-recommended call because it
+            // accounts for purgeable cache that the OS will reclaim
+            // under pressure; on Linux we just use the raw available
+            // capacity.
+            #if os(macOS)
             let values = try target.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             let bytes = values.volumeAvailableCapacityForImportantUsage ?? 0
+            #else
+            let values = try target.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+            let bytes = Int64(values.volumeAvailableCapacity ?? 0)
+            #endif
             let gb = Double(bytes) / 1073741824.0
             if gb < 1 {
                 return CheckResult(name: "disk space", status: .fail, message: String(format: "%.2f GB free", gb))

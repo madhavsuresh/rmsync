@@ -27,9 +27,13 @@ enum IPCClientSync {
         defer { close(fd) }
 
         // Set read timeout so a wedged daemon doesn't hang us forever.
+        // ``tv_usec`` is ``Int32`` on Darwin's timeval but ``Int``
+        // (``__suseconds_t`` typedef) on Glibc. ``suseconds_t`` is
+        // declared on both, so we cast the fractional microseconds
+        // through it for portability.
         var tv = timeval(
             tv_sec: Int(timeout),
-            tv_usec: Int32((timeout - floor(timeout)) * 1_000_000)
+            tv_usec: suseconds_t((timeout - floor(timeout)) * 1_000_000)
         )
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
@@ -129,7 +133,10 @@ enum IPCClientSync {
     /// resolve to *this* method recursively. Same problem as
     /// IPCClient.swift's instance-method shadowing.
     private static func openSocket(path: URL, timeout: TimeInterval) throws -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        // ``SOCK_STREAM_I32`` (defined in IPC/PosixCompat.swift)
+        // normalises the Darwin/Glibc type difference for the
+        // ``socket(2)`` type parameter.
+        let fd = socket(AF_UNIX, SOCK_STREAM_I32, 0)
         guard fd >= 0 else { throw CallError.daemonUnavailable("socket() failed") }
 
         var addr = sockaddr_un()

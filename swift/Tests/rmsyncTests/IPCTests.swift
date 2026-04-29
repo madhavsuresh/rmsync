@@ -123,7 +123,9 @@ struct IPCTests {
     }
 
     private func connectSocket(_ sock: URL) throws -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        // ``SOCK_STREAM_I32`` from PosixCompat.swift in the rmsync
+        // target — normalises Darwin/Glibc type differences.
+        let fd = socket(AF_UNIX, SOCK_STREAM_I32, 0)
         #expect(fd >= 0)
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
