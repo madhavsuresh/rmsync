@@ -174,6 +174,97 @@ struct DeletePropagationTests {
         #expect(await queue.dequeue(timeout: 0.05) == nil)
     }
 
+    // MARK: - CloudPoller missing-doc detection (Phase 3)
+
+    @Test("CloudPoller enqueues .deleteLocal for missing doc when propagation enabled")
+    func pollerEnqueuesMissing() async throws {
+        let dir = try tempDir()
+        let state = try State(path: dir.appendingPathComponent("state.db"))
+        let queue = JobQueue()
+        let cfg = Config(
+            syncDir: dir,
+            pollIntervalSeconds: 0,  // skip the safety delay
+            deletion: Config.DeletionConfig(enablePropagation: true)
+        )
+        try await state.upsert(Document(
+            docID: "ghost",
+            docType: "DocumentType",
+            remotePath: "/Writing/ghost",
+            localPath: dir.appendingPathComponent("ghost.md").path,
+            lastSyncedMDHash: "abc"
+        ))
+        // Cloud is unused here because we drive handleMissing
+        // directly. Construct one anyway — the poller's init
+        // requires it.
+        let poller = CloudPoller(
+            cloud: Cloud(rmapiPath: "/usr/bin/false"),
+            state: state, cfg: cfg, queue: queue
+        )
+
+        // First call sets firstSeen = now; with pollIntervalSeconds
+        // = 0 the doc immediately qualifies and gets enqueued.
+        await poller.handleMissing(seenIDs: Set<String>())
+
+        var collected: [String] = []
+        while let job = await queue.dequeue(timeout: 0.05) {
+            #expect(job.kind == .deleteLocal)
+            collected.append(job.docID ?? "")
+            await queue.taskDone()
+        }
+        #expect(collected == ["ghost"])
+    }
+
+    @Test("CloudPoller skips enqueue when propagation disabled")
+    func pollerSkipsWhenDisabled() async throws {
+        let dir = try tempDir()
+        let state = try State(path: dir.appendingPathComponent("state.db"))
+        let queue = JobQueue()
+        let cfg = Config(
+            syncDir: dir,
+            pollIntervalSeconds: 0,
+            deletion: Config.DeletionConfig(enablePropagation: false)
+        )
+        try await state.upsert(Document(
+            docID: "ghost",
+            docType: "DocumentType",
+            remotePath: "/Writing/ghost",
+            localPath: dir.appendingPathComponent("ghost.md").path,
+            lastSyncedMDHash: "abc"
+        ))
+        let poller = CloudPoller(
+            cloud: Cloud(rmapiPath: "/usr/bin/false"),
+            state: state, cfg: cfg, queue: queue
+        )
+        await poller.handleMissing(seenIDs: Set<String>())
+        // No job should have been enqueued.
+        #expect(await queue.dequeue(timeout: 0.05) == nil)
+    }
+
+    @Test("CloudPoller does not delete docs that are still present")
+    func pollerSkipsPresent() async throws {
+        let dir = try tempDir()
+        let state = try State(path: dir.appendingPathComponent("state.db"))
+        let queue = JobQueue()
+        let cfg = Config(
+            syncDir: dir,
+            pollIntervalSeconds: 0,
+            deletion: Config.DeletionConfig(enablePropagation: true)
+        )
+        try await state.upsert(Document(
+            docID: "alive",
+            docType: "DocumentType",
+            remotePath: "/Writing/alive",
+            localPath: dir.appendingPathComponent("alive.md").path,
+            lastSyncedMDHash: "abc"
+        ))
+        let poller = CloudPoller(
+            cloud: Cloud(rmapiPath: "/usr/bin/false"),
+            state: state, cfg: cfg, queue: queue
+        )
+        await poller.handleMissing(seenIDs: Set(["alive"]))
+        #expect(await queue.dequeue(timeout: 0.05) == nil)
+    }
+
     // MARK: - propagation flag
 
     @Test("delete handler is a no-op when enable_propagation = false")

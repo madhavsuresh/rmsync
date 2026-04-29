@@ -126,7 +126,23 @@ actor CloudPoller {
     /// If a doc disappears from the cloud listing, wait one full poll
     /// interval before treating it as a deletion — handles transient
     /// listing glitches without immediately destroying local files.
-    private func handleMissing(seenIDs: Set<String>) async {
+    ///
+    /// The diff is keyed on ``doc_id``, not path, on purpose: a cloud-
+    /// side rename preserves the doc UUID across the ``rmapi mv``
+    /// call, so a renamed doc continues to appear in ``seenIDs`` and
+    /// is *not* treated as deleted. The Phase-5 ``.renameLocal``
+    /// handler picks up the path-change branch in the main ``cycle``
+    /// loop. This is the load-bearing reason we never key delete
+    /// detection on remote_path.
+    ///
+    /// Gating: when ``cfg.deletion.enablePropagation`` is false (the
+    /// default for v0.2.19), we still log the missing doc but do not
+    /// enqueue the ``.deleteLocal`` job. That way users can verify
+    /// the detection works on their tree before flipping the switch.
+    /// Internal-but-not-private so unit tests can drive the
+    /// missing-doc branch directly without spinning up rmapi.
+    /// Production callers go through ``cycle()``.
+    func handleMissing(seenIDs: Set<String>) async {
         let currentTime = now()
         let docs = (try? await state.allDocuments()) ?? []
         for doc in docs where doc.docType == "DocumentType" {
@@ -137,13 +153,20 @@ actor CloudPoller {
             let firstSeen = pendingDeletes[doc.docID] ?? currentTime
             pendingDeletes[doc.docID] = firstSeen
             if currentTime - firstSeen >= Double(cfg.pollIntervalSeconds) {
-                Logger.shared.info(
-                    "remote deletion confirmed",
-                    meta: ["doc_id": doc.docID]
-                )
-                await queue.enqueue(
-                    Job(kind: .deleteLocal, docID: doc.docID, hint: doc.localPath)
-                )
+                if cfg.deletion.enablePropagation {
+                    Logger.shared.info(
+                        "remote deletion confirmed; enqueuing local delete",
+                        meta: ["doc_id": doc.docID, "path": doc.localPath]
+                    )
+                    await queue.enqueue(
+                        Job(kind: .deleteLocal, docID: doc.docID, hint: doc.localPath)
+                    )
+                } else {
+                    Logger.shared.info(
+                        "remote deletion detected (propagation disabled — skip)",
+                        meta: ["doc_id": doc.docID, "path": doc.localPath]
+                    )
+                }
                 pendingDeletes.removeValue(forKey: doc.docID)
             }
         }
