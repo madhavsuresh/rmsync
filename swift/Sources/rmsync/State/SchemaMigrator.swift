@@ -81,6 +81,21 @@ enum SchemaMigrator {
             }
         }
 
+        // v5 — add ``pending_op`` to track in-flight destructive
+        // operations across daemon restarts. Set before a cloud
+        // delete / rename begins, cleared on success. The startup
+        // reconciler reads this column to resume any operation
+        // that was interrupted (process killed mid-cloud-call,
+        // network hiccup, etc.). See the rename / delete
+        // propagation feature flag in ``Config.deletion``.
+        migrator.registerMigration("v5_pending_op") { db in
+            if try !columnExists(db, table: "documents", column: "pending_op") {
+                try db.execute(
+                    sql: "ALTER TABLE documents ADD COLUMN pending_op TEXT"
+                )
+            }
+        }
+
         try migrator.migrate(writer)
 
         // Keep the legacy ``schema_version`` row in sync for the CLI
@@ -93,7 +108,7 @@ enum SchemaMigrator {
         }
     }
 
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 5
 
     private static func columnExists(
         _ db: Database, table: String, column: String

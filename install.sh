@@ -214,6 +214,20 @@ level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 # enabled    = true
 # bind_addr  = "127.0.0.1"
 # port       = 7878
+
+# Optional: rename / move / delete propagation. OFF by default —
+# when ``enable_propagation = true``, deletes and renames in the
+# sync dir or on the tablet propagate to the other side. Local
+# files are soft-deleted into ``<sync_dir>/.rmsync-trash`` first;
+# ``rmsync trash list / restore`` recovers them. The bulk-delete
+# brake refuses to apply more than ``bulk_delete_threshold`` of
+# tracked docs in a ``bulk_delete_window_seconds`` window — caps
+# the blast radius of an accidental ``rm -rf``.
+# [deletion]
+# enable_propagation         = false
+# trash_retention_days       = 30
+# bulk_delete_threshold      = 0.5
+# bulk_delete_window_seconds = 30
 EOF
     yellow "  Edit this file if you want sync_dir somewhere other than ~/rmsync-writing."
 fi

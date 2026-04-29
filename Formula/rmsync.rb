@@ -237,6 +237,17 @@ class Rmsync < Formula
       # enabled    = true
       # bind_addr  = "127.0.0.1"
       # port       = 7878
+
+      # Optional: rename / move / delete propagation. OFF by default.
+      # When enabled, deletes and renames propagate both ways. Local
+      # files soft-delete into <sync_dir>/.rmsync-trash first;
+      # 'rmsync trash list / restore' recovers them. The bulk-delete
+      # brake caps the blast radius of an accidental 'rm -rf'.
+      # [deletion]
+      # enable_propagation         = false
+      # trash_retention_days       = 30
+      # bulk_delete_threshold      = 0.5
+      # bulk_delete_window_seconds = 30
       TOML
         echo "  Edit it if you want sync_dir somewhere other than ~/rmsync-writing"
         echo "  (or run 'rmsync relocate <new-path>' after the daemon comes up)."

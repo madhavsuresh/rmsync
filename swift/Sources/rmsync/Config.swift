@@ -35,6 +35,22 @@ struct Config: Decodable, Sendable {
     /// changed (Docker users typically want ``0.0.0.0``).
     var web: WebConfig?
 
+    /// Optional ``[deletion]`` block: rename / move / delete
+    /// propagation. Disabled by default (``enable_propagation =
+    /// false``) — without it, the daemon never deletes anything
+    /// from the cloud or the local tree, matching the historical
+    /// behavior. Once enabled, the daemon soft-deletes through
+    /// ``<syncDir>/.rmsync-trash`` with a configurable retention
+    /// window, and refuses to apply more than
+    /// ``bulk_delete_threshold`` of tracked docs in a
+    /// ``bulk_delete_window_seconds`` window.
+    ///
+    /// Always-present (with safe defaults) so call sites can use
+    /// ``cfg.deletion.foo`` without unwrapping. Absent block in
+    /// the TOML file decodes as the same defaults you'd get from
+    /// ``DeletionConfig()``.
+    var deletion: DeletionConfig
+
     enum PushStrategy: String, Decodable, Sendable {
         case nativePlain = "native_plain"
         case nativeFormatted = "native_formatted"
@@ -83,6 +99,56 @@ struct Config: Decodable, Sendable {
             self.localDir = localDir
             self.remoteFolder = remoteFolder
             self.deleteAfterPush = deleteAfterPush
+        }
+    }
+
+    struct DeletionConfig: Decodable, Sendable {
+        /// Master switch. When false (the default for v0.2.19), all
+        /// of the rename / delete machinery is dormant: watchers
+        /// emit jobs but the worker treats them as no-ops, the cloud
+        /// poller doesn't propagate cloud-side deletes, and trash
+        /// stays unwritten. Flip to true once the user trusts the
+        /// safety gates on their workflow. A future release will
+        /// flip the default to true.
+        var enablePropagation: Bool
+        /// Stamps older than this in ``<syncDir>/.rmsync-trash``
+        /// are pruned at startup. Set to 0 to keep forever.
+        var trashRetentionDays: Int
+        /// If a single rolling window contains
+        /// ``ratio = (deletes / tracked_docs)`` greater than this,
+        /// the worker refuses further deletes and surfaces the
+        /// state via ``error_state = "bulk_delete_refused"``. The
+        /// brake protects against runaway watcher storms and
+        /// ``rm -rf`` accidents.
+        var bulkDeleteThreshold: Double
+        /// Window over which ``bulk_delete_threshold`` is measured.
+        var bulkDeleteWindowSeconds: Int
+
+        enum CodingKeys: String, CodingKey {
+            case enablePropagation = "enable_propagation"
+            case trashRetentionDays = "trash_retention_days"
+            case bulkDeleteThreshold = "bulk_delete_threshold"
+            case bulkDeleteWindowSeconds = "bulk_delete_window_seconds"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.enablePropagation = try c.decodeIfPresent(Bool.self, forKey: .enablePropagation) ?? false
+            self.trashRetentionDays = try c.decodeIfPresent(Int.self, forKey: .trashRetentionDays) ?? 30
+            self.bulkDeleteThreshold = try c.decodeIfPresent(Double.self, forKey: .bulkDeleteThreshold) ?? 0.5
+            self.bulkDeleteWindowSeconds = try c.decodeIfPresent(Int.self, forKey: .bulkDeleteWindowSeconds) ?? 30
+        }
+
+        init(
+            enablePropagation: Bool = false,
+            trashRetentionDays: Int = 30,
+            bulkDeleteThreshold: Double = 0.5,
+            bulkDeleteWindowSeconds: Int = 30
+        ) {
+            self.enablePropagation = enablePropagation
+            self.trashRetentionDays = trashRetentionDays
+            self.bulkDeleteThreshold = bulkDeleteThreshold
+            self.bulkDeleteWindowSeconds = bulkDeleteWindowSeconds
         }
     }
 
@@ -146,6 +212,7 @@ struct Config: Decodable, Sendable {
         case log
         case inbox
         case web
+        case deletion
     }
 
     init(from decoder: Decoder) throws {
@@ -168,6 +235,8 @@ struct Config: Decodable, Sendable {
             ?? LogConfig(level: .info)
         self.inbox = try c.decodeIfPresent(InboxConfig.self, forKey: .inbox)
         self.web = try c.decodeIfPresent(WebConfig.self, forKey: .web)
+        self.deletion = try c.decodeIfPresent(DeletionConfig.self, forKey: .deletion)
+            ?? DeletionConfig()
     }
 
     // MARK: - loading
@@ -196,7 +265,8 @@ struct Config: Decodable, Sendable {
         dryRun: Bool = false,
         log: LogConfig = LogConfig(level: .info),
         inbox: InboxConfig? = nil,
-        web: WebConfig? = nil
+        web: WebConfig? = nil,
+        deletion: DeletionConfig = DeletionConfig()
     ) {
         self.syncDir = syncDir
         self.remoteFolder = remoteFolder
@@ -214,6 +284,7 @@ struct Config: Decodable, Sendable {
         self.log = log
         self.inbox = inbox
         self.web = web
+        self.deletion = deletion
     }
 }
 

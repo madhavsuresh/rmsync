@@ -106,6 +106,29 @@ actor State {
         }
     }
 
+    /// Stamp / clear the in-flight ``pending_op`` marker. Set
+    /// before a destructive cloud call begins, cleared on success.
+    /// Schema v5+. Pass ``nil`` to clear.
+    func setPendingOp(docID: String, op: String?) throws {
+        try writer.write { db in
+            try db.execute(
+                sql: "UPDATE documents SET pending_op = ? WHERE doc_id = ?",
+                arguments: [op, docID]
+            )
+        }
+    }
+
+    /// Every row whose ``pending_op`` is non-NULL — used by the
+    /// startup reconciler to resume rename / delete operations
+    /// that didn't finish before the daemon last exited.
+    func pendingOpDocs() throws -> [Document] {
+        try writer.read { db in
+            try Document.fetchAll(
+                db, sql: "SELECT * FROM documents WHERE pending_op IS NOT NULL"
+            )
+        }
+    }
+
     func setPageIDs(docID: String, pageIDs: [String]) throws {
         let blob = String(
             data: try JSONEncoder().encode(pageIDs), encoding: .utf8

@@ -24,8 +24,19 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
     var lastPullAt: String?
     var lastPushAt: String?
     var conflictState: String?     // nil | "unresolved"
-    var errorState: String?        // nil | "parse_failed" | "push_validation_failed"
+    var errorState: String?        // nil | "parse_failed" | "push_validation_failed" | "bulk_delete_refused"
     var pageIDs: [String]          // serialized as JSON in the TEXT column
+    /// In-flight destructive operation marker. Set before a
+    /// cloud-side delete or rename begins; cleared on success.
+    /// Schema v5+. Values:
+    ///   - ``nil``                — no operation in flight
+    ///   - ``"pending_delete"`` — local file is in trash, cloud rm
+    ///                              not yet confirmed
+    ///   - ``"pending_rename"`` — local_path was already moved,
+    ///                              cloud mv not yet confirmed
+    /// On daemon startup ``Reconcile`` resumes any row whose
+    /// ``pendingOp`` is non-nil.
+    var pendingOp: String?
 
     enum CodingKeys: String, CodingKey {
         case docID = "doc_id"
@@ -42,6 +53,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         case conflictState = "conflict_state"
         case errorState = "error_state"
         case pageIDs = "page_ids"
+        case pendingOp = "pending_op"
     }
 
     // GRDB record plumbing — the ``page_ids`` column is TEXT holding a JSON
@@ -63,6 +75,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         errorState = row["error_state"]
         let raw: String? = row["page_ids"]
         pageIDs = Self.decodePageIDs(raw)
+        pendingOp = row["pending_op"]
     }
 
     func encode(to container: inout PersistenceContainer) {
@@ -82,6 +95,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         container["page_ids"] = try? String(
             data: JSONEncoder().encode(pageIDs), encoding: .utf8
         )
+        container["pending_op"] = pendingOp
     }
 
     // Memberwise init used by callers constructing new rows (Codable gives
@@ -100,7 +114,8 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         lastPushAt: String? = nil,
         conflictState: String? = nil,
         errorState: String? = nil,
-        pageIDs: [String] = []
+        pageIDs: [String] = [],
+        pendingOp: String? = nil
     ) {
         self.docID = docID
         self.parentID = parentID
@@ -116,6 +131,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         self.conflictState = conflictState
         self.errorState = errorState
         self.pageIDs = pageIDs
+        self.pendingOp = pendingOp
     }
 
     private static func decodePageIDs(_ raw: String?) -> [String] {
