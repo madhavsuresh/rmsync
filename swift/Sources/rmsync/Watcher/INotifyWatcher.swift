@@ -230,7 +230,32 @@ final class INotifyWatcher: @unchecked Sendable {
         }
         if (event.mask & InotifyMask.movedTo) != 0 {
             if let from = pendingMoves.removeValue(forKey: event.cookie) {
-                // Treat as: delete @ from-path, create/modify @ to-path.
+                // In .markdown mode, rename pairs whose endpoints
+                // BOTH pass the watcher filter become a single
+                // ``.renameRemote`` job. The worker handles
+                // delete-vs-rename gating; the watcher just
+                // surfaces the structural fact "these two paths
+                // are the same file before/after". Endpoints that
+                // fail the filter (one side outside the tree, etc.)
+                // fall back to the historical delete+create
+                // decomposition.
+                if mode == .markdown,
+                   !isDir,
+                   !WatcherFilter.shouldIgnore(from.path, root: syncDir, mode: mode),
+                   !WatcherFilter.shouldIgnore(url.path, root: syncDir, mode: mode) {
+                    Task {
+                        await queue.enqueue(Job(
+                            kind: .renameRemote,
+                            docID: nil,
+                            hint: RenameHint.encode(from: from.path, to: url.path)
+                        ))
+                    }
+                    return
+                }
+
+                // Fallback: treat as delete @ from-path,
+                // create/modify @ to-path. Same as before for
+                // dir renames or filtered-out endpoints.
                 handleDelete(path: from.path)
                 if isDir, let inotify {
                     walkAndWatch(rootURL: url, inotify: inotify)

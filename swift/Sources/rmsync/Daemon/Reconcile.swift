@@ -35,6 +35,27 @@ enum Reconcile {
             ))
             resumed += 1
         }
+        // Resume pending_rename: the row's ``local_path`` already
+        // points at the destination (the worker writes that before
+        // the cloud mv); ``remote_path`` is still the source. Re-
+        // enqueue a renameRemote with hint "<localPath>\t<localPath>"
+        // — both halves point at the (already-moved) file, and the
+        // worker's path-relative remote computation derives the
+        // correct new remote from local_path. The from-side of the
+        // hint is unused except for the lookup, which falls through
+        // to the to-side via state.byLocalPath.
+        for doc in docs where doc.pendingOp == "pending_rename" {
+            Logger.shared.info(
+                "resuming in-flight rename from prior run",
+                meta: ["doc_id": doc.docID, "remote": doc.remotePath, "path": doc.localPath]
+            )
+            await queue.enqueue(Job(
+                kind: .renameRemote,
+                docID: doc.docID,
+                hint: RenameHint.encode(from: doc.localPath, to: doc.localPath)
+            ))
+            resumed += 1
+        }
 
         // Second pass: fresh local-deletion detection. Skip rows we
         // already enqueued above (they're still in pending_op state),

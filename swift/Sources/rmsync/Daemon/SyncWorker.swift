@@ -109,12 +109,117 @@ actor SyncWorker {
             try await deleteRemote(job)
 
         case .renameRemote:
-            // Phase 4 — landing in the next commit on this branch.
-            Logger.shared.debug(
-                "renameRemote not yet implemented",
-                meta: ["kind": job.kind.rawValue, "hint": job.hint]
-            )
+            try await renameOnCloud(job)
         }
+    }
+
+    // MARK: - rename propagation
+
+    /// Apply a watcher-detected local rename to the cloud:
+    ///   1. Decode hint as ``"<from>\t<to>"``.
+    ///   2. Look up the doc by ``from`` (the pre-rename local path).
+    ///      If unknown, the file wasn't tracked — bail.
+    ///   3. Acquire the per-doc lock so we serialise against any
+    ///      in-flight push for the same document.
+    ///   4. Compute the new remote path from ``to`` relative to
+    ///      ``cfg.syncDir``.
+    ///   5. Mark ``pending_op = "pending_rename"`` and update
+    ///      ``local_path`` to ``to`` so a crash here is recoverable.
+    ///   6. ``Cloud.mv(oldRemote → newRemote)``.
+    ///   7. Update ``remote_path`` and clear ``pending_op``.
+    ///
+    /// Cross-folder renames inside the sync tree (e.g. moving
+    /// ``foo/x.md`` to ``bar/x.md``) take the same code path —
+    /// rmapi's ``mv`` understands directory destinations natively.
+    private func renameOnCloud(_ job: Job) async throws {
+        guard cfg.deletion.enablePropagation else {
+            Logger.shared.debug(
+                "rename propagation disabled; ignoring renameRemote",
+                meta: ["hint": job.hint]
+            )
+            return
+        }
+        guard let pair = RenameHint.decode(job.hint) else {
+            Logger.shared.warn(
+                "renameRemote: malformed hint",
+                meta: ["hint": job.hint]
+            )
+            return
+        }
+
+        // Find the doc via its pre-rename local path. If the
+        // watcher already updated state.db for any reason (e.g.
+        // resume-after-crash with pending_op = "pending_rename")
+        // we also accept the post-rename path so the resume path
+        // self-heals.
+        let fromHit = try await state.byLocalPath(pair.from)
+        let toHit = try await state.byLocalPath(pair.to)
+        guard let doc = fromHit ?? toHit else {
+            Logger.shared.info(
+                "renameRemote ignored: untracked file",
+                meta: ["from": pair.from, "to": pair.to]
+            )
+            return
+        }
+
+        let token = await locks.acquire(doc.docID)
+        defer { Task { await token.release() } }
+
+        // Compute the new remote path. Path semantics: the cloud
+        // doc lives at "/Writing/<rel-without-extension>" by
+        // convention. We sanitize each segment the same way
+        // ``Paths.remoteToLocal`` does so a round-trip is stable.
+        guard let relTo = PathUtilities.resolvedRelativePath(
+            from: cfg.syncDir, to: URL(fileURLWithPath: pair.to)
+        ) else {
+            Logger.shared.warn(
+                "renameRemote: target outside sync_dir",
+                meta: ["doc_id": doc.docID, "to": pair.to]
+            )
+            return
+        }
+        let cleanRel = relTo.dropLast() + [
+            URL(fileURLWithPath: pair.to).deletingPathExtension().lastPathComponent
+        ]
+        let newRemote = "/" + ([cfg.remoteFolder] + cleanRel).joined(separator: "/")
+
+        // Stamp pending_op and the new local_path. The local file
+        // already lives at ``pair.to`` on disk; matching state.db
+        // before the cloud call means a crash here resumes
+        // correctly via Reconcile's pending_rename pass.
+        var updated = doc
+        updated.localPath = pair.to
+        updated.pendingOp = "pending_rename"
+        try await state.upsert(updated)
+
+        do {
+            try await cloud.mv(from: doc.remotePath, to: newRemote)
+        } catch {
+            Logger.shared.error(
+                "renameRemote: cloud mv failed; pending_op left set for retry",
+                meta: [
+                    "doc_id": doc.docID,
+                    "from": doc.remotePath,
+                    "to": newRemote,
+                    "error": "\(error)",
+                ]
+            )
+            return
+        }
+
+        var done = updated
+        done.remotePath = newRemote
+        done.pendingOp = nil
+        try await state.upsert(done)
+
+        Logger.shared.info(
+            "rename: cloud mv complete",
+            meta: [
+                "doc_id": doc.docID,
+                "from": doc.remotePath,
+                "to": newRemote,
+            ]
+        )
     }
 
     // MARK: - delete propagation

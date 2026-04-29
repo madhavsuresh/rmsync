@@ -33,6 +33,18 @@ final class LocalWatcher: @unchecked Sendable {
     private let eventQueue: DispatchQueue
     private var debounceTimers: [String: DispatchSourceTimer] = [:]
     private let timerQueue: DispatchQueue
+    /// Pairs ``.itemRenamed`` events into a single from→to. macOS
+    /// FSEvents fires the flag on both endpoints of a same-volume
+    /// ``mv``; the source path no longer exists by the time we see
+    /// it, the destination does. The pairer correlates within a
+    /// 200ms window. Cross-volume moves come through as
+    /// ``.itemRemoved + .itemCreated`` and fall back to the
+    /// existing delete+create decomposition.
+    private let renamePairer = RenamePairer(windowSeconds: 0.2)
+    /// Periodically reaps half-pairs (a ``.itemRenamed`` source
+    /// with no matching destination) and treats them as plain
+    /// deletes. Same cadence as the inotify reaper on Linux.
+    private var reapTimer: DispatchSourceTimer?
 
     init(
         syncDir: URL,
@@ -105,6 +117,18 @@ final class LocalWatcher: @unchecked Sendable {
         self.stream = stream
         FSEventStreamSetDispatchQueue(stream, eventQueue)
         FSEventStreamStart(stream)
+
+        // Reaper for unmatched rename halves. Runs at half the
+        // pairing window so we never let an orphan linger more
+        // than ~window beyond expiry.
+        let reap = DispatchSource.makeTimerSource(queue: eventQueue)
+        reap.schedule(deadline: .now() + 0.1, repeating: .milliseconds(100))
+        reap.setEventHandler { [weak self] in
+            self?.reapOrphanRenames()
+        }
+        self.reapTimer = reap
+        reap.resume()
+
         Logger.shared.info("watcher started", meta: ["sync_dir": syncDir.path])
     }
 
@@ -115,6 +139,8 @@ final class LocalWatcher: @unchecked Sendable {
             FSEventStreamRelease(stream)
         }
         stream = nil
+        reapTimer?.cancel()
+        reapTimer = nil
         timerQueue.async { [weak self] in
             guard let self else { return }
             for (_, timer) in self.debounceTimers { timer.cancel() }
@@ -132,13 +158,68 @@ final class LocalWatcher: @unchecked Sendable {
                 meta: ["path": path, "flags": String(raw, radix: 16)]
             )
             let flag = LocalWatcher.Flag(rawValue: raw)
+
+            // Rename pairing — only meaningful in .markdown mode
+            // (inbox is push-only; there's nothing to "rename" on
+            // the cloud side). Same-volume mv produces .itemRenamed
+            // on both endpoints; pair them within a 200ms window.
+            // The source side is identified by the absence of the
+            // file on disk by the time we observe it.
+            if mode == .markdown, flag.contains(.itemRenamed) {
+                let exists = FileManager.default.fileExists(atPath: path)
+                Task { [renamePairer] in
+                    let pair: (from: String, to: String)?
+                    if exists {
+                        pair = await renamePairer.observeTo(path: path)
+                    } else {
+                        pair = await renamePairer.observeFrom(path: path)
+                    }
+                    if let pair { self.emitRenamePair(from: pair.from, to: pair.to) }
+                }
+                continue
+            }
+
             if flag.contains(.itemRemoved) {
                 handleDelete(path: path)
             } else if flag.contains(.itemCreated)
-                || flag.contains(.itemModified)
-                || flag.contains(.itemRenamed) {
+                || flag.contains(.itemModified) {
                 handleChange(path: path)
             }
+        }
+    }
+
+    /// Emit a ``.renameRemote`` job for a paired rename. Both
+    /// endpoints must pass the watcher filter; if either fails,
+    /// fall back to the historical delete+create.
+    private func emitRenamePair(from: String, to: String) {
+        if WatcherFilter.shouldIgnore(from, root: syncDir, mode: mode)
+            || WatcherFilter.shouldIgnore(to, root: syncDir, mode: mode) {
+            handleDelete(path: from)
+            handleChange(path: to)
+            return
+        }
+        Logger.shared.debug(
+            "rename paired",
+            meta: ["from": from, "to": to]
+        )
+        Task {
+            await queue.enqueue(Job(
+                kind: .renameRemote,
+                docID: nil,
+                hint: RenameHint.encode(from: from, to: to)
+            ))
+        }
+    }
+
+    /// Drain orphan rename halves whose partner never showed up.
+    /// Source-side orphans become deletes; destination-side
+    /// orphans become creates. Runs on the event queue; safe to
+    /// call frequently.
+    private func reapOrphanRenames() {
+        Task { [renamePairer] in
+            let (orphanFroms, orphanTos) = await renamePairer.flushExpired()
+            for f in orphanFroms { self.handleDelete(path: f) }
+            for t in orphanTos { self.handleChange(path: t) }
         }
     }
 

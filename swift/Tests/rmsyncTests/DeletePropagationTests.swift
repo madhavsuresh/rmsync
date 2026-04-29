@@ -152,10 +152,10 @@ struct DeletePropagationTests {
         #expect(Set(collected) == Set(["in-flight", "fresh-missing"]))
     }
 
-    @Test("Reconcile leaves unrelated pending_op rows alone")
-    func reconcileIgnoresPendingRename() async throws {
-        // A pending_rename row should not be picked up by the
-        // delete reconciler — that's Phase 5's territory.
+    @Test("Reconcile distinguishes pending_rename from pending_delete")
+    func reconcileDistinguishesPendingOps() async throws {
+        // A pending_rename row should be re-enqueued as
+        // .renameRemote (Phase 4 territory), not .deleteRemote.
         let dir = try tempDir()
         let state = try State(path: dir.appendingPathComponent("state.db"))
         let queue = JobQueue()
@@ -170,7 +170,11 @@ struct DeletePropagationTests {
         ))
         try await Reconcile.localDeletions(state: state, queue: queue)
 
-        // Queue should be empty — nothing to enqueue.
+        let job = await queue.dequeue(timeout: 0.05)
+        #expect(job?.kind == .renameRemote)
+        #expect(job?.docID == "renaming")
+        await queue.taskDone()
+        // No further jobs.
         #expect(await queue.dequeue(timeout: 0.05) == nil)
     }
 
