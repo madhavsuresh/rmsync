@@ -13,34 +13,51 @@ identical to the macOS build.
 
 ---
 
-## Quick start
+## Quick start (one-liner)
 
-Prereqs: Docker (engine + compose plugin) on a Linux host, a
-reMarkable cloud account (free tier is enough), and some disk for
-the synced `.md` files.
+Prereqs: Docker engine + compose plugin on a Linux host, and a
+reMarkable cloud account (free tier is enough).
 
 ```sh
-# 1. Lay out the volume directories
-mkdir -p data/{config,state,sync}
+curl -fsSL https://raw.githubusercontent.com/madhavsuresh/rmsync/main/scripts/docker-quickstart.sh | sh
+```
 
-# 2. Drop the docker-compose.yml from this repo next to ./data/
+That script:
+
+1. Verifies docker + compose are installed and the daemon is reachable.
+2. Creates `./rmsync/data/{config,state,sync}` (or pass a custom path).
+3. Writes a `docker-compose.yml` with **your host user's UID:GID
+   baked in** so synced files belong to you, not root.
+4. `docker compose pull && up -d`.
+5. Prints exactly the next command to run for one-time rmapi auth.
+
+After it finishes, follow the printed instructions:
+
+```sh
+cd rmsync
+docker exec -it rmsync rmapi              # interactive auth
+docker exec rmsync rmsync doctor          # verify
+```
+
+If `doctor` is all ✓, you're done. The daemon is syncing.
+
+### Quick start (manual, if you don't trust curl|sh)
+
+The same steps spelled out:
+
+```sh
+mkdir -p data/{config,state,sync}
 curl -fsSL -o docker-compose.yml \
     https://raw.githubusercontent.com/madhavsuresh/rmsync/main/docker-compose.yml
 
-# 3. Start the container
+# Optional but recommended: uncomment the user: line in
+# docker-compose.yml and set it to your UID:GID:
+sed -i "s|# user: \"1000:1000\"|user: \"$(id -u):$(id -g)\"|" docker-compose.yml
+
 docker compose up -d
-
-# 4. One-time rmapi authentication (interactive)
-docker exec -it rmsync rmapi
-#   Open https://my.remarkable.com/device/desktop/connect
-#   Sign in, copy the 8-char code, paste it into the rmapi prompt.
-
-# 5. Verify
+docker exec -it rmsync rmapi              # interactive auth
 docker exec rmsync rmsync doctor
-docker logs --tail 20 rmsync
 ```
-
-If `doctor` is all ✓, you're done. The daemon is now syncing.
 
 ---
 

@@ -1,20 +1,32 @@
-# Minimal docker compose for rmsync. Drop this file next to a ``data/``
-# directory containing ``config/``, ``state/``, and ``sync/`` subfolders
-# (the entrypoint creates them on first run if missing) and:
+# Single-service compose for rmsync. Three ways to use it:
 #
-#   docker compose up -d
-#   docker exec -it rmsync rmapi   # one-time reMarkable auth
-#   docker exec rmsync rmsync doctor
+#   1. Quickstart (recommended):
+#        curl -fsSL https://raw.githubusercontent.com/madhavsuresh/rmsync/main/scripts/docker-quickstart.sh | sh
+#      That script writes a customised version of this file into
+#      ./rmsync/, with the host user's UID:GID baked in so files
+#      written into ./data/sync are owned by you (not root).
 #
-# Logs: ``docker logs rmsync`` (the daemon's structured-JSON sink writes
-# to stderr; docker captures it).
+#   2. Manual:
+#        mkdir -p data/{config,state,sync}
+#        curl -fsSL -o docker-compose.yml \
+#          https://raw.githubusercontent.com/madhavsuresh/rmsync/main/docker-compose.yml
+#        # Uncomment the user: line below with your UID:GID.
+#        docker compose up -d
 #
-# To upgrade: ``docker compose pull && docker compose up -d``.
+#   3. From a clone of this repo: ``docker compose up -d`` works
+#      directly, but the daemon runs as root → files in ./data/sync
+#      end up root-owned. Edit user: line first.
 #
-# inotify watch limit caveat: if you have a large sync tree
-# (many subdirectories), bump the host's
-# ``fs.inotify.max_user_watches`` sysctl. Default is 8192. See
-# docs/DOCKER.md for the one-line fix.
+# After it's up:
+#
+#   docker exec -it rmsync rmapi          # one-time reMarkable auth
+#   docker exec rmsync rmsync doctor      # all ✓
+#   docker exec rmsync rmsync status      # live state
+#   docker logs -f rmsync                 # structured-JSON daemon log
+#
+# inotify watch limit: if your sync tree has more than ~5000
+# subdirectories, raise the host's ``fs.inotify.max_user_watches``
+# (default 8192). See docs/DOCKER.md for the one-line fix.
 
 services:
   rmsync:
@@ -22,23 +34,26 @@ services:
     container_name: rmsync
     restart: unless-stopped
 
-    # Run as a non-root user so files in ``./data/sync`` end up
-    # owned by you, not root. Adjust UID/GID to your host user
-    # (``id -u`` / ``id -g``). Without this the host user can't
-    # edit files written by the daemon.
+    # Run the daemon as your host user so files written into
+    # ./data/sync end up owned by you. Set to your ``id -u:id -g``.
+    # Without this the daemon runs as root and you can't edit the
+    # synced files from your host editor without sudo. The
+    # quickstart script bakes this in automatically.
     # user: "1000:1000"
 
     volumes:
+      # rmapi.conf (one-time auth) + config.toml — survives restarts.
       - ./data/config:/config
+      # state.db, ipc.sock — daemon-private; don't edit by hand.
       - ./data/state:/state
+      # Your reMarkable-bound .md tree. Edit files here on the host.
       - ./data/sync:/sync
 
     healthcheck:
-      # ``rmsync status`` exits 0 when the daemon is responsive on
-      # the IPC socket. Fast (<100ms typical) so the 10s interval
-      # doesn't stress the daemon. ``start_period`` lets the
-      # initial reconcile finish before the healthcheck counts
-      # against the container.
+      # ``rmsync status`` exits 0 when the daemon's IPC socket is
+      # responsive (<100ms typical). 60s start_period gives the
+      # initial reconcile time to finish before the healthcheck
+      # counts against container health.
       test: ["CMD", "/usr/local/bin/rmsync", "status"]
       interval: 30s
       timeout: 5s

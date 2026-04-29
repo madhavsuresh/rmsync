@@ -50,14 +50,20 @@ rmsync doctor                   # should be all ✓
 ### Docker (Linux / mini-PC)
 
 If you don't have a Mac, run rmsync as a daemon container on any
-Linux host. No menubar, but everything else works the same:
+Linux host. No menubar, but everything else works the same.
+**One-liner** that handles everything — checks docker, makes the
+volume dirs, writes a compose file with your UID baked in, pulls
+the image, starts the container, and prints the auth command:
 
 ```sh
-mkdir -p data/{config,state,sync}
-curl -fsSL -o docker-compose.yml \
-    https://raw.githubusercontent.com/madhavsuresh/rmsync/main/docker-compose.yml
-docker compose up -d
-docker exec -it rmsync rmapi   # one-time reMarkable auth
+curl -fsSL https://raw.githubusercontent.com/madhavsuresh/rmsync/main/scripts/docker-quickstart.sh | sh
+```
+
+Then:
+
+```sh
+cd rmsync
+docker exec -it rmsync rmapi   # one-time reMarkable auth (interactive)
 docker exec rmsync rmsync doctor
 ```
 
