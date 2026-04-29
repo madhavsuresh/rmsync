@@ -208,6 +208,37 @@ struct TrashTests {
 
     // MARK: - schema v5 round-trip
 
+    // MARK: - CLI integration (smoke)
+
+    @Test("trash list/restore command path produces expected entries")
+    func cliBasicFlow() async throws {
+        let dir = try tempSyncDir()
+        // Park two files via the public API; the CLI surfaces the
+        // same Trash.list / Trash.restore calls we test here.
+        let a = dir.appendingPathComponent("a.md")
+        let b = dir.appendingPathComponent("nest/b.md")
+        try FileManager.default.createDirectory(
+            at: b.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try "1".write(to: a, atomically: true, encoding: .utf8)
+        try "2".write(to: b, atomically: true, encoding: .utf8)
+        _ = try Trash.moveIn(a, syncDir: dir, now: fixedDate(0))
+        _ = try Trash.moveIn(b, syncDir: dir, now: fixedDate(60))
+
+        let listed = try Trash.list(syncDir: dir)
+        #expect(listed.count == 2)
+
+        // Simulate ``rmsync trash restore --all``.
+        for e in listed {
+            _ = try Trash.restore(e, syncDir: dir)
+        }
+        // Both files restored.
+        #expect(FileManager.default.fileExists(atPath: a.path))
+        #expect(FileManager.default.fileExists(atPath: b.path))
+        // Trash now empty.
+        #expect(try Trash.list(syncDir: dir).isEmpty)
+    }
+
     @Test("Document round-trips pending_op through GRDB")
     func documentPendingOpRoundTrip() async throws {
         let dir = try tempSyncDir()

@@ -27,6 +27,7 @@ struct RMSyncCommand: AsyncParsableCommand {
             Relocate.self,
             Init.self,
             Uninstall.self,
+            TrashCmd.self,
         ],
         defaultSubcommand: nil
     )

@@ -415,3 +415,128 @@ struct Uninstall: ParsableCommand {
         print("Run ./uninstall.sh (or ./uninstall.sh --purge) from the repo root.")
     }
 }
+
+// MARK: - trash
+
+/// Inspects and recovers files parked under
+/// ``<sync_dir>/.rmsync-trash`` by the rename / delete propagation
+/// pipeline. The trash is filesystem-backed (no DB), so these
+/// commands work whether or not the daemon is running.
+///
+/// Type name avoids the bare ``Trash`` collision with the
+/// ``Trash`` enum in ``Trash.swift``; the user-facing command
+/// is still ``rmsync trash`` via ``commandName``.
+struct TrashCmd: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "trash",
+        abstract: "Inspect and recover soft-deleted files.",
+        subcommands: [List.self, Restore.self, Prune.self],
+        defaultSubcommand: List.self
+    )
+
+    /// ``rmsync trash list`` — chronological dump of every file
+    /// in the trash. Format: ``<stamp>  <relPath>``, two-column
+    /// space-padded so it lines up under a fixed-width terminal.
+    struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "list",
+            abstract: "List files currently in the trash."
+        )
+        func run() async throws {
+            let cfg = try Config.load()
+            let entries = try rmsync.Trash.list(syncDir: cfg.syncDir)
+            if entries.isEmpty {
+                print("(trash is empty)")
+                return
+            }
+            for e in entries {
+                print("\(e.stamp)  \(e.relPath)")
+            }
+            print("")
+            print("Restore a file with:  rmsync trash restore '<rel-path>'")
+            print("Or restore all:       rmsync trash restore --all")
+        }
+    }
+
+    /// ``rmsync trash restore`` — move file(s) back from the trash
+    /// into ``sync_dir``. The daemon (if running) picks them up
+    /// on the next watcher tick and re-pushes to the cloud as if
+    /// they were freshly created.
+    struct Restore: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "restore",
+            abstract: "Move a trashed file back into sync_dir."
+        )
+        @Argument(help: "Relative path inside the trash (or omit with --all).")
+        var relPath: String?
+        @Flag(name: .long, help: "Restore every file currently in the trash.")
+        var all: Bool = false
+
+        func run() async throws {
+            let cfg = try Config.load()
+            let entries = try rmsync.Trash.list(syncDir: cfg.syncDir)
+            if entries.isEmpty {
+                print("(trash is empty — nothing to restore)")
+                return
+            }
+
+            let targets: [rmsync.Trash.Entry]
+            if all {
+                targets = entries
+            } else if let rel = relPath {
+                let matches = entries.filter { $0.relPath == rel }
+                if matches.isEmpty {
+                    print("no trash entry with rel-path '\(rel)' — try `rmsync trash list`.")
+                    throw ExitCode(1)
+                }
+                // Multiple entries can share a rel-path if the file
+                // was deleted, recreated, deleted again. Restore the
+                // most recent (entries are ordered ascending).
+                targets = [matches.last!]
+            } else {
+                print("usage: rmsync trash restore <rel-path>  |  rmsync trash restore --all")
+                throw ExitCode(1)
+            }
+
+            var restored = 0
+            for e in targets {
+                do {
+                    let dest = try rmsync.Trash.restore(e, syncDir: cfg.syncDir)
+                    print("restored: \(dest.path)")
+                    restored += 1
+                } catch let err as TrashError {
+                    print("skip: \(err)")
+                }
+            }
+            if restored > 0 {
+                print("")
+                print("\(restored) file(s) restored. The daemon will re-push them on the next watcher tick.")
+            }
+        }
+    }
+
+    /// ``rmsync trash prune`` — explicitly drop trash entries
+    /// older than ``trash_retention_days``. The daemon does this
+    /// automatically at startup; the manual command exists so a
+    /// user can free disk on demand without restarting.
+    struct Prune: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "prune",
+            abstract: "Remove trash entries older than the retention window."
+        )
+        @Option(name: .customLong("days"), help: "Override trash_retention_days for this run.")
+        var daysOverride: Int?
+
+        func run() async throws {
+            let cfg = try Config.load()
+            let days = daysOverride ?? cfg.deletion.trashRetentionDays
+            if days <= 0 {
+                print("trash_retention_days is 0 — keeping forever; nothing to prune.")
+                return
+            }
+            let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+            let n = try rmsync.Trash.prune(syncDir: cfg.syncDir, olderThan: cutoff)
+            print("pruned \(n) trash stamp(s) older than \(days) day(s).")
+        }
+    }
+}
