@@ -1,4 +1,4 @@
-# Multi-stage build: heavy ``swift:6.0-jammy`` toolchain layer, then a
+# Multi-stage build: heavy ``swift:6.1-jammy`` toolchain layer, then a
 # slim runtime layer. The runtime image bundles the rmsync binary,
 # the rmapi binary (downloaded from upstream releases — pinned), the
 # rmsync entrypoint script, and a default ``config.toml`` template.
@@ -17,7 +17,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: build rmsync from source
 # -----------------------------------------------------------------------------
-FROM swift:6.0-jammy AS builder
+FROM swift:6.1-jammy AS builder
 
 # libsqlite3-dev for GRDB's underlying SQLite linkage. ca-certificates
 # so SwiftPM can fetch dependencies over HTTPS during ``swift build``.
@@ -46,7 +46,7 @@ RUN swift build \
 # -----------------------------------------------------------------------------
 # Stage 2: minimal runtime image
 # -----------------------------------------------------------------------------
-FROM swift:6.0-jammy-slim AS runtime
+FROM swift:6.1-jammy-slim AS runtime
 
 # Runtime needs: ca-certificates (for rmapi -> reMarkable cloud TLS),
 # libsqlite3-0 (GRDB runtime dep — header-less variant of the build
