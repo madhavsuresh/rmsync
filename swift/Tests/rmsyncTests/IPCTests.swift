@@ -133,7 +133,8 @@ struct IPCTests {
         // See IPCServer.swift for why this uses ``withUnsafeMutableBytes``.
         withUnsafeMutableBytes(of: &addr.sun_path) { dst in
             pathCStr.withUnsafeBufferPointer { src in
-                _ = memcpy(dst.baseAddress, src.baseAddress, pathCStr.count)
+                guard let d = dst.baseAddress, let s = src.baseAddress else { return }
+                _ = memcpy(d, s, pathCStr.count)
             }
         }
         let rc = withUnsafePointer(to: &addr) { ptr -> Int32 in

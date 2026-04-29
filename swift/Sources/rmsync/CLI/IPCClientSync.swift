@@ -150,9 +150,12 @@ enum IPCClientSync {
         // instead of ``withUnsafeMutablePointer`` — the sun_path tuple
         // shape differs between Darwin and Glibc, breaking type
         // inference of the pointer closure.
+        // See IPCServer.swift for why memcpy needs the non-optional
+        // pointer guard on Linux.
         withUnsafeMutableBytes(of: &addr.sun_path) { dst in
             pathCStr.withUnsafeBufferPointer { src in
-                _ = memcpy(dst.baseAddress, src.baseAddress, pathCStr.count)
+                guard let d = dst.baseAddress, let s = src.baseAddress else { return }
+                _ = memcpy(d, s, pathCStr.count)
             }
         }
 

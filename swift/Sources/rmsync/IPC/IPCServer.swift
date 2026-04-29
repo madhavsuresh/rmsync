@@ -61,9 +61,15 @@ actor IPCServer {
         // can't infer the closure's parameter type across platforms,
         // so use the byte-oriented ``withUnsafeMutableBytes`` instead
         // — same effect, no element-type dependency.
+        // Glibc's ``memcpy`` is imported as taking non-optional
+        // pointers; Darwin's accepts optionals. Guard-let to satisfy
+        // the strictest signature. ``baseAddress`` is non-nil
+        // whenever the buffer has capacity, which it always does
+        // for ``sun_path`` and a non-empty ``pathBytes``.
         withUnsafeMutableBytes(of: &addr.sun_path) { dst in
             pathBytes.withUnsafeBufferPointer { src in
-                _ = memcpy(dst.baseAddress, src.baseAddress, pathBytes.count)
+                guard let d = dst.baseAddress, let s = src.baseAddress else { return }
+                _ = memcpy(d, s, pathBytes.count)
             }
         }
 
