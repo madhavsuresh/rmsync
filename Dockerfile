@@ -65,11 +65,18 @@ RUN apt-get update \
 # when upstream releases a new one. Architecture-aware via TARGETARCH
 # (set automatically by buildx during multi-arch builds).
 #
-# Naming convention from ddvk/rmapi releases: ``.zip`` archives named
-# ``rmapi-linux-{amd64,arm64}.zip`` (matches the macOS install.sh
-# pattern, which uses ``rmapi-macos-{arm64,intel}.zip``). Bumping to
-# v0.0.30 to match the version pinned by macOS CI.
-ARG RMAPI_VERSION=v0.0.30
+# Asset naming verified against ddvk/rmapi v0.0.32 release page:
+#   rmapi-linux-amd64.tar.gz
+#   rmapi-linux-arm64.tar.gz
+#   rmapi-macos-{arm64,intel}.zip
+#
+# v0.0.32 is the first release with consistent ``linux-{arch}.tar.gz``
+# asset names AND a Linux arm64 build. v0.0.30 didn't ship arm64,
+# v0.0.31's naming is inconsistent. Lower bound for both archs is
+# v0.0.32. macOS CI uses v0.0.29 from io41/tap; the Linux daemon's
+# version probe (``Cloud.rmapiMin``) accepts down to 0.0.29 and up
+# to 0.1.0, so v0.0.32 is in-range.
+ARG RMAPI_VERSION=v0.0.32
 ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
@@ -77,10 +84,10 @@ RUN set -eux; \
         arm64) RMAPI_ARCH=linux-arm64 ;; \
         *) echo "Unsupported arch: ${TARGETARCH}"; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/rmapi.zip \
-        "https://github.com/ddvk/rmapi/releases/download/${RMAPI_VERSION}/rmapi-${RMAPI_ARCH}.zip"; \
-    unzip -o /tmp/rmapi.zip -d /usr/local/bin rmapi; \
-    rm /tmp/rmapi.zip; \
+    curl -fsSL -o /tmp/rmapi.tar.gz \
+        "https://github.com/ddvk/rmapi/releases/download/${RMAPI_VERSION}/rmapi-${RMAPI_ARCH}.tar.gz"; \
+    tar -xzf /tmp/rmapi.tar.gz -C /usr/local/bin rmapi; \
+    rm /tmp/rmapi.tar.gz; \
     chmod +x /usr/local/bin/rmapi; \
     rmapi version
 
