@@ -5,6 +5,12 @@ import Foundation
 struct Job: Sendable, Equatable {
     enum Kind: String, Sendable {
         case pull, push, deleteRemote, deleteLocal, renameRemote
+        /// The cloud poller noticed a tracked doc whose remote_path
+        /// has changed. The worker moves the local file to the new
+        /// path (after seeding the echo fence so the resulting
+        /// watcher event for the move is suppressed) and updates
+        /// state.db. Symmetric counterpart to ``renameRemote``.
+        case renameLocal
         /// Push a non-Markdown file (PDF / EPUB) from the configured
         /// inbox directory to ``inbox.remote_folder`` on the cloud.
         /// Distinct from ``push`` because it bypasses the Markdown

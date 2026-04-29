@@ -110,6 +110,9 @@ actor SyncWorker {
 
         case .renameRemote:
             try await renameOnCloud(job)
+
+        case .renameLocal:
+            try await renameOnLocal(job)
         }
     }
 
@@ -218,6 +221,117 @@ actor SyncWorker {
                 "doc_id": doc.docID,
                 "from": doc.remotePath,
                 "to": newRemote,
+            ]
+        )
+    }
+
+    /// Apply a cloud-detected rename to the local tree. Job hint
+    /// is ``"<oldRemote>\t<newRemote>"``. Steps:
+    ///   1. Decode hint; resolve doc by docID.
+    ///   2. Compute old + new local paths via ``Paths.remoteToLocal``.
+    ///   3. Per-doc lock.
+    ///   4. **Seed the echo fence on the new local path FIRST.**
+    ///      Otherwise the watcher's ``.itemRenamed`` /
+    ///      ``IN_MOVED_TO`` event for our own move bounces back
+    ///      through the rename pairer and we ship a spurious
+    ///      ``.renameRemote`` job → infinite loop. The fence is
+    ///      load-bearing safety here.
+    ///   5. ``FileManager.moveItem`` from old local to new local.
+    ///      If the old file isn't there (user already renamed it
+    ///      themselves, then the cloud caught up) we just stamp
+    ///      the new path and move on.
+    ///   6. Update ``local_path`` and ``remote_path`` in state.db.
+    private func renameOnLocal(_ job: Job) async throws {
+        guard cfg.deletion.enablePropagation else {
+            Logger.shared.debug(
+                "rename propagation disabled; ignoring renameLocal",
+                meta: ["hint": job.hint]
+            )
+            return
+        }
+        guard let docID = job.docID else {
+            Logger.shared.warn(
+                "renameLocal: missing doc_id",
+                meta: ["hint": job.hint]
+            )
+            return
+        }
+        guard let pair = RenameHint.decode(job.hint) else {
+            Logger.shared.warn(
+                "renameLocal: malformed hint",
+                meta: ["hint": job.hint]
+            )
+            return
+        }
+        guard let doc = try await state.get(docID: docID) else {
+            Logger.shared.info(
+                "renameLocal ignored: no state row",
+                meta: ["doc_id": docID]
+            )
+            return
+        }
+
+        let token = await locks.acquire(docID)
+        defer { Task { await token.release() } }
+
+        let oldLocal = URL(fileURLWithPath: doc.localPath)
+        let newLocal = PathUtilities.remoteToLocal(
+            remotePath: pair.to,
+            syncDir: cfg.syncDir,
+            remoteFolder: cfg.remoteFolder
+        )
+
+        // Seed the echo fence BEFORE the move so the watcher's
+        // event for our own write is suppressed. Mark BOTH the
+        // destination and (for the FSEvents path that fires on
+        // the source endpoint) the origin — the rename pairer
+        // would otherwise see a "from" half it can't match.
+        await fence.mark(newLocal.path)
+        await fence.mark(oldLocal.path)
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: oldLocal.path) {
+            // Make sure the destination directory exists. Cross-
+            // folder cloud renames legitimately land in a parent
+            // that doesn't yet exist locally.
+            try? fm.createDirectory(
+                at: newLocal.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            do {
+                try fm.moveItem(at: oldLocal, to: newLocal)
+            } catch {
+                Logger.shared.error(
+                    "renameLocal: filesystem move failed",
+                    meta: [
+                        "doc_id": docID,
+                        "from": oldLocal.path,
+                        "to": newLocal.path,
+                        "error": "\(error)",
+                    ]
+                )
+                return
+            }
+        } else {
+            Logger.shared.debug(
+                "renameLocal: source absent; updating state only",
+                meta: ["doc_id": docID, "from": oldLocal.path]
+            )
+        }
+
+        var updated = doc
+        updated.localPath = newLocal.path
+        updated.remotePath = pair.to
+        updated.pendingOp = nil
+        try await state.upsert(updated)
+
+        Logger.shared.info(
+            "rename: local mv complete",
+            meta: [
+                "doc_id": docID,
+                "from": oldLocal.path,
+                "to": newLocal.path,
+                "remote": pair.to,
             ]
         )
     }

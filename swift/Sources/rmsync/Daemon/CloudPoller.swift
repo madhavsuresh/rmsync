@@ -108,11 +108,29 @@ actor CloudPoller {
                 anyChange = true
                 Logger.shared.info(
                     "remote renamed/moved",
-                    meta: ["doc_id": node.id, "new_path": remotePath]
+                    meta: [
+                        "doc_id": node.id,
+                        "old_remote": stored.remotePath,
+                        "new_remote": remotePath,
+                    ]
                 )
-                await queue.enqueue(
-                    Job(kind: .renameRemote, docID: node.id, hint: remotePath)
-                )
+                if cfg.deletion.enablePropagation {
+                    // hint = "<oldRemote>\t<newRemote>" so the
+                    // worker can compute both old and new local
+                    // paths via Paths.remoteToLocal and seed the
+                    // echo fence on the new local before doing
+                    // the move.
+                    await queue.enqueue(Job(
+                        kind: .renameLocal,
+                        docID: node.id,
+                        hint: RenameHint.encode(from: stored.remotePath, to: remotePath)
+                    ))
+                } else {
+                    Logger.shared.info(
+                        "remote rename detected (propagation disabled — skip)",
+                        meta: ["doc_id": node.id]
+                    )
+                }
             }
         }
 
