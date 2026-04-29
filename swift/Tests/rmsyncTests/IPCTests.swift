@@ -130,9 +130,10 @@ struct IPCTests {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathCStr = sock.path.utf8CString
-        withUnsafeMutablePointer(to: &addr.sun_path) { raw in
-            raw.withMemoryRebound(to: CChar.self, capacity: pathCStr.count) { dst in
-                _ = memcpy(dst, pathCStr.withUnsafeBufferPointer { $0.baseAddress }, pathCStr.count)
+        // See IPCServer.swift for why this uses ``withUnsafeMutableBytes``.
+        withUnsafeMutableBytes(of: &addr.sun_path) { dst in
+            pathCStr.withUnsafeBufferPointer { src in
+                _ = memcpy(dst.baseAddress, src.baseAddress, pathCStr.count)
             }
         }
         let rc = withUnsafePointer(to: &addr) { ptr -> Int32 in

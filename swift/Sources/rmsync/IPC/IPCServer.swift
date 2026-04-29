@@ -55,9 +55,15 @@ actor IPCServer {
             close(fd)
             throw IPCError.pathTooLong(path)
         }
-        withUnsafeMutablePointer(to: &addr.sun_path) { raw in
-            raw.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dst in
-                _ = memcpy(dst, pathBytes.withUnsafeBufferPointer { $0.baseAddress }, pathBytes.count)
+        // ``sun_path`` is a fixed-size C array, imported into Swift as
+        // a tuple whose shape (number of CChar elements) differs
+        // between Darwin (104) and Glibc (108). ``withUnsafeMutablePointer``
+        // can't infer the closure's parameter type across platforms,
+        // so use the byte-oriented ``withUnsafeMutableBytes`` instead
+        // — same effect, no element-type dependency.
+        withUnsafeMutableBytes(of: &addr.sun_path) { dst in
+            pathBytes.withUnsafeBufferPointer { src in
+                _ = memcpy(dst.baseAddress, src.baseAddress, pathBytes.count)
             }
         }
 

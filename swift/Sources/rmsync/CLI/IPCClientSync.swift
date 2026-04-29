@@ -146,9 +146,13 @@ enum IPCClientSync {
             close(fd)
             throw CallError.daemonUnavailable("socket path too long")
         }
-        withUnsafeMutablePointer(to: &addr.sun_path) { raw in
-            raw.withMemoryRebound(to: CChar.self, capacity: pathCStr.count) { dst in
-                _ = memcpy(dst, pathCStr.withUnsafeBufferPointer { $0.baseAddress }, pathCStr.count)
+        // See IPCServer.swift for why this uses ``withUnsafeMutableBytes``
+        // instead of ``withUnsafeMutablePointer`` — the sun_path tuple
+        // shape differs between Darwin and Glibc, breaking type
+        // inference of the pointer closure.
+        withUnsafeMutableBytes(of: &addr.sun_path) { dst in
+            pathCStr.withUnsafeBufferPointer { src in
+                _ = memcpy(dst.baseAddress, src.baseAddress, pathCStr.count)
             }
         }
 

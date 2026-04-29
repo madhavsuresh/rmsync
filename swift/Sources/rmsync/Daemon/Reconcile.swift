@@ -75,8 +75,11 @@ enum Reconcile {
         while let url = enumerator?.nextObject() as? URL {
             if url.pathExtension != "md" { continue }
 
-            // Same ignore rules as the watcher.
-            if LocalWatcher.shouldIgnore(url.path, syncDir: cfg.syncDir) { continue }
+            // Same ignore rules as the watcher. Routed through
+            // ``WatcherFilter`` (the cross-platform extraction) so
+            // this works on Linux too — ``LocalWatcher`` itself is
+            // gated to macOS-only.
+            if WatcherFilter.shouldIgnore(url.path, syncDir: cfg.syncDir) { continue }
 
             let localPath = url.path
             let stored = try await state.byLocalPath(localPath)
