@@ -205,6 +205,15 @@ level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 # local_dir         = "$HOME/rmsync-writing/_inbox"
 # remote_folder     = "Inbox"
 # delete_after_push = true
+
+# Optional: web dashboard at http://127.0.0.1:7878. macOS users
+# usually prefer the menubar; included here for parity with the
+# Docker config. Auth via Bearer token; if ``auth_token`` is
+# unset, daemon generates one in ``\$STATE_DIR/web-token``.
+# [web]
+# enabled    = true
+# bind_addr  = "127.0.0.1"
+# port       = 7878
 EOF
     yellow "  Edit this file if you want sync_dir somewhere other than ~/rmsync-writing."
 fi

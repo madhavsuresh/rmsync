@@ -34,3 +34,15 @@ level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 # local_dir         = "/sync/_inbox"   # any path; bind-mount in compose if outside /sync
 # remote_folder     = "Inbox"
 # delete_after_push = true
+
+# Optional: web dashboard (replaces the macOS menubar for Linux users).
+# When enabled, daemon listens on the configured TCP port and serves
+# a status page + sync-now/pause/resume actions. Auth via Bearer
+# token; if ``auth_token`` is unset, daemon generates one and writes
+# it to ``$STATE_DIR/web-token``. Expose the port via docker-compose
+# ``ports:`` if you want LAN access.
+# [web]
+# enabled    = true
+# bind_addr  = "0.0.0.0"   # localhost-only is "127.0.0.1"
+# port       = 7878
+# auth_token = ""          # leave empty → auto-generated

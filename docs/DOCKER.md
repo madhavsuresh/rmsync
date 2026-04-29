@@ -110,6 +110,59 @@ of the kernel default; check `docker logs rmsync | grep watch`.
 
 ---
 
+## Web dashboard
+
+Optional embedded HTTP dashboard. Replaces the menubar that
+Linux users don't have — shows tracked docs, conflicts, recent
+push/pull activity, and exposes manual sync-now / pause / resume
+buttons.
+
+Enable in `data/config/config.toml`:
+
+```toml
+[web]
+enabled   = true
+bind_addr = "0.0.0.0"   # 127.0.0.1 for localhost-only; 0.0.0.0 for LAN
+port      = 7878
+# auth_token = "..."    # optional; if unset, daemon generates one
+```
+
+Then bind-mount the port and restart:
+
+```yaml
+# docker-compose.yml
+services:
+  rmsync:
+    # ... existing config ...
+    ports:
+      - "7878:7878"
+```
+
+```sh
+docker compose up -d
+# Read the auto-generated token (only needed if auth_token wasn't set):
+docker exec rmsync cat /state/web-token
+# Open the URL with ?token=... appended:
+#   http://localhost:7878/?token=rmsync-XXXXXXXX-...
+```
+
+The browser stores the token in localStorage on first load, so
+subsequent visits don't need the query string.
+
+**Security:** `bind_addr = "0.0.0.0"` makes the dashboard
+reachable from anywhere on the host's network. The token gates
+all `/api/*` endpoints, but for a non-localhost binding you
+should also be on a trusted LAN. For "just me on my mini-PC,"
+either localhost-only or with the LAN-trusted token is fine.
+
+The dashboard URL also works on the same host without ports
+exposed:
+
+```sh
+docker exec rmsync curl -s http://localhost:7878/api/status \
+    -H "Authorization: Bearer $(docker exec rmsync cat /state/web-token)"
+```
+
 ## Send PDFs / EPUBs to the tablet (inbox)
 
 Drop a `.pdf` or `.epub` into a configured "inbox" folder; the

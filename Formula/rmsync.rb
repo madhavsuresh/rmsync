@@ -231,6 +231,12 @@ class Rmsync < Formula
       # local_dir         = "$HOME/rmsync-writing/_inbox"
       # remote_folder     = "Inbox"
       # delete_after_push = true
+
+      # Optional: web dashboard at http://127.0.0.1:7878.
+      # [web]
+      # enabled    = true
+      # bind_addr  = "127.0.0.1"
+      # port       = 7878
       TOML
         echo "  Edit it if you want sync_dir somewhere other than ~/rmsync-writing"
         echo "  (or run 'rmsync relocate <new-path>' after the daemon comes up)."

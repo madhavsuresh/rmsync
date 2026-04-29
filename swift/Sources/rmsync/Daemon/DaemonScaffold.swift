@@ -120,6 +120,15 @@ enum DaemonScaffold {
             meta: ["path": Paths.ipcSocketPath.path]
         )
 
+        // Optional embedded HTTP dashboard (``[web]`` config block).
+        // Disabled by default; when enabled, generates a random
+        // auth token if the user didn't set one and writes it to
+        // ``$STATE_DIR/web-token`` so they can read it without
+        // hand-editing config.
+        let httpServer = try await Self.startHTTPDashboardIfEnabled(
+            cfg: cfg, bus: bus, queue: queue, state: state, poller: poller
+        )
+
         // Reconcile: deletions → initial pull → local creates/edits.
         do {
             try await Reconcile.localDeletions(state: state, queue: queue)
@@ -230,6 +239,7 @@ enum DaemonScaffold {
         busTask.cancel()
         watcher.stop()
         inboxWatcher?.stop()
+        if let httpServer { await httpServer.stop() }
         await poller.stop()
         pollerTask.cancel()
         for w in workers { await w.stop() }
@@ -288,6 +298,61 @@ enum DaemonScaffold {
             s.pid = Int(getpid())
             s.version = Version.current
         }
+    }
+
+    /// Spin up the optional HTTP dashboard if the user enabled it
+    /// in ``[web]``. Returns nil if the block is absent or
+    /// ``enabled`` is false. Generates a random auth token on first
+    /// run and persists it to ``$STATE_DIR/web-token`` so the user
+    /// can paste it into the dashboard URL without editing config.
+    private static func startHTTPDashboardIfEnabled(
+        cfg: Config, bus: StateBus, queue: JobQueue,
+        state: State, poller: CloudPoller
+    ) async throws -> HTTPServer? {
+        guard let web = cfg.web, web.enabled else { return nil }
+
+        // Resolve the auth token: prefer config-provided value;
+        // otherwise generate one and write to STATE_DIR/web-token.
+        // The on-disk file is the user's "where do I get the
+        // token?" answer when they haven't set it explicitly.
+        let token: String
+        if let configured = web.authToken, !configured.isEmpty {
+            token = configured
+        } else {
+            let tokenPath = Paths.stateDir.appendingPathComponent("web-token")
+            if let existing = try? String(contentsOf: tokenPath, encoding: .utf8),
+               !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                token = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                token = "rmsync-" + UUID().uuidString
+                try? FileManager.default.createDirectory(
+                    at: Paths.stateDir, withIntermediateDirectories: true
+                )
+                try? token.write(to: tokenPath, atomically: true, encoding: .utf8)
+                Logger.shared.info(
+                    "web dashboard token written",
+                    meta: ["path": tokenPath.path, "hint": "open the dashboard at the URL with ?token=..."]
+                )
+            }
+        }
+
+        let http = HTTPServer(
+            bindAddr: web.bindAddr, port: web.port, authToken: token,
+            bus: bus, queue: queue, state: state
+        )
+        await http.register("sync-now") {
+            await poller.requestCycle()
+        }
+        await http.register("pause") {
+            try? await state.setPaused(true)
+            try? await refreshBus(bus: bus, state: state, cfg: cfg, queue: queue)
+        }
+        await http.register("resume") {
+            try? await state.setPaused(false)
+            try? await refreshBus(bus: bus, state: state, cfg: cfg, queue: queue)
+        }
+        try await http.start()
+        return http
     }
 
     private static func snapshotFrame(_ snap: IPC.Status) -> SendableJSON {
