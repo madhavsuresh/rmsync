@@ -137,6 +137,17 @@ enum DaemonScaffold {
             cfg: cfg, bus: bus, queue: queue, state: state, poller: poller
         )
 
+        // Trash retention prune fires once per daemon start, not
+        // on a periodic timer — daemon restarts are frequent
+        // enough (brew upgrades, login cycles, manual kicks) that
+        // a daily-or-so prune cadence is fine for most users. A
+        // user with extreme write volume can run ``rmsync trash
+        // prune`` manually in between.
+        Reconcile.pruneTrash(
+            syncDir: cfg.syncDir,
+            retentionDays: cfg.deletion.trashRetentionDays
+        )
+
         // Reconcile: deletions → initial pull → local creates/edits.
         do {
             try await Reconcile.localDeletions(state: state, queue: queue)

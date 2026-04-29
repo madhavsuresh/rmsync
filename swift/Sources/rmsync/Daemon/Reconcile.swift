@@ -89,6 +89,43 @@ enum Reconcile {
         }
     }
 
+    /// Prune trash entries older than the configured retention
+    /// window. Called at daemon startup alongside
+    /// ``localDeletions``. Conservative: removes whole stamp
+    /// directories whose timestamp is older than ``retentionDays``
+    /// — never partial cleanups. Set ``trash_retention_days = 0``
+    /// to keep trash forever (skip the prune entirely).
+    ///
+    /// Best-effort: a non-readable trash dir or a
+    /// permission-denied removeItem doesn't stop reconcile from
+    /// proceeding to the deletion / pull passes. Failures are
+    /// logged at warn so an operator can spot them in
+    /// ``rmsync logs``.
+    static func pruneTrash(syncDir: URL, retentionDays: Int) {
+        guard retentionDays > 0 else {
+            Logger.shared.debug("trash retention = 0; skipping prune")
+            return
+        }
+        let cutoff = Date().addingTimeInterval(-Double(retentionDays) * 86_400)
+        do {
+            let removed = try Trash.prune(syncDir: syncDir, olderThan: cutoff)
+            if removed > 0 {
+                Logger.shared.info(
+                    "trash pruned",
+                    meta: [
+                        "removed": "\(removed)",
+                        "retention_days": "\(retentionDays)",
+                    ]
+                )
+            }
+        } catch {
+            Logger.shared.warn(
+                "trash prune failed",
+                meta: ["error": "\(error)"]
+            )
+        }
+    }
+
     static func initialPull(
         cloud: Cloud, cfg: Config, queue: JobQueue
     ) async throws {
