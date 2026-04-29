@@ -1,3 +1,7 @@
+// FileProvider.swift's dataless detection is macOS-only. Linux stub
+// returns ``.local`` for any non-empty file, so these tests would
+// trivially pass without exercising real semantics.
+#if os(macOS)
 import Foundation
 import Testing
 @testable import rmsync
@@ -103,3 +107,6 @@ struct FileProviderDetectionTests {
         #expect(FileProvider.Status.dataless(logicalSize: 42, provider: .dropbox).isDataless)
     }
 }
+
+#endif
+

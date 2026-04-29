@@ -1,4 +1,9 @@
+// POSIX socket primitives — see IPCServer.swift for the rationale.
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 /// Synchronous IPC client used by the CLI. One-shot connect / send /
@@ -18,8 +23,8 @@ enum IPCClientSync {
         timeout: TimeInterval = 2.0,
         socketPath: URL = Paths.ipcSocketPath
     ) throws -> [String: Any] {
-        let fd = try connect(path: socketPath, timeout: timeout)
-        defer { Darwin.close(fd) }
+        let fd = try openSocket(path: socketPath, timeout: timeout)
+        defer { close(fd) }
 
         // Set read timeout so a wedged daemon doesn't hang us forever.
         var tv = timeval(
@@ -110,22 +115,28 @@ enum IPCClientSync {
     }
 
     static func daemonIsUp(timeout: TimeInterval = 0.2) -> Bool {
-        guard let fd = try? connect(path: Paths.ipcSocketPath, timeout: timeout) else { return false }
-        Darwin.close(fd)
+        guard let fd = try? openSocket(path: Paths.ipcSocketPath, timeout: timeout) else { return false }
+        close(fd)
         return true
     }
 
     // MARK: - internals
 
-    private static func connect(path: URL, timeout: TimeInterval) throws -> Int32 {
-        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    /// Opens an AF_UNIX socket and connects it to ``path``. Renamed from
+    /// ``connect`` to ``openSocket`` so the libc ``connect(2)`` call at
+    /// the bottom of this function (which is now unqualified after
+    /// dropping the ``Darwin.`` prefix for cross-platform builds) doesn't
+    /// resolve to *this* method recursively. Same problem as
+    /// IPCClient.swift's instance-method shadowing.
+    private static func openSocket(path: URL, timeout: TimeInterval) throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw CallError.daemonUnavailable("socket() failed") }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathCStr = path.path.utf8CString
         guard pathCStr.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
-            Darwin.close(fd)
+            close(fd)
             throw CallError.daemonUnavailable("socket path too long")
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { raw in
@@ -136,11 +147,11 @@ enum IPCClientSync {
 
         let rc = withUnsafePointer(to: &addr) { ptr -> Int32 in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { addrPtr in
-                Darwin.connect(fd, addrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                connect(fd, addrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         if rc != 0 {
-            Darwin.close(fd)
+            close(fd)
             throw CallError.daemonUnavailable("connect() failed: errno=\(errno)")
         }
         _ = timeout
@@ -155,7 +166,7 @@ enum IPCClientSync {
         while !accumulated.contains(0x0A) {
             var chunk = [UInt8](repeating: 0, count: 4096)
             let n = chunk.withUnsafeMutableBufferPointer {
-                Darwin.read(fd, $0.baseAddress, $0.count)
+                read(fd, $0.baseAddress, $0.count)
             }
             if n > 0 {
                 accumulated.append(contentsOf: chunk[0..<n])
@@ -209,7 +220,7 @@ enum IPCClientSync {
                 throw CallError.daemonUnavailable("empty buffer")
             }
             while sent < raw.count {
-                let n = Darwin.write(fd, base.advanced(by: sent), raw.count - sent)
+                let n = write(fd, base.advanced(by: sent), raw.count - sent)
                 if n < 0 { throw CallError.daemonUnavailable("write failed") }
                 sent += n
             }

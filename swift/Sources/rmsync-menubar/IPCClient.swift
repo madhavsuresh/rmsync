@@ -1,4 +1,11 @@
+// POSIX socket primitives. The menubar target only builds on macOS
+// (gated in Package.swift), so Darwin is always available here — but
+// match IPCServer/IPCClientSync's import shape for consistency.
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 struct StatusSnapshot {
@@ -88,7 +95,7 @@ final class IPCClient {
         guard shouldRun else { return }
         tearDown()
 
-        let sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        let sock = socket(AF_UNIX, SOCK_STREAM, 0)
         guard sock >= 0 else {
             scheduleReconnect()
             return
@@ -112,6 +119,11 @@ final class IPCClient {
 
         let result = withUnsafePointer(to: &addr) { ptr -> Int32 in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { addrPtr in
+                // Explicit Darwin. qualifier — the enclosing class
+                // declares an instance method named ``connect`` that
+                // would otherwise shadow the libc function. The
+                // menubar target only builds on macOS, so Darwin is
+                // always available.
                 Darwin.connect(sock, addrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
@@ -169,7 +181,7 @@ final class IPCClient {
     private func onReadable() {
         guard fd >= 0 else { return }
         var chunk = [UInt8](repeating: 0, count: 8192)
-        let n = chunk.withUnsafeMutableBufferPointer { Darwin.read(fd, $0.baseAddress, $0.count) }
+        let n = chunk.withUnsafeMutableBufferPointer { read(fd, $0.baseAddress, $0.count) }
         if n > 0 {
             buffer.append(contentsOf: chunk[0..<Int(n)])
             drainBuffer()
@@ -248,7 +260,7 @@ final class IPCClient {
             var withNewline = data
             withNewline.append(0x0A)
             _ = withNewline.withUnsafeBytes { buf -> Int in
-                Darwin.write(self.fd, buf.baseAddress, buf.count)
+                write(self.fd, buf.baseAddress, buf.count)
             }
         }
     }

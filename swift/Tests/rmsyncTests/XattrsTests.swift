@@ -1,3 +1,7 @@
+// Xattrs.swift's full implementation only exists on macOS — see the
+// `#if os(macOS)` wrap in that file. The Linux stub there is a no-op,
+// so these round-trip tests have nothing to assert against on Linux.
+#if os(macOS)
 import Foundation
 import Testing
 @testable import rmsync
@@ -77,3 +81,6 @@ struct XattrsTests {
         #expect((try? Xattrs.getRaw(path: file, name: Xattrs.remotePathKey)) == nil)
     }
 }
+
+#endif
+

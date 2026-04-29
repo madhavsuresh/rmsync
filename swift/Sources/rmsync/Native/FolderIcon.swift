@@ -1,3 +1,6 @@
+// Folder icon installation is a macOS Finder-only feature. On Linux
+// the call is a no-op stub at the bottom of this file.
+#if os(macOS)
 import Foundation
 
 /// Install a custom Finder icon on the sync folder.
@@ -104,3 +107,18 @@ enum FolderIcon {
         return nil
     }
 }
+
+#elseif os(Linux)
+
+import Foundation
+
+/// Linux stub: Finder doesn't exist here. Daemon calls this once at
+/// startup to set the sync_dir's icon to the rmsync folder icon; on
+/// Linux there's nothing to do.
+enum FolderIcon {
+    static func ensure(folder: URL, icnsSource: URL? = nil) {
+        _ = (folder, icnsSource)
+    }
+}
+
+#endif

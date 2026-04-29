@@ -1,3 +1,9 @@
+// File Provider dataless-placeholder detection is a macOS-only
+// concern: Linux has no equivalent kernel concept. On Linux we
+// stub the ``Status`` enum and return ``.local`` for any non-empty
+// file (``.empty`` for zero-byte, ``.missing`` for ENOENT) so the
+// SyncWorker push guard treats every readable file as safe to push.
+#if os(macOS)
 import Darwin
 import Foundation
 
@@ -166,3 +172,51 @@ enum FileProvider {
         return names
     }
 }
+
+#elseif os(Linux)
+
+// Linux stub: no File Provider concept on Linux. Files are either
+// present (`.local`), zero-byte (`.empty`), or ENOENT (`.missing`).
+// No "dataless placeholder" pseudo-state exists outside macOS.
+import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
+
+enum FileProvider {
+    enum Status: Equatable, Sendable {
+        case local
+        case dataless(logicalSize: Int, provider: Provider?)
+        case empty
+        case missing
+
+        var isDataless: Bool {
+            if case .dataless = self { return true }
+            return false
+        }
+    }
+
+    enum Provider: String, Sendable {
+        case dropbox = "Dropbox"
+        case iCloud = "iCloud Drive"
+        case oneDrive = "OneDrive"
+        case googleDrive = "Google Drive"
+        case appleFileProvider = "macOS File Provider"
+    }
+
+    static func status(of url: URL) -> Status {
+        var buf = stat()
+        let rc = url.path.withCString { cPath -> Int32 in
+            stat(cPath, &buf)
+        }
+        guard rc == 0 else { return .missing }
+        return buf.st_size == 0 ? .empty : .local
+    }
+
+    static func detectProvider(at url: URL) -> Provider? {
+        _ = url
+        return nil
+    }
+}
+
+#endif

@@ -1,14 +1,38 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+// macOS keeps the menubar product; Linux drops it. SPM lets us
+// conditionalize the targets/products arrays at manifest-eval time
+// using a top-level #if. Without this gate, ``swift build`` on Linux
+// fails immediately because the menubar target imports AppKit which
+// has no Linux equivalent.
+//
+// The daemon (``rmsync``) and the codec library (``RMScene``) build
+// on both platforms; everything Linux-specific lives behind
+// ``#if os(Linux)`` inside the ``rmsync`` target's source files.
+
+#if os(macOS)
+let menubarProducts: [Product] = [
+    .executable(name: "rmsync-menubar", targets: ["rmsync-menubar"]),
+]
+let menubarTargets: [Target] = [
+    .executableTarget(
+        name: "rmsync-menubar",
+        path: "Sources/rmsync-menubar"
+    ),
+]
+#else
+let menubarProducts: [Product] = []
+let menubarTargets: [Target] = []
+#endif
+
 let package = Package(
     name: "rmsync-suite",
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "rmsync", targets: ["rmsync"]),
-        .executable(name: "rmsync-menubar", targets: ["rmsync-menubar"]),
         .library(name: "RMScene", targets: ["RMScene"]),
-    ],
+    ] + menubarProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.4.0"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
@@ -43,10 +67,6 @@ let package = Package(
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
-        .executableTarget(
-            name: "rmsync-menubar",
-            path: "Sources/rmsync-menubar"
-        ),
         .testTarget(
             name: "rmsyncTests",
             dependencies: ["rmsync"],
@@ -59,6 +79,6 @@ let package = Package(
             path: "Tests/RMSceneTests",
             resources: [.copy("Fixtures")]
         ),
-    ],
+    ] + menubarTargets,
     swiftLanguageModes: [.v6]
 )

@@ -1,4 +1,13 @@
+// POSIX socket / fd primitives. ``socket``, ``bind``, ``listen``,
+// ``accept``, ``read``, ``write``, ``close`` resolve identically
+// through Darwin (macOS) and Glibc (Linux). The ``Darwin.`` /
+// ``Glibc.`` prefixes are unnecessary; we drop them so the same
+// source compiles on both platforms.
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Dispatch
 import Foundation
 
@@ -32,7 +41,7 @@ actor IPCServer {
             withIntermediateDirectories: true
         )
 
-        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw IPCError.socketCreateFailed(errno: errno) }
 
         var addr = sockaddr_un()
@@ -40,7 +49,7 @@ actor IPCServer {
         let path = socketPath.path
         let pathBytes = path.utf8CString
         guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
-            Darwin.close(fd)
+            close(fd)
             throw IPCError.pathTooLong(path)
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { raw in
@@ -51,20 +60,20 @@ actor IPCServer {
 
         let bindResult = withUnsafePointer(to: &addr) { ptr -> Int32 in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { addrPtr in
-                Darwin.bind(fd, addrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                bind(fd, addrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         guard bindResult == 0 else {
             let err = errno
-            Darwin.close(fd)
+            close(fd)
             throw IPCError.bindFailed(errno: err)
         }
 
         _ = chmod(path, 0o600)
 
-        guard Darwin.listen(fd, 16) == 0 else {
+        guard listen(fd, 16) == 0 else {
             let err = errno
-            Darwin.close(fd)
+            close(fd)
             throw IPCError.listenFailed(errno: err)
         }
 
@@ -83,7 +92,7 @@ actor IPCServer {
         // under Swift 6 strict concurrency.
         src.setCancelHandler {
             if listenFDCopy >= 0 {
-                Darwin.close(listenFDCopy)
+                close(listenFDCopy)
             }
         }
         src.resume()
@@ -106,7 +115,7 @@ actor IPCServer {
             var len = socklen_t(MemoryLayout<sockaddr_un>.size)
             let client = withUnsafeMutablePointer(to: &peer) { ptr -> Int32 in
                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { addrPtr in
-                    Darwin.accept(listenFD, addrPtr, &len)
+                    accept(listenFD, addrPtr, &len)
                 }
             }
             if client < 0 {
@@ -122,7 +131,7 @@ actor IPCServer {
     private static func runClient(
         fd: Int32, bus: StateBus, handlers: [String: CommandHandler]
     ) async {
-        defer { Darwin.close(fd) }
+        defer { close(fd) }
 
         let hello = await StateBus.helloFrame(for: bus.snapshot())
         guard writeFrame(fd: fd, payload: hello) else { return }
@@ -142,7 +151,7 @@ actor IPCServer {
         var chunk = [UInt8](repeating: 0, count: 4096)
         while true {
             let n = chunk.withUnsafeMutableBufferPointer {
-                Darwin.read(fd, $0.baseAddress, $0.count)
+                read(fd, $0.baseAddress, $0.count)
             }
             if n <= 0 { return }
             buffer.append(contentsOf: chunk[0..<Int(n)])
@@ -208,7 +217,7 @@ actor IPCServer {
         return withNewline.withUnsafeBytes { buf -> Bool in
             guard let base = buf.baseAddress else { return false }
             while sent < buf.count {
-                let n = Darwin.write(fd, base.advanced(by: sent), buf.count - sent)
+                let n = write(fd, base.advanced(by: sent), buf.count - sent)
                 if n < 0 { return false }
                 sent += n
             }

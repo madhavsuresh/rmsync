@@ -1,3 +1,10 @@
+// launchd is macOS-only. On Linux the daemon runs as PID 1 of its
+// container (or under systemd / a shell), so there's no
+// "bootstrap an agent" concept. Linux stub at the bottom of this
+// file makes ``isRunning/start/stop/restart`` return cleanly so
+// callers in Subcommands.swift / Doctor.swift / RelocateImpl.swift
+// don't need their own conditional branches.
+#if os(macOS)
 import Darwin
 import Foundation
 
@@ -89,3 +96,46 @@ enum Launchd {
         )
     }
 }
+
+#elseif os(Linux)
+
+import Foundation
+
+/// Linux stub. Daemon supervision on Linux is the container runtime's
+/// (or systemd's) job, not rmsync's. ``rmsync start/stop/restart``
+/// surface a clear error in Subcommands.swift via the boolean returns
+/// from ``start`` / ``restart``; ``isRunning`` always reports false so
+/// callers fall through to the print-and-exit path.
+enum Launchd {
+    static let label = "com.user.rmsync"
+    static let menubarLabel = "com.user.rmsync.menubar"
+
+    static func plistPath(label: String = Launchd.label) -> URL {
+        // Returned for bookkeeping only; nothing reads it on Linux.
+        URL(fileURLWithPath: "/dev/null")
+    }
+
+    static func isRunning(label: String = Launchd.label) -> Bool {
+        _ = label
+        return false
+    }
+
+    static func stop(label: String = Launchd.label) -> Bool {
+        _ = label
+        return false
+    }
+
+    @discardableResult
+    static func start(label: String = Launchd.label) -> (ok: Bool, error: String?) {
+        _ = label
+        return (false, "launchd start not applicable on Linux; use the container supervisor (Docker / systemd)")
+    }
+
+    @discardableResult
+    static func restart(label: String = Launchd.label) -> (ok: Bool, error: String?) {
+        _ = label
+        return (false, "launchd restart not applicable on Linux; use the container supervisor (Docker / systemd)")
+    }
+}
+
+#endif

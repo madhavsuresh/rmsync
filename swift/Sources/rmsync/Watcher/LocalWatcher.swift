@@ -1,3 +1,8 @@
+// FSEventStream is macOS-only. Linux uses INotifyWatcher (Phase 1)
+// instead — DaemonScaffold picks the right one with #if. The file
+// is wrapped wholesale; on Linux the entire LocalWatcher type is
+// absent and INotifyWatcher takes its place.
+#if os(macOS)
 import CoreServices
 import Foundation
 
@@ -177,32 +182,13 @@ final class LocalWatcher: @unchecked Sendable {
 
     // MARK: - filtering
 
-    /// Ignore rules matching the Python port byte-for-byte.
+    /// Forwards to ``WatcherFilter.shouldIgnore``. Kept on
+    /// ``LocalWatcher`` for backwards-compatible call sites
+    /// (tests, Doctor, etc.) but the real logic lives in
+    /// ``WatcherFilter`` so the Linux INotifyWatcher can share it
+    /// without depending on this macOS-only type.
     static func shouldIgnore(_ path: String, syncDir: URL) -> Bool {
-        let url = URL(fileURLWithPath: path)
-        let name = url.lastPathComponent
-        if name == ".DS_Store" { return true }
-        if name.hasPrefix(".") { return true }
-        if url.pathExtension == "tmp" { return true }
-        if url.pathExtension == "conflict" { return true }
-        guard let rel = PathUtilities.resolvedRelativePath(from: syncDir, to: url)
-        else { return true }
-
-        // Dropbox / iCloud / OneDrive conflict copies.
-        let conflictCopy = /(?i)\bconflicted copy\b/
-        if name.contains(conflictCopy) { return true }
-
-        // Anything under .rmsync-trash / .git / .obsidian / hidden dirs.
-        for part in rel {
-            if ["\\.rmsync-trash", ".rmsync-trash", ".git", ".obsidian"].contains(part) {
-                return true
-            }
-            if part.hasPrefix(".") { return true }
-        }
-
-        // We only care about .md.
-        if url.pathExtension != "md" { return true }
-        return false
+        WatcherFilter.shouldIgnore(path, syncDir: syncDir)
     }
 
     private struct Flag: OptionSet {
@@ -213,3 +199,5 @@ final class LocalWatcher: @unchecked Sendable {
         static let itemModified = Flag(rawValue: UInt32(kFSEventStreamEventFlagItemModified))
     }
 }
+
+#endif

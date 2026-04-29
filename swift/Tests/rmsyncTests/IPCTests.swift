@@ -1,4 +1,9 @@
+// POSIX socket primitives — see IPCServer.swift for the rationale.
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 @testable import rmsync
@@ -45,7 +50,7 @@ struct IPCTests {
         defer { Task { await server.stop() } }
 
         let fd = try connectSocket(sock)
-        defer { Darwin.close(fd) }
+        defer { close(fd) }
         _ = try readLine(fd: fd) // hello
 
         try writeLine(fd: fd, "{\"id\":\"1\",\"type\":\"nope\"}\n")
@@ -68,7 +73,7 @@ struct IPCTests {
         defer { Task { await server.stop() } }
 
         let fd = try connectSocket(sock)
-        defer { Darwin.close(fd) }
+        defer { close(fd) }
         _ = try readLine(fd: fd) // hello
 
         await bus.update { s in
@@ -97,7 +102,7 @@ struct IPCTests {
         defer { Task { await server.stop() } }
 
         let fd = try connectSocket(sock)
-        defer { Darwin.close(fd) }
+        defer { close(fd) }
         _ = try readLine(fd: fd) // hello
 
         try writeLine(fd: fd, "{\"id\":\"42\",\"type\":\"ping\"}\n")
@@ -113,12 +118,12 @@ struct IPCTests {
 
     private func openAndReadLine(sock: URL) throws -> Data {
         let fd = try connectSocket(sock)
-        defer { Darwin.close(fd) }
+        defer { close(fd) }
         return try readLine(fd: fd)
     }
 
     private func connectSocket(_ sock: URL) throws -> Int32 {
-        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         #expect(fd >= 0)
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -130,7 +135,7 @@ struct IPCTests {
         }
         let rc = withUnsafePointer(to: &addr) { ptr -> Int32 in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { addrPtr in
-                Darwin.connect(fd, addrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                connect(fd, addrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         #expect(rc == 0)
@@ -142,7 +147,7 @@ struct IPCTests {
         var one = [UInt8](repeating: 0, count: 1)
         while true {
             let n = one.withUnsafeMutableBufferPointer {
-                Darwin.read(fd, $0.baseAddress, 1)
+                read(fd, $0.baseAddress, 1)
             }
             if n <= 0 { break }
             if one[0] == 0x0A { break }
@@ -156,7 +161,7 @@ struct IPCTests {
         try data.withUnsafeMutableBytes { raw in
             var sent = 0
             while sent < raw.count {
-                let n = Darwin.write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
+                let n = write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
                 if n < 0 { return }
                 sent += n
             }

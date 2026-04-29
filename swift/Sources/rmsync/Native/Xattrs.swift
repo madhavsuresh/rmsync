@@ -1,3 +1,10 @@
+// Extended attributes are macOS-specific in this codebase. Linux does
+// have xattrs (in the ``user.`` namespace), but the metadata we apply
+// here — Spotlight kMDItem* keys, Finder color tags, FinderInfo
+// flags — only mean anything to the macOS Finder/Spotlight UI. The
+// Linux daemon runs in Docker without a Finder, so we provide a
+// no-op stub at the bottom of this file rather than re-implementing.
+#if os(macOS)
 import Darwin
 import Foundation
 
@@ -140,3 +147,42 @@ enum Xattrs {
         try setRaw(path: path, name: userTags, value: data)
     }
 }
+
+#elseif os(Linux)
+
+// Linux stub: pulled-file metadata is a Finder/Spotlight feature with
+// no useful Linux equivalent. The daemon code calls into ``Xattrs``
+// without conditional guards, so we provide just the public surface
+// (``apply`` and ``readDocID``) as no-ops here. ``setRaw`` / ``getRaw``
+// are NOT exposed because their only caller (FolderIcon) is also
+// macOS-only.
+import Foundation
+
+enum Xattrs {
+    struct FileMetadata: Sendable {
+        var docID: String?
+        var remotePath: String?
+        var remoteModified: String?
+        var pageIDs: [String] = []
+    }
+
+    /// No-op on Linux. The daemon still calls this after every pull,
+    /// but Spotlight kMDItem* / Finder tags don't exist outside macOS.
+    static func apply(_ meta: FileMetadata, to path: URL) {
+        // Could write rmsync.* under the Linux ``user.`` namespace
+        // (libc ``setxattr`` works there), but it's invisible without
+        // Finder integration so deferred.
+        _ = (meta, path)
+    }
+
+    /// Always returns nil on Linux. Used by SyncWorker to recover the
+    /// reMarkable doc_id from a renamed local .md; on Linux we look
+    /// up by path in state.db instead, which is the same fallback
+    /// the macOS path uses when the xattr is missing.
+    static func readDocID(at path: URL) -> String? {
+        _ = path
+        return nil
+    }
+}
+
+#endif
