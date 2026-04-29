@@ -1,18 +1,19 @@
 # Testing rmsync
 
-Three layers, in increasing cost:
+Five layers, in increasing cost:
 
 | Layer | Catches | Effort |
 |---|---|---|
-| Unit + offline integration tests (`swift test`) | Logic errors, regression of fixed bugs | Free, runs on every CI push |
-| Live-cloud smoke test against a dedicated test account | Push/pull roundtrip breaks, rmapi compat issues | One-time secret setup; runs on every push to main |
+| Unit + offline integration tests (`swift test`) on macOS | Logic errors, regression of fixed bugs | Free, runs on every CI push |
+| Same suite on Linux (`swift:6.1-jammy` container) | Linux-specific compile errors, Glibc / Darwin divergences, watcher impl errors | Free, runs on every CI push |
+| Live-cloud smoke test against a real rmapi account | Push/pull roundtrip breaks, rmapi compat issues | One-time secret setup; runs on every push to main |
 | **`scripts/fresh-install-test.sh`** on dev's own Mac | Missing seeded state, install-helper gaps | 90s per run |
-| Guest-user macOS account install | TCC permissions, Finder integration, FSEvents on a stranger's tree | 5–10 minutes per attempt |
+| Guest-user macOS account / fresh Docker host | TCC permissions, Finder integration, FSEvents/inotify on a stranger's tree | 5–10 minutes per attempt |
 
 If a bug surfaces on a tester's fresh install but not on yours, it's
 almost always something that depends on accumulated state — your
 config exists, your TCC permissions are granted, your daemon was
-already running. Layers 3 and 4 are how you catch those before
+already running. Layers 4 and 5 are how you catch those before
 shipping.
 
 ---
