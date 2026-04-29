@@ -24,6 +24,12 @@ actor SyncWorker {
     private let cfg: Config
     private let locks: LockRegistry
     private let fence: EchoFence
+    /// Bulk-delete brake. Shared across every worker in the pool so
+    /// the rolling window measures the *aggregate* rate. ``nil``
+    /// means propagation is disabled (``cfg.deletion.enable_propagation
+    /// = false``); the worker treats every destructive job as a
+    /// no-op in that case.
+    private let limiter: DeletionRateLimiter?
     private var stopFlag = false
 
     init(
@@ -33,7 +39,8 @@ actor SyncWorker {
         state: State,
         cfg: Config,
         locks: LockRegistry,
-        fence: EchoFence
+        fence: EchoFence,
+        limiter: DeletionRateLimiter? = nil
     ) {
         self.id = id
         self.queue = queue
@@ -42,6 +49,7 @@ actor SyncWorker {
         self.cfg = cfg
         self.locks = locks
         self.fence = fence
+        self.limiter = limiter
     }
 
     func stop() { stopFlag = true }
@@ -94,14 +102,198 @@ actor SyncWorker {
         case .pushInbox:
             try await pushInbox(localPath: job.hint)
 
-        case .deleteLocal, .deleteRemote, .renameRemote:
-            // Week 6 territory (delete semantics) and Week 6's rename
-            // detection. For now we ack by logging and moving on.
+        case .deleteLocal:
+            try await deleteLocalAndCloud(job)
+
+        case .deleteRemote:
+            try await deleteRemote(job)
+
+        case .renameRemote:
+            // Phase 4 — landing in the next commit on this branch.
             Logger.shared.debug(
-                "job kind not yet implemented",
+                "renameRemote not yet implemented",
                 meta: ["kind": job.kind.rawValue, "hint": job.hint]
             )
         }
+    }
+
+    // MARK: - delete propagation
+
+    /// Handle a watcher-emitted ``.deleteLocal``. The local file may
+    /// or may not still exist — if a user re-creates the same path
+    /// before the worker fires, treat that as a no-op. Otherwise:
+    ///
+    ///   1. Resolve the doc via state.db (job.docID OR by local path).
+    ///   2. Acquire the per-doc lock so we serialise against any
+    ///      in-flight push for the same document.
+    ///   3. Consult the bulk-delete brake. Trip → refuse + park
+    ///      ``error_state = "bulk_delete_refused"``.
+    ///   4. Move the local file into trash (if it's still there).
+    ///   5. Stamp ``pending_op = "pending_delete"`` so a crash here
+    ///      can be resumed by ``Reconcile`` on next startup.
+    ///   6. Cloud-stat to confirm the doc still exists, then
+    ///      ``Cloud.rm`` (which moves to cloud trash, not a hard
+    ///      delete).
+    ///   7. Drop the state.db row.
+    ///
+    /// Every step is logged so an operator can diff progress against
+    /// ``rmsync status`` after a partial failure.
+    private func deleteLocalAndCloud(_ job: Job) async throws {
+        guard cfg.deletion.enablePropagation else {
+            Logger.shared.debug(
+                "delete propagation disabled; ignoring deleteLocal",
+                meta: ["hint": job.hint, "doc_id": job.docID ?? ""]
+            )
+            return
+        }
+
+        // Resolve the doc. The watcher has the local path; the cloud
+        // poller has the docID. Either is sufficient.
+        let stored: Document?
+        if let id = job.docID {
+            stored = try await state.get(docID: id)
+        } else {
+            stored = try await state.byLocalPath(job.hint)
+        }
+        guard let doc = stored else {
+            Logger.shared.info(
+                "deleteLocal ignored: no state row (untracked file)",
+                meta: ["hint": job.hint, "doc_id": job.docID ?? ""]
+            )
+            return
+        }
+
+        let token = await locks.acquire(doc.docID)
+        defer { Task { await token.release() } }
+
+        // Bulk-delete brake.
+        if let limiter, await !limiter.mayDelete(docID: doc.docID) {
+            Logger.shared.error(
+                "delete refused: bulk-delete brake tripped",
+                meta: [
+                    "doc_id": doc.docID,
+                    "path": doc.localPath,
+                    "remote": doc.remotePath,
+                ]
+            )
+            try? await state.setError(docID: doc.docID, state: "bulk_delete_refused")
+            return
+        }
+
+        // Soft-delete: park the local file into the trash. If it's
+        // already gone (the cloud-delete-arriving-locally path) the
+        // helper returns ``.sourceMissing`` and we proceed straight
+        // to the cloud rm.
+        let localURL = URL(fileURLWithPath: doc.localPath)
+        let moveResult: Trash.MoveResult
+        do {
+            moveResult = try Trash.moveIn(localURL, syncDir: cfg.syncDir)
+        } catch {
+            Logger.shared.error(
+                "delete aborted: trash move failed",
+                meta: ["doc_id": doc.docID, "path": doc.localPath, "error": "\(error)"]
+            )
+            return
+        }
+        switch moveResult {
+        case .moved(let stamp, _):
+            Logger.shared.info(
+                "delete: parked local in trash",
+                meta: ["doc_id": doc.docID, "stamp": stamp, "path": doc.localPath]
+            )
+        case .sourceMissing:
+            Logger.shared.debug(
+                "delete: local already missing",
+                meta: ["doc_id": doc.docID, "path": doc.localPath]
+            )
+        case .alreadyTrashed(let stamp, _):
+            Logger.shared.info(
+                "delete: local already trashed",
+                meta: ["doc_id": doc.docID, "stamp": stamp, "path": doc.localPath]
+            )
+        }
+
+        try await runCloudDelete(for: doc)
+    }
+
+    /// Handle a startup-reconcile-emitted ``.deleteRemote`` (and the
+    /// resume path for in-flight ``pending_delete`` rows). Skips
+    /// the trash-move step — the local file is already gone, that's
+    /// why we're here. Everything else mirrors ``.deleteLocal``.
+    private func deleteRemote(_ job: Job) async throws {
+        guard cfg.deletion.enablePropagation else {
+            Logger.shared.debug(
+                "delete propagation disabled; ignoring deleteRemote",
+                meta: ["hint": job.hint, "doc_id": job.docID ?? ""]
+            )
+            return
+        }
+
+        guard let docID = job.docID,
+              let doc = try await state.get(docID: docID) else {
+            Logger.shared.warn(
+                "deleteRemote ignored: no state row",
+                meta: ["doc_id": job.docID ?? "", "hint": job.hint]
+            )
+            return
+        }
+
+        let token = await locks.acquire(doc.docID)
+        defer { Task { await token.release() } }
+
+        if let limiter, await !limiter.mayDelete(docID: doc.docID) {
+            Logger.shared.error(
+                "deleteRemote refused: bulk-delete brake tripped",
+                meta: ["doc_id": doc.docID, "remote": doc.remotePath]
+            )
+            try? await state.setError(docID: doc.docID, state: "bulk_delete_refused")
+            return
+        }
+
+        try await runCloudDelete(for: doc)
+    }
+
+    /// Common tail used by both delete handlers. Stamps
+    /// ``pending_op``, calls ``Cloud.rm`` (after a defensive
+    /// ``Cloud.stat`` to handle the "already gone" case), records
+    /// the deletion in the limiter, and removes the state row.
+    private func runCloudDelete(for doc: Document) async throws {
+        try? await state.setPendingOp(docID: doc.docID, op: "pending_delete")
+
+        let exists: Bool
+        do {
+            exists = try await cloud.stat(doc.remotePath) != nil
+        } catch {
+            Logger.shared.warn(
+                "delete: cloud stat failed; assuming present",
+                meta: ["doc_id": doc.docID, "remote": doc.remotePath, "error": "\(error)"]
+            )
+            exists = true
+        }
+
+        if exists {
+            do {
+                try await cloud.rm(doc.remotePath)
+                Logger.shared.info(
+                    "delete: cloud rm complete",
+                    meta: ["doc_id": doc.docID, "remote": doc.remotePath]
+                )
+            } catch {
+                Logger.shared.error(
+                    "delete: cloud rm failed; pending_op left set for retry",
+                    meta: ["doc_id": doc.docID, "remote": doc.remotePath, "error": "\(error)"]
+                )
+                return
+            }
+        } else {
+            Logger.shared.info(
+                "delete: cloud doc already gone; clearing local state",
+                meta: ["doc_id": doc.docID, "remote": doc.remotePath]
+            )
+        }
+
+        await limiter?.record(docID: doc.docID)
+        try? await state.delete(docID: doc.docID)
     }
 
     // MARK: - push inbox

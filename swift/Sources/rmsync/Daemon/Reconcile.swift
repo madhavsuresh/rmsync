@@ -16,8 +16,32 @@ enum Reconcile {
         state: State, queue: JobQueue
     ) async throws {
         var enqueued = 0
+        var resumed = 0
         let docs = try await state.allDocuments()
+
+        // First pass: resume any in-flight ``pending_delete`` /
+        // ``pending_rename`` row. These are docs whose worker had
+        // already crossed the "trash + pending_op stamp" line before
+        // the daemon last exited, but didn't get to clear the row.
+        // We re-enqueue the same kind of job so the (now-clean)
+        // worker runs the cloud step to completion.
+        for doc in docs where doc.pendingOp == "pending_delete" {
+            Logger.shared.info(
+                "resuming in-flight delete from prior run",
+                meta: ["doc_id": doc.docID, "remote": doc.remotePath]
+            )
+            await queue.enqueue(Job(
+                kind: .deleteRemote, docID: doc.docID, hint: doc.remotePath
+            ))
+            resumed += 1
+        }
+
+        // Second pass: fresh local-deletion detection. Skip rows we
+        // already enqueued above (they're still in pending_op state),
+        // skip rows that haven't been synced (lastSyncedMDHash empty
+        // ≡ never confirmed on the cloud side, nothing to delete).
         for doc in docs where doc.docType == "DocumentType" {
+            if doc.pendingOp != nil { continue }
             guard let hash = doc.lastSyncedMDHash, !hash.isEmpty else { continue }
             if FileManager.default.fileExists(atPath: doc.localPath) { continue }
             Logger.shared.info(
@@ -33,9 +57,13 @@ enum Reconcile {
             ))
             enqueued += 1
         }
-        if enqueued > 0 {
+        if enqueued + resumed > 0 {
             Logger.shared.info(
-                "startup deletion reconcile", meta: ["enqueued": "\(enqueued)"]
+                "startup deletion reconcile",
+                meta: [
+                    "enqueued": "\(enqueued)",
+                    "resumed": "\(resumed)",
+                ]
             )
         }
     }

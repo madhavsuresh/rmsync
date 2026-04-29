@@ -66,13 +66,21 @@ enum DaemonScaffold {
         let initialCloud = Cloud(concurrentOverride: 5)
         let steadyCloud = Cloud()
 
+        // Bulk-delete brake — shared across every worker in the pool
+        // so the rolling window measures aggregate rate, not per-
+        // worker. ``cfg.deletion.enable_propagation == false``? The
+        // limiter still gets constructed, but the worker handlers
+        // bail before calling it; harmless and keeps the wiring
+        // identical across the on/off toggle.
+        let limiter = DeletionRateLimiter(cfg: cfg, state: state)
+
         // Workers come up first so they're ready to drain the queue as
         // soon as the reconciliation step enqueues jobs.
         var workers: [SyncWorker] = []
         for i in 0..<cfg.workerPoolSize {
             workers.append(SyncWorker(
                 id: i, queue: queue, cloud: initialCloud, state: state,
-                cfg: cfg, locks: locks, fence: fence
+                cfg: cfg, locks: locks, fence: fence, limiter: limiter
             ))
         }
         let workerTasks = workers.map { worker in
@@ -155,7 +163,7 @@ enum DaemonScaffold {
         for i in 0..<cfg.workerPoolSize {
             let steady = SyncWorker(
                 id: i, queue: queue, cloud: steadyCloud, state: state,
-                cfg: cfg, locks: locks, fence: fence
+                cfg: cfg, locks: locks, fence: fence, limiter: limiter
             )
             workers.append(steady)
             steadyTasks.append(Task.detached { await steady.run() })
