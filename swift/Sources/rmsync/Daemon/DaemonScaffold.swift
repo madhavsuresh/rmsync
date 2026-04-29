@@ -157,22 +157,59 @@ enum DaemonScaffold {
         // implementation is platform-specific: FSEventStream on
         // macOS, inotify on Linux. Both expose the same init/start/stop
         // surface so the rest of the daemon doesn't care.
+        //
+        // When ``[inbox]`` is configured we also spin up a SECOND
+        // watcher (same FSEvents/inotify code path, just with
+        // ``mode: .inbox``) pointed at the inbox dir. It emits
+        // ``Job(.pushInbox)`` for PDF/EPUB drops, which the worker
+        // pipes straight through ``rmapi put --force``.
         #if os(macOS)
         let watcher = LocalWatcher(
             syncDir: cfg.syncDir,
             queue: queue,
             fence: fence,
-            debounceSeconds: cfg.debounceSeconds
+            debounceSeconds: cfg.debounceSeconds,
+            mode: .markdown
         )
+        let inboxWatcher: LocalWatcher? = cfg.inbox.map { ic in
+            LocalWatcher(
+                syncDir: ic.localDir,
+                queue: queue,
+                fence: fence,
+                debounceSeconds: cfg.debounceSeconds,
+                mode: .inbox
+            )
+        }
         #else
         let watcher = INotifyWatcher(
             syncDir: cfg.syncDir,
             queue: queue,
             fence: fence,
-            debounceSeconds: cfg.debounceSeconds
+            debounceSeconds: cfg.debounceSeconds,
+            mode: .markdown
         )
+        let inboxWatcher: INotifyWatcher? = cfg.inbox.map { ic in
+            INotifyWatcher(
+                syncDir: ic.localDir,
+                queue: queue,
+                fence: fence,
+                debounceSeconds: cfg.debounceSeconds,
+                mode: .inbox
+            )
+        }
         #endif
         watcher.start()
+        if let inboxWatcher {
+            // Make sure the inbox dir exists so the first drop has
+            // somewhere to land. Same idempotent mkdir we do for
+            // sync_dir at the top of run(). Cheap.
+            if let inbox = cfg.inbox {
+                try? FileManager.default.createDirectory(
+                    at: inbox.localDir, withIntermediateDirectories: true
+                )
+            }
+            inboxWatcher.start()
+        }
         let pollerTask = Task.detached { await poller.run() }
 
         // Periodic bus refresh so the menu bar sees live counts even
@@ -192,6 +229,7 @@ enum DaemonScaffold {
         // process, but kept for completeness).
         busTask.cancel()
         watcher.stop()
+        inboxWatcher?.stop()
         await poller.stop()
         pollerTask.cancel()
         for w in workers { await w.stop() }

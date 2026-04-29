@@ -27,6 +27,7 @@ final class INotifyWatcher: @unchecked Sendable {
     private let queue: JobQueue
     private let fence: EchoFence
     private let debounceSeconds: TimeInterval
+    private let mode: WatcherMode
 
     private var inotify: INotify?
 
@@ -47,8 +48,8 @@ final class INotifyWatcher: @unchecked Sendable {
 
     private var debounceTimers: [String: DispatchSourceTimer] = [:]
 
-    private let workerQueue = DispatchQueue(label: "com.user.rmsync.watcher.inotify")
-    private let timerQueue = DispatchQueue(label: "com.user.rmsync.watcher.debounce")
+    private let workerQueue: DispatchQueue
+    private let timerQueue: DispatchQueue
     private var readSource: DispatchSourceRead?
     private var stopped = false
 
@@ -56,12 +57,20 @@ final class INotifyWatcher: @unchecked Sendable {
         syncDir: URL,
         queue: JobQueue,
         fence: EchoFence,
-        debounceSeconds: TimeInterval
+        debounceSeconds: TimeInterval,
+        mode: WatcherMode = .markdown
     ) {
         self.syncDir = syncDir
         self.queue = queue
         self.fence = fence
         self.debounceSeconds = debounceSeconds
+        self.mode = mode
+        // Per-mode dispatch queue labels — see LocalWatcher for the
+        // same rationale. Avoids label collision when both .markdown
+        // and .inbox watchers run concurrently.
+        let suffix = mode == .markdown ? "md" : "inbox"
+        self.workerQueue = DispatchQueue(label: "com.user.rmsync.watcher.inotify.\(suffix)")
+        self.timerQueue = DispatchQueue(label: "com.user.rmsync.watcher.debounce.\(suffix)")
     }
 
     // MARK: - lifecycle
@@ -304,9 +313,11 @@ final class INotifyWatcher: @unchecked Sendable {
     // MARK: - dispatch (mirrors LocalWatcher's debounce/echo path)
 
     private func handleChange(path: String) {
-        if WatcherFilter.shouldIgnore(path, syncDir: syncDir) { return }
+        if WatcherFilter.shouldIgnore(path, root: syncDir, mode: mode) { return }
         Task {
-            if await fence.isRecent(path) {
+            // Echo-fence applies only to .markdown mode. Inbox is
+            // one-way (push-only); no risk of observing self-writes.
+            if mode == .markdown, await fence.isRecent(path) {
                 Logger.shared.debug("echo-suppressed", meta: ["path": path])
                 return
             }
@@ -315,7 +326,10 @@ final class INotifyWatcher: @unchecked Sendable {
     }
 
     private func handleDelete(path: String) {
-        if WatcherFilter.shouldIgnore(path, syncDir: syncDir) { return }
+        // Inbox mode never reacts to deletes — the worker deletes
+        // files itself after a successful push.
+        guard mode == .markdown else { return }
+        if WatcherFilter.shouldIgnore(path, root: syncDir, mode: mode) { return }
         Task {
             await queue.enqueue(Job(kind: .deleteLocal, docID: nil, hint: path))
         }
@@ -339,8 +353,9 @@ final class INotifyWatcher: @unchecked Sendable {
 
     private func fire(path: String) {
         debounceTimers.removeValue(forKey: path)
+        let kind: Job.Kind = mode == .markdown ? .push : .pushInbox
         Task {
-            await queue.enqueue(Job(kind: .push, docID: nil, hint: path))
+            await queue.enqueue(Job(kind: kind, docID: nil, hint: path))
         }
     }
 }

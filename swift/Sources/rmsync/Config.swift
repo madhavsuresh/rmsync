@@ -21,6 +21,20 @@ struct Config: Decodable, Sendable {
     var dryRun: Bool
     var log: LogConfig
 
+    /// Optional ``[inbox]`` block: a "drop folder" for sending PDFs /
+    /// EPUBs to the tablet without going through rmapi by hand. Daemon
+    /// watches ``inbox.local_dir``; non-`.md` files appearing there get
+    /// pushed to ``inbox.remote_folder`` on the cloud and (by default)
+    /// removed from the local inbox. Disabled when the block is absent.
+    var inbox: InboxConfig?
+
+    /// Optional ``[web]`` block: embedded HTTP dashboard. Useful for
+    /// Docker users who don't have a menubar — exposes status / logs
+    /// / manual sync triggers via a browser. Disabled by default;
+    /// when enabled, binds to localhost unless ``bind_addr`` is
+    /// changed (Docker users typically want ``0.0.0.0``).
+    var web: WebConfig?
+
     enum PushStrategy: String, Decodable, Sendable {
         case nativePlain = "native_plain"
         case nativeFormatted = "native_formatted"
@@ -34,6 +48,81 @@ struct Config: Decodable, Sendable {
             case info = "INFO"
             case warning = "WARNING"
             case error = "ERROR"
+        }
+    }
+
+    struct InboxConfig: Decodable, Sendable {
+        /// Local directory the daemon watches for PDF / EPUB drops.
+        /// Path is expanded via ``NSString.expandingTildeInPath`` so
+        /// ``~/Documents/inbox`` and absolute paths both work.
+        var localDir: URL
+        /// Cloud folder to push into. Default ``Inbox``. Created on
+        /// the tablet on first push if missing.
+        var remoteFolder: String
+        /// If true (the default), the local file is removed after a
+        /// successful push so the inbox stays drainable. Set false
+        /// to keep a copy locally.
+        var deleteAfterPush: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case localDir = "local_dir"
+            case remoteFolder = "remote_folder"
+            case deleteAfterPush = "delete_after_push"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let raw = try c.decode(String.self, forKey: .localDir)
+            self.localDir = URL(fileURLWithPath: NSString(string: raw).expandingTildeInPath)
+            self.remoteFolder = try c.decodeIfPresent(String.self, forKey: .remoteFolder) ?? "Inbox"
+            self.deleteAfterPush = try c.decodeIfPresent(Bool.self, forKey: .deleteAfterPush) ?? true
+        }
+
+        /// Memberwise init for tests / direct callers.
+        init(localDir: URL, remoteFolder: String = "Inbox", deleteAfterPush: Bool = true) {
+            self.localDir = localDir
+            self.remoteFolder = remoteFolder
+            self.deleteAfterPush = deleteAfterPush
+        }
+    }
+
+    struct WebConfig: Decodable, Sendable {
+        /// Disabled by default (block absent → server doesn't bind).
+        var enabled: Bool
+        /// Address to bind. ``127.0.0.1`` is the default and the
+        /// safe choice for bare-metal macOS / Linux. Docker users
+        /// typically want ``0.0.0.0`` so the dashboard is reachable
+        /// from the host or LAN.
+        var bindAddr: String
+        var port: Int
+        /// If non-nil, every API request must carry
+        /// ``Authorization: Bearer <token>``. When ``enabled`` is
+        /// true and ``auth_token`` is unset, the daemon generates
+        /// a random token at startup and writes it to
+        /// ``stateDir/web-token`` so the user can read it without
+        /// editing the config.
+        var authToken: String?
+
+        enum CodingKeys: String, CodingKey {
+            case enabled
+            case bindAddr = "bind_addr"
+            case port
+            case authToken = "auth_token"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+            self.bindAddr = try c.decodeIfPresent(String.self, forKey: .bindAddr) ?? "127.0.0.1"
+            self.port = try c.decodeIfPresent(Int.self, forKey: .port) ?? 7878
+            self.authToken = try c.decodeIfPresent(String.self, forKey: .authToken)
+        }
+
+        init(enabled: Bool = false, bindAddr: String = "127.0.0.1", port: Int = 7878, authToken: String? = nil) {
+            self.enabled = enabled
+            self.bindAddr = bindAddr
+            self.port = port
+            self.authToken = authToken
         }
     }
 
@@ -55,6 +144,8 @@ struct Config: Decodable, Sendable {
         case backupSnapshotsToKeep = "backup_snapshots_to_keep"
         case dryRun = "dry_run"
         case log
+        case inbox
+        case web
     }
 
     init(from decoder: Decoder) throws {
@@ -75,6 +166,8 @@ struct Config: Decodable, Sendable {
         self.dryRun = try c.decodeIfPresent(Bool.self, forKey: .dryRun) ?? false
         self.log = try c.decodeIfPresent(LogConfig.self, forKey: .log)
             ?? LogConfig(level: .info)
+        self.inbox = try c.decodeIfPresent(InboxConfig.self, forKey: .inbox)
+        self.web = try c.decodeIfPresent(WebConfig.self, forKey: .web)
     }
 
     // MARK: - loading
@@ -101,7 +194,9 @@ struct Config: Decodable, Sendable {
         pushStrategy: PushStrategy = .nativePlain,
         backupSnapshotsToKeep: Int = 30,
         dryRun: Bool = false,
-        log: LogConfig = LogConfig(level: .info)
+        log: LogConfig = LogConfig(level: .info),
+        inbox: InboxConfig? = nil,
+        web: WebConfig? = nil
     ) {
         self.syncDir = syncDir
         self.remoteFolder = remoteFolder
@@ -117,6 +212,8 @@ struct Config: Decodable, Sendable {
         self.backupSnapshotsToKeep = backupSnapshotsToKeep
         self.dryRun = dryRun
         self.log = log
+        self.inbox = inbox
+        self.web = web
     }
 }
 

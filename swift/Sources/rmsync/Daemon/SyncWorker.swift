@@ -91,6 +91,9 @@ actor SyncWorker {
         case .push:
             try await push(job)
 
+        case .pushInbox:
+            try await pushInbox(localPath: job.hint)
+
         case .deleteLocal, .deleteRemote, .renameRemote:
             // Week 6 territory (delete semantics) and Week 6's rename
             // detection. For now we ack by logging and moving on.
@@ -98,6 +101,68 @@ actor SyncWorker {
                 "job kind not yet implemented",
                 meta: ["kind": job.kind.rawValue, "hint": job.hint]
             )
+        }
+    }
+
+    // MARK: - push inbox
+
+    /// Pushes a PDF / EPUB from the inbox directory to the configured
+    /// ``inbox.remote_folder`` cloud path. Bypasses the Markdown
+    /// pipeline entirely — no rmdoc archive, no state.db tracking,
+    /// no page CRDT generation. ``rmapi put --force`` does the
+    /// upload directly. On success we (by default) delete the
+    /// local file so the inbox stays drainable.
+    private func pushInbox(localPath: String) async throws {
+        guard let inbox = cfg.inbox else {
+            Logger.shared.warn("pushInbox job with no [inbox] config", meta: ["path": localPath])
+            return
+        }
+        let url = URL(fileURLWithPath: localPath)
+        guard FileManager.default.fileExists(atPath: localPath) else {
+            // File vanished between watcher fire and worker pickup —
+            // user moved it back out, or another consumer drained it.
+            // Quiet log and bail.
+            Logger.shared.debug("inbox file gone", meta: ["path": localPath])
+            return
+        }
+
+        Logger.shared.info(
+            "inbox push starting",
+            meta: ["path": localPath, "remote": inbox.remoteFolder]
+        )
+
+        // rmapi accepts PDF and EPUB directly to ``put --force``; no
+        // archive packing required. The cloud doc gets named after
+        // the file's basename minus extension. Same path semantics
+        // the macOS Send-to-reMarkable shortcut produces.
+        do {
+            try await cloud.putRaw(
+                localPath: url,
+                remoteFolder: inbox.remoteFolder
+            )
+        } catch {
+            Logger.shared.error(
+                "inbox push failed",
+                meta: ["path": localPath, "error": "\(error)"]
+            )
+            return
+        }
+
+        if inbox.deleteAfterPush {
+            do {
+                try FileManager.default.removeItem(at: url)
+                Logger.shared.info(
+                    "inbox push complete; local removed",
+                    meta: ["path": localPath]
+                )
+            } catch {
+                Logger.shared.warn(
+                    "inbox push complete; local removal failed",
+                    meta: ["path": localPath, "error": "\(error)"]
+                )
+            }
+        } else {
+            Logger.shared.info("inbox push complete; local kept", meta: ["path": localPath])
         }
     }
 

@@ -195,6 +195,16 @@ dry_run                  = false
 
 [log]
 level = "INFO"   # DEBUG | INFO | WARNING | ERROR
+
+# Optional: drop-folder for sending PDFs / EPUBs to the tablet.
+# Drop a file into ``local_dir``, the daemon pushes it to
+# ``remote_folder`` on the cloud, then (by default) removes it
+# from local. Closes the "send paper to tablet" loop without
+# emails or rmapi-by-hand. Uncomment to enable.
+# [inbox]
+# local_dir         = "$HOME/rmsync-writing/_inbox"
+# remote_folder     = "Inbox"
+# delete_after_push = true
 EOF
     yellow "  Edit this file if you want sync_dir somewhere other than ~/rmsync-writing."
 fi

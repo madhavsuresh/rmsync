@@ -79,7 +79,7 @@ enum Reconcile {
             // ``WatcherFilter`` (the cross-platform extraction) so
             // this works on Linux too — ``LocalWatcher`` itself is
             // gated to macOS-only.
-            if WatcherFilter.shouldIgnore(url.path, syncDir: cfg.syncDir) { continue }
+            if WatcherFilter.shouldIgnore(url.path, root: cfg.syncDir, mode: .markdown) { continue }
 
             let localPath = url.path
             let stored = try await state.byLocalPath(localPath)

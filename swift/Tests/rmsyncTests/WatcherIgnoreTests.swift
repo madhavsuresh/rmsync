@@ -2,56 +2,80 @@ import Foundation
 import Testing
 @testable import rmsync
 
+/// Tests routed through the cross-platform ``WatcherFilter`` rather
+/// than ``LocalWatcher.shouldIgnore``. The forwarder on
+/// ``LocalWatcher`` is macOS-only (the type itself is gated to
+/// ``#if os(macOS)``) — the underlying rules live in
+/// ``WatcherFilter``, so testing against that gives Linux coverage
+/// too.
 @Suite("Watcher ignore rules")
 struct WatcherIgnoreTests {
     @Test("Dropbox conflict copies are ignored")
     func dropboxConflictCopy() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
-        #expect(LocalWatcher.shouldIgnore(
+        #expect(WatcherFilter.shouldIgnore(
             "/tmp/sync/foo (Mac mini's conflicted copy 2026-04-17).md",
-            syncDir: sync
+            root: sync, mode: .markdown
         ))
-        #expect(LocalWatcher.shouldIgnore(
+        #expect(WatcherFilter.shouldIgnore(
             "/tmp/sync/bar (Alice's CONFLICTED COPY 2024-12-01 1).md",
-            syncDir: sync
+            root: sync, mode: .markdown
         ))
     }
 
-    @Test("plain .md files are NOT ignored")
+    @Test("plain .md files are NOT ignored in markdown mode")
     func plainMDPasses() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
-        #expect(!LocalWatcher.shouldIgnore("/tmp/sync/note.md", syncDir: sync))
-        #expect(!LocalWatcher.shouldIgnore(
+        #expect(!WatcherFilter.shouldIgnore("/tmp/sync/note.md", root: sync, mode: .markdown))
+        #expect(!WatcherFilter.shouldIgnore(
             "/tmp/sync/my document with parens (yes).md",
-            syncDir: sync
+            root: sync, mode: .markdown
         ))
     }
 
-    @Test("dotfiles / tmp / conflict files ignored")
+    @Test("dotfiles / tmp / conflict files ignored in both modes")
     func dotfilesAndTmp() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
-        #expect(LocalWatcher.shouldIgnore("/tmp/sync/.DS_Store", syncDir: sync))
-        #expect(LocalWatcher.shouldIgnore("/tmp/sync/.hidden.md", syncDir: sync))
-        #expect(LocalWatcher.shouldIgnore("/tmp/sync/note.md.tmp", syncDir: sync))
-        #expect(LocalWatcher.shouldIgnore("/tmp/sync/note.md.conflict", syncDir: sync))
+        for mode in [WatcherMode.markdown, .inbox] {
+            #expect(WatcherFilter.shouldIgnore("/tmp/sync/.DS_Store", root: sync, mode: mode))
+            #expect(WatcherFilter.shouldIgnore("/tmp/sync/.hidden.md", root: sync, mode: mode))
+            #expect(WatcherFilter.shouldIgnore("/tmp/sync/note.md.tmp", root: sync, mode: mode))
+            #expect(WatcherFilter.shouldIgnore("/tmp/sync/note.md.conflict", root: sync, mode: mode))
+        }
     }
 
-    @Test("non-.md suffixes are ignored")
-    func nonMDIgnored() {
+    @Test("non-.md suffixes are ignored in markdown mode")
+    func nonMDIgnoredInMarkdown() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
-        #expect(LocalWatcher.shouldIgnore("/tmp/sync/thing.txt", syncDir: sync))
-        #expect(LocalWatcher.shouldIgnore("/tmp/sync/thing.pdf", syncDir: sync))
+        #expect(WatcherFilter.shouldIgnore("/tmp/sync/thing.txt", root: sync, mode: .markdown))
+        #expect(WatcherFilter.shouldIgnore("/tmp/sync/thing.pdf", root: sync, mode: .markdown))
+        #expect(WatcherFilter.shouldIgnore("/tmp/sync/thing.epub", root: sync, mode: .markdown))
     }
 
     @Test("anything under .rmsync-trash ignored")
     func rmSyncTrash() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
-        #expect(LocalWatcher.shouldIgnore(
-            "/tmp/sync/.rmsync-trash/old.md", syncDir: sync
+        #expect(WatcherFilter.shouldIgnore(
+            "/tmp/sync/.rmsync-trash/old.md", root: sync, mode: .markdown
         ))
     }
 
-    @Test("symlink escapes are ignored")
+    // MARK: - inbox-mode-specific rules
+
+    @Test("inbox mode: PDF and EPUB pass; .md ignored")
+    func inboxAcceptsPDFAndEPUB() {
+        let inbox = URL(fileURLWithPath: "/tmp/inbox")
+        #expect(!WatcherFilter.shouldIgnore("/tmp/inbox/paper.pdf", root: inbox, mode: .inbox))
+        #expect(!WatcherFilter.shouldIgnore("/tmp/inbox/book.epub", root: inbox, mode: .inbox))
+        // Case-insensitive on extension.
+        #expect(!WatcherFilter.shouldIgnore("/tmp/inbox/UPPER.PDF", root: inbox, mode: .inbox))
+        // .md, .txt, .docx all rejected — only PDF/EPUB land cleanly on the tablet.
+        #expect(WatcherFilter.shouldIgnore("/tmp/inbox/note.md", root: inbox, mode: .inbox))
+        #expect(WatcherFilter.shouldIgnore("/tmp/inbox/notes.txt", root: inbox, mode: .inbox))
+        #expect(WatcherFilter.shouldIgnore("/tmp/inbox/file.docx", root: inbox, mode: .inbox))
+    }
+
+    @Test("symlink escapes are ignored in both modes")
     func symlinkEscapeIgnored() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("rmsync-watch-\(UUID().uuidString)")
@@ -66,9 +90,11 @@ struct WatcherIgnoreTests {
         let link = sync.appendingPathComponent("escape", isDirectory: true)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
 
-        #expect(LocalWatcher.shouldIgnore(
-            link.appendingPathComponent("note.md").path,
-            syncDir: sync
-        ))
+        for mode in [WatcherMode.markdown, .inbox] {
+            #expect(WatcherFilter.shouldIgnore(
+                link.appendingPathComponent("note.md").path,
+                root: sync, mode: mode
+            ))
+        }
     }
 }

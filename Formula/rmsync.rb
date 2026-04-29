@@ -222,6 +222,15 @@ class Rmsync < Formula
 
       [log]
       level = "INFO"   # DEBUG | INFO | WARNING | ERROR
+
+      # Optional: drop-folder for sending PDFs / EPUBs to the tablet.
+      # Drop a file into ``local_dir``, the daemon pushes it to
+      # ``remote_folder`` on the cloud, then (by default) removes it
+      # from local. Uncomment to enable.
+      # [inbox]
+      # local_dir         = "$HOME/rmsync-writing/_inbox"
+      # remote_folder     = "Inbox"
+      # delete_after_push = true
       TOML
         echo "  Edit it if you want sync_dir somewhere other than ~/rmsync-writing"
         echo "  (or run 'rmsync relocate <new-path>' after the daemon comes up)."

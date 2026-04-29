@@ -110,6 +110,39 @@ of the kernel default; check `docker logs rmsync | grep watch`.
 
 ---
 
+## Send PDFs / EPUBs to the tablet (inbox)
+
+Drop a `.pdf` or `.epub` into a configured "inbox" folder; the
+daemon pushes it to a cloud folder and (by default) removes it
+from local. Useful for "I read this on the tablet" workflows
+where you don't want the file round-tripping back as Markdown.
+
+To enable, edit `data/config/config.toml` and add:
+
+```toml
+[inbox]
+local_dir         = "/sync/_inbox"   # any path inside /sync (or bind-mount another)
+remote_folder     = "Inbox"
+delete_after_push = true             # set false to keep a copy locally
+```
+
+Then restart: `docker compose restart`. The daemon creates the
+`_inbox` directory if missing and starts watching for drops.
+Workflow:
+
+```sh
+# On the host:
+cp ~/Downloads/some-paper.pdf data/sync/_inbox/
+# Within ~5 seconds (debounce + push), the daemon logs:
+#   inbox push starting        path=/sync/_inbox/some-paper.pdf
+#   inbox push complete; local removed
+# The PDF appears in /Inbox/ on your reMarkable tablet on next sync.
+```
+
+Non-`.pdf`/`.epub` files in the inbox dir are ignored with a one-
+time warning. Multiple drops in quick succession are debounced
+and processed serially.
+
 ## Operational commands
 
 All `rmsync` subcommands work via `docker exec` against the
