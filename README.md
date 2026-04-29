@@ -293,25 +293,32 @@ Full config reference and behavioural details in `docs/USAGE.md`.
 ```
 rmsync/
 ├── swift/                       Swift Package Manager project
-│   ├── Package.swift            3 targets: rmsync, rmsync-menubar, RMScene
+│   ├── Package.swift            3 targets: rmsync, rmsync-menubar (macOS), RMScene
 │   ├── Sources/
-│   │   ├── rmsync/              daemon + CLI (~5000 LoC)
-│   │   ├── rmsync-menubar/      menu bar app (Swift 6, @MainActor)
-│   │   └── RMScene/             vendored v6 CRDT codec
-│   └── Tests/                   98 tests (Swift Testing + XCTest)
+│   │   ├── rmsync/              daemon + CLI (~5000 LoC, cross-platform)
+│   │   ├── rmsync-menubar/      menu bar app (macOS-only)
+│   │   └── RMScene/             vendored v6 CRDT codec (cross-platform)
+│   └── Tests/                   ~110 tests (Swift Testing + XCTest)
 │       ├── rmsyncTests/         daemon tests + live-cloud smoke
 │       └── RMSceneTests/        50 codec tests w/ real fixtures
-├── assets/folder-icon.icns      bundled Finder folder icon
-├── scripts/                     launchd plist templates
-├── install.sh                   one-command install
+├── assets/folder-icon.icns      bundled Finder folder icon (macOS)
+├── scripts/                     launchd plist templates + dev helpers
+├── docker/                      Docker entrypoint + default config
+├── Dockerfile                   multi-stage build (swift:6.1-jammy)
+├── docker-compose.yml           example single-service compose
+├── install.sh                   macOS one-command install (source path)
 ├── uninstall.sh                 opposite; `--purge` wipes state + config
 ├── docs/
-│   ├── USAGE.md                 ← operational guide (read this)
+│   ├── USAGE.md                 ← macOS operational guide
+│   ├── DOCKER.md                ← Linux/Docker operational guide
 │   ├── LLM_CONTEXT.md           ← single-file context for LLM chats
 │   ├── HOMEBREW.md              ← setting up the brew tap
+│   ├── TESTING.md               ← test infra (offline/live/fresh-install)
 │   └── SWIFT_PORT_PHASE1.md     the port plan we executed
-├── Formula/rmsync.rb           Homebrew formula
-├── .github/workflows/release.yml  tag-triggered universal build + release
+├── Formula/rmsync.rb            Homebrew formula
+├── .github/workflows/
+│   ├── ci.yml                   macOS + Linux build + live-cloud smoke
+│   └── release.yml              tag-triggered: GitHub release + brew bump + GHCR
 ├── CHANGES_FROM_SPEC.md         invariants from the Python v0.1
 ├── README.md                    you are here
 └── python-legacy.tar.gz         v0.1 archive (safe to delete)
