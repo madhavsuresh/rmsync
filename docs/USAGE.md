@@ -291,6 +291,71 @@ Config keys and defaults (all paths relative to your home):
 
 ---
 
+## Optional: drop-folder for sending PDFs / EPUBs
+
+Add to `~/.config/rmsync/config.toml`:
+
+```toml
+[inbox]
+local_dir         = "~/rmsync-writing/_inbox"
+remote_folder     = "Inbox"
+delete_after_push = true
+```
+
+Then `rmsync restart`. Drop a `.pdf` or `.epub` into `local_dir`;
+within ~5 seconds the daemon pushes it to `/Inbox/` on your
+reMarkable cloud and (by default) removes the local copy. Closes
+the "send paper to tablet" loop without email or rmapi-by-hand.
+
+The daemon creates `local_dir` on startup if missing. Watcher
+shares the same FSEvents subscription model as the main
+sync_dir watcher — just with a `mode: .inbox` filter that
+accepts only PDFs and EPUBs.
+
+`docker exec rmsync rmsync logs -f` (or `rmsync logs -f` on
+macOS) shows the push events; the daemon never silently drops a
+file:
+
+```
+{"event":"inbox push starting","path":"/Users/you/rmsync-writing/_inbox/paper.pdf"}
+{"event":"inbox push complete; local removed","path":".../paper.pdf"}
+```
+
+Non-`.pdf`/`.epub` files in the inbox are ignored with a one-time
+warning per filename.
+
+---
+
+## Optional: web dashboard
+
+Add to `~/.config/rmsync/config.toml`:
+
+```toml
+[web]
+enabled    = true
+bind_addr  = "127.0.0.1"
+port       = 7878
+# auth_token = "..."   # leave empty → daemon generates one
+```
+
+Then `rmsync restart`. Open `http://127.0.0.1:7878/?token=...` —
+the token is written to `~/Library/Application Support/rmsync/web-token`
+on first start (or whatever you set explicitly). Shows live
+status, recent docs, conflicts, with manual sync-now / pause /
+resume buttons.
+
+Token gets stored in your browser's localStorage on first load,
+so subsequent visits work from `http://127.0.0.1:7878/` without
+the query string.
+
+For LAN access (e.g. from another machine on your home network),
+set `bind_addr = "0.0.0.0"`. The token still gates every API
+call. macOS users typically prefer the menubar; the web UI is
+there for parity with the Linux/Docker build and for users who
+want a glanceable browser tab.
+
+---
+
 ## Menu bar
 
 Look at your menu bar — you'll see an icon near the top-right of the
