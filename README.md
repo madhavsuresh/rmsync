@@ -47,6 +47,24 @@ rmsync doctor                   # should be all ✓
 
 `brew upgrade rmsync` from then on for new versions.
 
+### Docker (Linux / mini-PC)
+
+If you don't have a Mac, run rmsync as a daemon container on any
+Linux host. No menubar, but everything else works the same:
+
+```sh
+mkdir -p data/{config,state,sync}
+curl -fsSL -o docker-compose.yml \
+    https://raw.githubusercontent.com/madhavsuresh/rmsync/main/docker-compose.yml
+docker compose up -d
+docker exec -it rmsync rmapi   # one-time reMarkable auth
+docker exec rmsync rmsync doctor
+```
+
+Multi-arch image (amd64 + arm64) published on every release to
+[ghcr.io/madhavsuresh/rmsync](https://github.com/madhavsuresh/rmsync/pkgs/container/rmsync).
+Full operational guide in [`docs/DOCKER.md`](docs/DOCKER.md).
+
 ### From source
 
 ```sh

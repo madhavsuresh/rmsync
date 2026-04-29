@@ -1,0 +1,46 @@
+# Minimal docker compose for rmsync. Drop this file next to a ``data/``
+# directory containing ``config/``, ``state/``, and ``sync/`` subfolders
+# (the entrypoint creates them on first run if missing) and:
+#
+#   docker compose up -d
+#   docker exec -it rmsync rmapi   # one-time reMarkable auth
+#   docker exec rmsync rmsync doctor
+#
+# Logs: ``docker logs rmsync`` (the daemon's structured-JSON sink writes
+# to stderr; docker captures it).
+#
+# To upgrade: ``docker compose pull && docker compose up -d``.
+#
+# inotify watch limit caveat: if you have a large sync tree
+# (many subdirectories), bump the host's
+# ``fs.inotify.max_user_watches`` sysctl. Default is 8192. See
+# docs/DOCKER.md for the one-line fix.
+
+services:
+  rmsync:
+    image: ghcr.io/madhavsuresh/rmsync:latest
+    container_name: rmsync
+    restart: unless-stopped
+
+    # Run as a non-root user so files in ``./data/sync`` end up
+    # owned by you, not root. Adjust UID/GID to your host user
+    # (``id -u`` / ``id -g``). Without this the host user can't
+    # edit files written by the daemon.
+    # user: "1000:1000"
+
+    volumes:
+      - ./data/config:/config
+      - ./data/state:/state
+      - ./data/sync:/sync
+
+    healthcheck:
+      # ``rmsync status`` exits 0 when the daemon is responsive on
+      # the IPC socket. Fast (<100ms typical) so the 10s interval
+      # doesn't stress the daemon. ``start_period`` lets the
+      # initial reconcile finish before the healthcheck counts
+      # against the container.
+      test: ["CMD", "/usr/local/bin/rmsync", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

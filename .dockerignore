@@ -1,0 +1,36 @@
+# Build context exclusions for ``docker build``. We only need the
+# Swift package — everything else (install scripts, brew formula,
+# git history, build artifacts) makes the build slower and larger
+# without contributing to the final image.
+
+# macOS-only artifacts and source we don't need
+Formula/
+install.sh
+uninstall.sh
+scripts/
+assets/
+docs/
+*.md
+.github/
+
+# Build artifacts (regenerated inside the builder stage)
+swift/.build/
+swift/.swiftpm/
+.build/
+.swiftpm/
+
+# Version control + editor noise
+.git/
+.gitignore
+.gitattributes
+.DS_Store
+.vscode/
+.idea/
+
+# Python legacy archive
+python-legacy.tar.gz
+
+# This Dockerfile + docker-compose itself — not needed inside the build context
+Dockerfile
+docker-compose.yml
+.dockerignore

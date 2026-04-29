@@ -94,6 +94,58 @@ jobs:
           ./.build/apple/Products/Release/rmsync --help | grep -E '^SUBCOMMANDS:'
           ./.build/apple/Products/Release/rmsync --help | grep -E '(status|doctor|relocate)'
 
+  # Linux build job. Catches Linux-specific compile errors as soon as
+  # they land on main — the macOS test job above can't, because the
+  # ``#if os(macOS)`` / ``#if os(Linux)`` guards mean each platform
+  # only sees its own half of the code.
+  #
+  # Runs in the upstream ``swift:6.0-jammy`` container so we don't
+  # depend on whatever Swift version Ubuntu's apt has at any given
+  # moment. Same Swift toolchain the Dockerfile uses.
+  linux-build:
+    name: Build + test (Linux)
+    runs-on: ubuntu-24.04
+    container:
+      image: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        # libsqlite3-dev for GRDB; ca-certificates for SwiftPM HTTPS
+        # fetches. The ``swift`` image ships build-essential + git but
+        # not these.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libsqlite3-dev ca-certificates
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build (debug)
+        working-directory: swift
+        # ``--disable-sandbox`` is required inside Docker — there's no
+        # sandbox-exec on Linux, and sandboxed build aborts on missing
+        # /usr/sbin/sandbox-exec. Same reason the Dockerfile uses it.
+        run: swift build --disable-sandbox
+
+      - name: Test
+        working-directory: swift
+        # Live-cloud tests gate on RMSYNC_LIVE=1; not setting it skips
+        # them. macOS-only test files (``XattrsTests``,
+        # ``FileProviderDetectionTests``) are gated by ``#if
+        # os(macOS)`` so they compile to nothing here and don't count.
+        timeout-minutes: 10
+        run: swift test --no-parallel --disable-sandbox 2>&1 | cat
+
+      - name: Verify release build + --help output
+        working-directory: swift
+        # Same sanity check the macOS job runs, against the Linux
+        # release binary.
+        run: |
+          swift build --disable-sandbox -c release --product rmsync
+          ./.build/release/rmsync --help | grep -E '^SUBCOMMANDS:'
+          ./.build/release/rmsync --help | grep -E '(status|doctor)'
+
   # Live-cloud smoke test against a dedicated rmapi test account.
   #
   # Why this exists: the offline ``test`` job above can't catch
@@ -152,7 +204,10 @@ jobs:
           # path and the macOS rmapi binary couldn't find it.
           mkdir -p "$HOME/.config/rmapi" \
                    "$HOME/Library/Application Support/rmapi"
-          printf '%s' "$TEST_RMAPI_CONFIG" | base64 -D \
+          # ``--decode`` works on both BSD (macOS ``base64 -D``) and
+          # GNU coreutils (``base64 -d``). The portable spelling
+          # avoids the BSD-vs-GNU split.
+          printf '%s' "$TEST_RMAPI_CONFIG" | base64 --decode \
             > "$HOME/Library/Application Support/rmapi/rmapi.conf"
           cp "$HOME/Library/Application Support/rmapi/rmapi.conf" \
              "$HOME/.config/rmapi/rmapi.conf"
