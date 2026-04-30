@@ -1041,14 +1041,22 @@ actor SyncWorker {
         let lockKey = stored?.docID ?? "new:\(localPath.path)"
         let token = await locks.acquire(lockKey)
         defer { Task { await token.release() } }
-        try await doPush(localPath: localPath, stored: stored)
+        try await doPush(localPath: localPath, stored: stored, force: job.force)
     }
 
-    private func doPush(localPath: URL, stored: Document?) async throws {
+    private func doPush(
+        localPath: URL, stored: Document?, force: Bool = false
+    ) async throws {
         let text = (try? String(contentsOf: localPath, encoding: .utf8)) ?? ""
         let newHash = PathUtilities.sha256(text)
 
-        if let stored, stored.lastSyncedMDHash == newHash {
+        if !force, let stored, stored.lastSyncedMDHash == newHash {
+            // v0.2.26: ``force`` skips this short-circuit. Used by
+            // ``rmsync retry-parked`` to retry a doc whose push
+            // previously errored even though the on-disk hash
+            // matches what we last claimed to sync — the parked
+            // row's hash was set at the failed push attempt, so
+            // the file content didn't actually reach the cloud.
             Logger.shared.debug(
                 "push no-op (hash unchanged)",
                 meta: ["doc_id": stored.docID]
@@ -1277,6 +1285,19 @@ actor SyncWorker {
             // moves are handled by the rename pipeline (Phase 4
             // of the v0.2.19 propagation work).
             remoteParent = String(stored.remotePath[..<lastSlash])
+            // v0.2.26 bugfix: a doc parked from a prior failed
+            // push (v0.2.23+) carries an optimistic
+            // ``stored.remotePath`` that promises a cloud
+            // location whose intermediate folders may never
+            // have been actually created. Phase A only ran the
+            // mkdir chain for ``stored == nil`` — so retries
+            // skipped it and put() failed with "directory
+            // doesn't exist". Defensive-mkdir each prefix here
+            // too. Cheap (rmapi mkdir errors on existing dirs
+            // and we swallow with try?), idempotent.
+            for prefix in PathUtilities.remoteParentPrefixes(remoteParent) {
+                try? await cloud.mkdir(prefix)
+            }
         } else {
             // New doc: derive remoteParent from the local file's
             // position under sync_dir so subdirectory structure

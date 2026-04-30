@@ -29,6 +29,7 @@ struct RMSyncCommand: AsyncParsableCommand {
             Uninstall.self,
             TrashCmd.self,
             History.self,
+            RetryParked.self,
         ],
         defaultSubcommand: nil
     )

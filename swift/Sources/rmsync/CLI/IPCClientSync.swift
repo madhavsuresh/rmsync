@@ -128,20 +128,36 @@ enum IPCClientSync {
 
     /// Ask the daemon to enqueue a push for ``path`` immediately,
     /// bypassing the watcher's debounce. Used by
-    /// ``rmsync history restore`` so a reverted file is shipped to
-    /// the cloud the moment the user runs the command, without
-    /// waiting for the watcher to notice the modification.
+    /// ``rmsync history restore`` (v0.2.20+) and
+    /// ``rmsync retry-parked`` (v0.2.26+).
     ///
-    /// Returns true if the daemon ack'd; false (with a printed
-    /// warning) if the daemon isn't running. Restore is still
-    /// useful in that case — the local file is already reverted —
-    /// and the watcher will pick it up when the daemon comes back.
+    /// ``force`` (v0.2.26+) bypasses the worker's hash-unchanged
+    /// no-op short-circuit. Necessary for the retry path because
+    /// a parked doc's ``last_synced_md_hash`` matches the file's
+    /// current content (the failed push stamped it that way), so
+    /// without ``force`` the worker would skip the retry as a
+    /// no-op.
+    ///
+    /// Returns true if the daemon ack'd; false otherwise (e.g.,
+    /// daemon not running). Callers print their own user-facing
+    /// "daemon not running" message.
     @discardableResult
-    static func pushPath(_ path: String, timeout: TimeInterval = 2.0) -> Bool {
+    static func pushPath(
+        _ path: String, force: Bool = false, timeout: TimeInterval = 2.0
+    ) -> Bool {
         do {
-            _ = try request("push_path", extra: ["path": path], timeout: timeout)
+            var extra: [String: Any] = ["path": path]
+            if force { extra["force"] = true }
+            _ = try request("push_path", extra: extra, timeout: timeout)
             return true
         } catch {
+            // Log to stderr so callers can diagnose without
+            // patching the source. Earlier this swallowed errors
+            // silently; v0.2.26 surfaces the underlying cause
+            // (timeout / malformed-response / daemon-down).
+            FileHandle.standardError.write(Data(
+                "  push_path IPC error: \(error)\n".utf8
+            ))
             return false
         }
     }

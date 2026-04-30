@@ -42,4 +42,11 @@ struct Job: Sendable, Equatable {
     /// path is relevant to the kind. For PUSH_INBOX it's the local PDF /
     /// EPUB path.
     let hint: String
+    /// Bypass the worker's "skip if hash unchanged" no-op short-circuit.
+    /// Used by ``rmsync retry-parked`` (v0.2.26+) to force a fresh
+    /// push attempt for a doc whose ``error_state = "push_failed"`` and
+    /// whose on-disk content didn't actually change between the failed
+    /// push and the retry. Default ``false``; only the manual retry
+    /// command sets it.
+    var force: Bool = false
 }

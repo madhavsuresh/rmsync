@@ -138,11 +138,20 @@ enum DaemonScaffold {
         // semantics handle both tracked and untracked paths
         // correctly).
         await server.register("push_path") { frame in
-            let path = (frame.decodeDict()?["path"] as? String) ?? ""
+            let dict = frame.decodeDict()
+            let path = (dict?["path"] as? String) ?? ""
             guard !path.isEmpty else {
                 return SendableJSON.dict(["error": "missing path"])
             }
-            await queue.enqueue(Job(kind: .push, docID: nil, hint: path))
+            // v0.2.26: optional ``force`` flag bypasses the
+            // worker's hash-unchanged no-op short-circuit.
+            // ``rmsync retry-parked`` uses this to re-push docs
+            // whose previous push failed even though the file
+            // content didn't change between attempts.
+            let force = (dict?["force"] as? Bool) ?? false
+            await queue.enqueue(Job(
+                kind: .push, docID: nil, hint: path, force: force
+            ))
             return SendableJSON.dict(["enqueued": true])
         }
         try await server.start()

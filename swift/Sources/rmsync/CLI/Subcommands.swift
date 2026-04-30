@@ -852,3 +852,89 @@ struct History: AsyncParsableCommand {
         return iso.string(from: date)
     }
 }
+
+// MARK: - retry-parked
+
+/// Force a push retry for every doc currently parked with
+/// ``error_state = "push_failed"``. v0.2.26+.
+///
+/// Background: when ``rmapi put`` fails, the worker writes a
+/// ``state.db`` row marking the doc as ``push_failed`` and
+/// stamps its ``last_synced_md_hash`` with the bytes that *would
+/// have* been uploaded. This stops the daemon from retry-looping
+/// on every reconcile pass, but it also means subsequent
+/// retry-attempts hit the worker's "skip if hash unchanged"
+/// no-op short-circuit — the file's current content matches the
+/// stored hash, so nothing happens.
+///
+/// This command sends a ``push_path`` IPC frame with ``force =
+/// true`` for each parked doc, bypassing the no-op check. The
+/// worker uses ``--force`` mode against rmapi (replace-existing
+/// rather than create-new), which both handles the
+/// already-tracked case and gives rmapi the explicit signal.
+/// Successful retry → ``markPushed`` clears ``error_state``
+/// → parked count drops. Failed retry → ``error_state`` re-set;
+/// the cloud-health probe (v0.2.25) classifies the failure
+/// (rmapi/cloud incompatibility vs auth vs per-doc).
+///
+/// Other ``error_state`` values (``parse_failed``,
+/// ``bulk_delete_refused``) are NOT retried — those represent
+/// failure modes where retrying without other action wouldn't
+/// help. Targets ``push_failed`` only by design.
+struct RetryParked: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "retry-parked",
+        abstract: "Force a push retry for docs parked with error_state = push_failed."
+    )
+
+    @Flag(name: .long, help: "Show what would be retried without enqueuing.")
+    var dryRun: Bool = false
+
+    func run() async throws {
+        _ = try Config.load()
+        let state = try State(path: Paths.stateDBPath)
+        let allDocs = try await state.allDocuments()
+        let parked = allDocs.filter { $0.errorState == "push_failed" }
+
+        if parked.isEmpty {
+            print("No push-failed parked errors. Other error_state values "
+                  + "(parse_failed, bulk_delete_refused) need different "
+                  + "handling and aren't touched by this command.")
+            return
+        }
+
+        print("Retrying \(parked.count) parked push(es):")
+        for doc in parked {
+            print("  - \(doc.localPath)")
+        }
+        if dryRun {
+            print("")
+            print("(dry-run; no IPC sent)")
+            return
+        }
+
+        if !IPCClientSync.daemonIsUp() {
+            print("")
+            print("daemon not running — start it (`rmsync start`) and re-run.")
+            throw ExitCode(1)
+        }
+
+        var enqueued = 0
+        for doc in parked {
+            // ``force = true`` bypasses the worker's
+            // hash-unchanged no-op short-circuit. Without it the
+            // retry would silently skip — see RetryParked
+            // doc-comment for why.
+            if IPCClientSync.pushPath(doc.localPath, force: true) {
+                enqueued += 1
+            } else {
+                print("  ! IPC push_path failed for \(doc.localPath)")
+            }
+        }
+
+        print("")
+        print("Enqueued \(enqueued)/\(parked.count) push(es). Watch progress:")
+        print("    rmsync status              # parked count drops as pushes succeed")
+        print("    rmsync logs --tail         # see per-doc push results")
+    }
+}
