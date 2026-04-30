@@ -83,15 +83,25 @@ enum PageCodec {
         return out.isEmpty ? "" : out + "\n"
     }
 
-    /// Serialize plain text into a v6 .rm byte stream using a stable
-    /// author UUID.
+    /// Serialize Markdown into a v6 ``.rm`` byte stream using a stable
+    /// author UUID, preserving every paragraph and inline style the
+    /// tablet supports.
     ///
-    /// Collapses runs of blank lines (`\n{2,}`) to a single `\n` before
-    /// encoding so the tablet model never holds empty paragraphs. The
-    /// tablet renders empty paragraphs as visible blank lines on top of
-    /// its own paragraph spacing, which doesn't match pandoc's
-    /// collapse-to-one-paragraph-break rule. Normalising here keeps the
-    /// tablet view ≈ pandoc PDF for the same source.
+    /// Two transforms run before the bytes hit the encoder:
+    ///
+    ///   1. **Blank-line collapse.** `\n{2,}` → `\n`. The tablet
+    ///      renders empty paragraphs as visible blank lines on top of
+    ///      its own paragraph spacing, which doesn't match pandoc's
+    ///      collapse-to-one-paragraph-break rule. Normalising here
+    ///      keeps the tablet view ≈ pandoc PDF for the same source.
+    ///   2. **Markdown → styled paragraphs.** Each line's leading
+    ///      prefix (`# `, `## `, `- `, `  - `, `- [ ] `, `- [x] `) maps
+    ///      to a tablet ``ParagraphStyle``; the prefix is stripped
+    ///      from the body. Within each body, `***x***` / `**x**` /
+    ///      `*x*` runs become inline bold / italic / bold+italic spans.
+    ///
+    /// The resulting `.rm` round-trips back through ``parsePage`` to
+    /// the same canonical Markdown.
     static func renderPage(text: String, authorUUID: String) throws -> Data {
         guard let uuid = UUID(uuidString: authorUUID) else {
             throw CodecError.invalidAuthorUUID(authorUUID)
@@ -99,8 +109,9 @@ enum PageCodec {
         let normalized = text.replacingOccurrences(
             of: #"\n{2,}"#, with: "\n", options: .regularExpression
         )
+        let paragraphs = parseMarkdown(normalized)
         let encoder = RMSceneEncoder()
-        let blocks = encoder.simpleTextDocument(normalized, authorID: uuid)
+        let blocks = encoder.richTextDocument(paragraphs, authorID: uuid)
         // Wire version for ``.rm`` files we write. Verified
         // byte-identical against Python ``rmscene.write_blocks`` output
         // for ``simple_text_document``; any v3.4+ produces the same
@@ -149,6 +160,115 @@ enum PageCodec {
         }
         while out.hasSuffix("\n") { out.removeLast() }
         return out
+    }
+
+    // MARK: - markdown → styled paragraphs (push side)
+
+    /// Inverse of the ``prefix(for:)`` table: detect a leading Markdown
+    /// prefix on the line, return the corresponding ``ParagraphStyle``,
+    /// and the rest of the line (the prefix stripped). Order matters —
+    /// we check longer/more-specific prefixes (`- [ ] `, `  - `) before
+    /// shorter ones (`- `) so a checkbox isn't mis-classified as a
+    /// bullet, and a nested bullet isn't mis-classified as plain.
+    private static func paragraphStyle(for line: String) -> (ParagraphStyle, String) {
+        if line.hasPrefix("- [ ] ") {
+            return (.checkbox, String(line.dropFirst(6)))
+        }
+        if line.hasPrefix("- [x] ") {
+            return (.checkboxChecked, String(line.dropFirst(6)))
+        }
+        if line.hasPrefix("  - ") {
+            return (.bullet2, String(line.dropFirst(4)))
+        }
+        if line.hasPrefix("- ") {
+            return (.bullet, String(line.dropFirst(2)))
+        }
+        if line.hasPrefix("## ") {
+            return (.bold, String(line.dropFirst(3)))
+        }
+        if line.hasPrefix("# ") {
+            return (.heading, String(line.dropFirst(2)))
+        }
+        return (.plain, line)
+    }
+
+    /// Parse inline `**bold**` / `*italic*` / `***both***` markers in a
+    /// stripped paragraph body into ``RMSceneEncoder.Span`` runs.
+    /// Mirrors the wrappers ``render(_:)`` emits on pull, so a span
+    /// round-trips: span → markdown → span. Only the three marker
+    /// shapes our pull side produces are recognized; other Markdown
+    /// inline syntax (links, code, strikethrough) is left as literal
+    /// text — the tablet doesn't render it anyway.
+    private static func parseInline(_ body: String) -> [RMSceneEncoder.Span] {
+        var spans: [RMSceneEncoder.Span] = []
+        var buffer = ""
+        var bold = false
+        var italic = false
+
+        func flush() {
+            guard !buffer.isEmpty else { return }
+            spans.append(RMSceneEncoder.Span(
+                text: buffer,
+                style: InlineTextStyle(
+                    fontWeight: bold ? .bold : .normal,
+                    fontStyle: italic ? .italic : .normal
+                )
+            ))
+            buffer = ""
+        }
+
+        var i = body.startIndex
+        while i < body.endIndex {
+            let rest = body[i...]
+            if rest.hasPrefix("***") {
+                flush()
+                bold.toggle()
+                italic.toggle()
+                i = body.index(i, offsetBy: 3)
+            } else if rest.hasPrefix("**") {
+                flush()
+                bold.toggle()
+                i = body.index(i, offsetBy: 2)
+            } else if rest.hasPrefix("*") {
+                flush()
+                italic.toggle()
+                i = body.index(i, offsetBy: 1)
+            } else {
+                buffer.append(body[i])
+                i = body.index(after: i)
+            }
+        }
+        flush()
+        return spans
+    }
+
+    /// Top-level parser: split on `\n`, classify each line by paragraph
+    /// prefix, parse inline markers in the stripped body. Empty lines
+    /// (which our blank-line collapse should already have eliminated,
+    /// but a leading or trailing `\n` can still produce one) become
+    /// empty paragraphs with `.plain` style. The pull side renders an
+    /// empty `.plain` paragraph as nothing, so a stray empty paragraph
+    /// here is harmless even if not ideal.
+    static func parseMarkdown(_ text: String) -> [RMSceneEncoder.StyledParagraph] {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var paragraphs: [RMSceneEncoder.StyledParagraph] = []
+        for line in lines {
+            let (style, stripped) = paragraphStyle(for: String(line))
+            let spans = parseInline(stripped)
+            paragraphs.append(RMSceneEncoder.StyledParagraph(style: style, spans: spans))
+        }
+        // A trailing newline on the input produces an empty trailing
+        // line (omittingEmptySubsequences: false). Drop it so the
+        // tablet model doesn't gain a trailing empty paragraph the user
+        // didn't actually type.
+        if let last = paragraphs.last,
+           last.style == .plain,
+           last.spans.allSatisfy({ $0.text.isEmpty }) {
+            paragraphs.removeLast()
+        }
+        return paragraphs.isEmpty
+            ? [RMSceneEncoder.StyledParagraph(style: .plain, spans: [])]
+            : paragraphs
     }
 
     enum CodecError: Error, CustomStringConvertible, Sendable {
