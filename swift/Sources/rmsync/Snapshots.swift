@@ -24,9 +24,14 @@ import Foundation
 ///
 ///   - **Doc-id keyed, not path-keyed.** ``rmsync relocate``
 ///     rewrites every row's ``local_path`` but doc-id is stable.
-///   - **Flat copies, not diffs.** Disk usage is bounded by
-///     ``cfg.backupSnapshotsToKeep`` × file size. Restoration is
+///   - **Flat copies, not diffs.** Disk usage is bounded by the
+///     ``keep`` argument to ``prune`` (typically
+///     ``cfg.backupSnapshotsToKeep``) × file size. Restoration is
 ///     a `cp`. Diff defers to POSIX ``diff(1)``.
+///   - **`stateDir` is passed in, not read from globals.** The
+///     daemon passes ``Paths.stateDir``; tests pass an isolated
+///     tempdir. Lets the test suite drive snapshots without
+///     touching the user's real state directory.
 ///   - **Pure Foundation.** Cross-platform; identical behavior on
 ///     macOS and Linux.
 ///   - **Daemon-independent helpers.** Worker integrates via the
@@ -80,10 +85,10 @@ enum Snapshots {
         content: String,
         docID: String,
         cause: String,
-        in cfg: Config,
+        in stateDir: URL,
         now: Date = Date()
     ) throws -> Entry {
-        let docDir = directory(for: docID, in: cfg)
+        let docDir = directory(for: docID, in: stateDir)
         try FileManager.default.createDirectory(
             at: docDir, withIntermediateDirectories: true
         )
@@ -150,9 +155,9 @@ enum Snapshots {
     /// files — cheap. Missing-or-malformed sidecars are skipped
     /// with a warn log so a partially-corrupted dir still yields
     /// usable history.
-    static func list(docID: String, in cfg: Config) throws -> [Entry] {
+    static func list(docID: String, in stateDir: URL) throws -> [Entry] {
         let fm = FileManager.default
-        let docDir = directory(for: docID, in: cfg)
+        let docDir = directory(for: docID, in: stateDir)
         guard fm.fileExists(atPath: docDir.path) else { return [] }
 
         var entries: [Entry] = []
@@ -199,10 +204,10 @@ enum Snapshots {
     /// ``keep`` is the same as zero.
     @discardableResult
     static func prune(
-        docID: String, keep: Int, in cfg: Config
+        docID: String, keep: Int, in stateDir: URL
     ) throws -> Int {
         guard keep > 0 else { return 0 }
-        let entries = try list(docID: docID, in: cfg)
+        let entries = try list(docID: docID, in: stateDir)
         guard entries.count > keep else { return 0 }
         let drop = entries.prefix(entries.count - keep)
         let fm = FileManager.default
@@ -261,9 +266,9 @@ enum Snapshots {
     /// if neither form is found verbatim, so users can paste
     /// timestamps from log lines without exact-formatting them.
     static func find(
-        docID: String, stamp: String, in cfg: Config
+        docID: String, stamp: String, in stateDir: URL
     ) throws -> Entry? {
-        let entries = try list(docID: docID, in: cfg)
+        let entries = try list(docID: docID, in: stateDir)
         let normalized = stamp
             .replacingOccurrences(of: "-", with: "")
             .replacingOccurrences(of: ":", with: "")
@@ -284,8 +289,9 @@ enum Snapshots {
 
     // MARK: - storage helpers
 
-    static func directory(for docID: String, in cfg: Config) -> URL {
-        Paths.backupDir.appendingPathComponent(docID, isDirectory: true)
+    static func directory(for docID: String, in stateDir: URL) -> URL {
+        stateDir.appendingPathComponent("backups", isDirectory: true)
+            .appendingPathComponent(docID, isDirectory: true)
     }
 
     /// UTC ISO-ish stamp suitable for filenames. Same shape the

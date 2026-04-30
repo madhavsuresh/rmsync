@@ -780,6 +780,36 @@ actor SyncWorker {
         let statResult = try? await cloud.stat(remotePath)
         let remoteModified = statResult?.modifiedClient ?? ""
 
+        // Snapshot the about-to-be-clobbered local content for
+        // tracked docs. This is the "daemon just overwrote my
+        // edit on a remote pull, gimme the previous version
+        // back" recovery path. We only snapshot when the local
+        // file actually exists — first-pull lands new content
+        // with no predecessor to capture. Best-effort; never
+        // blocks the pull on snapshot I/O.
+        if stored != nil,
+           FileManager.default.fileExists(atPath: localPath.path),
+           let oldText = try? String(contentsOf: localPath, encoding: .utf8) {
+            do {
+                _ = try Snapshots.take(
+                    content: oldText,
+                    docID: docID,
+                    cause: Snapshots.Cause.pullOverwrite,
+                    in: Paths.stateDir
+                )
+                _ = try Snapshots.prune(
+                    docID: docID,
+                    keep: cfg.backupSnapshotsToKeep,
+                    in: Paths.stateDir
+                )
+            } catch {
+                Logger.shared.warn(
+                    "snapshot on pull failed; proceeding",
+                    meta: ["doc_id": docID, "error": "\(error)"]
+                )
+            }
+        }
+
         // Write atomically + stamp the echo fence before the watcher
         // observes the write.
         await fence.mark(localPath.path)
@@ -905,6 +935,34 @@ actor SyncWorker {
                 meta: ["doc_id": stored.docID]
             )
             return
+        }
+
+        // Snapshot the about-to-be-pushed bytes for tracked docs.
+        // Skipped on first-push (stored == nil): brand-new files
+        // have no prior history to capture, and the doc-id isn't
+        // known until the cloud put completes anyway. Snapshots
+        // are best-effort — never block the push on snapshot
+        // I/O. Pruning runs in the same step so the on-disk count
+        // stays at cfg.backupSnapshotsToKeep.
+        if let stored {
+            do {
+                _ = try Snapshots.take(
+                    content: text,
+                    docID: stored.docID,
+                    cause: Snapshots.Cause.push,
+                    in: Paths.stateDir
+                )
+                _ = try Snapshots.prune(
+                    docID: stored.docID,
+                    keep: cfg.backupSnapshotsToKeep,
+                    in: Paths.stateDir
+                )
+            } catch {
+                Logger.shared.warn(
+                    "snapshot on push failed; proceeding",
+                    meta: ["doc_id": stored.docID, "error": "\(error)"]
+                )
+            }
         }
 
         // Cloud-provider-eviction guard — a macOS File Provider (Dropbox,
