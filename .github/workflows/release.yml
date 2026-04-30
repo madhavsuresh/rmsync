@@ -279,14 +279,33 @@ jobs:
           git commit -m "rmsync ${GITHUB_REF_NAME}"
           git push -u origin "bump-${GITHUB_REF_NAME}"
 
-      - name: Open PR on tap
+      - name: Open PR on tap (auto-merge)
         if: steps.check.outputs.has_token == 'true'
         working-directory: tap
         env:
           GH_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
         run: |
-          gh pr create \
+          # ``gh pr create`` prints the PR URL on its last line.
+          # We grab it so the immediately-following ``gh pr merge``
+          # call can act on the right PR — relying on "the most
+          # recent PR on this branch" is racy when a fresh release
+          # opens during a daily-cron rmapi bump.
+          PR_URL=$(gh pr create \
             --title "rmsync ${GITHUB_REF_NAME}" \
-            --body  "Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}." \
+            --body  "Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}.\
+\
+This PR auto-merges once Formula audit passes. Cascading bump\
+PRs (one per rmsync release) clogged the queue manually before;\
+v0.2.29 enabled \`allow_auto_merge\` on the tap repo and added\
+this \`gh pr merge --auto\` step to release.yml." \
             --base  main \
-            --head  "bump-${GITHUB_REF_NAME}"
+            --head  "bump-${GITHUB_REF_NAME}" \
+            | tail -1)
+          echo "Opened tap PR: $PR_URL"
+
+          # Queue auto-merge. Squash commit because the bump's only
+          # one file change and the squash subject doubles as the
+          # changelog entry on tap main. ``--auto`` waits for the
+          # tap's CI (Formula audit) to pass before merging — we
+          # never want a red bump merging silently.
+          gh pr merge "$PR_URL" --squash --auto --delete-branch
