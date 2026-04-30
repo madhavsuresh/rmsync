@@ -1061,6 +1061,27 @@ struct Errors: AsyncParsableCommand {
             print("    `rmsync trash list / restore`.")
             print("")
         }
+        if classes.contains("missing_pre_upgrade") {
+            // The first-start-after-upgrade guard parked these.
+            // The user rm'd them locally on a version that didn't
+            // propagate, so they don't necessarily WANT them gone
+            // on the cloud now. Two action paths.
+            print("missing_pre_upgrade means the file was tracked, the local")
+            print("file is missing on disk, AND this is the first daemon start")
+            print("after a version change. The daemon DELIBERATELY didn't")
+            print("propagate these to cloud-side deletes — pre-v0.2.27 had")
+            print("propagation off by default, so an old rm without the")
+            print("intent to cloud-delete would silently cascade now. Pick:")
+            print("  • You meant to delete these → `rmapi rm <remote_path>`")
+            print("    for each, then `sqlite3 <state.db> \"DELETE FROM")
+            print("    documents WHERE error_state = 'missing_pre_upgrade'\"`.")
+            print("  • You DIDN'T mean to delete → re-pull from cloud:")
+            print("    `rmsync sync-now` will refetch any cloud doc whose")
+            print("    local file is missing.")
+            print("  • Unsure → leave them parked. They don't hurt anything")
+            print("    while sitting; the daemon won't act on them.")
+            print("")
+        }
 
         print("Inspect the daemon's recent attempts:")
         print("    rmsync logs --tail")

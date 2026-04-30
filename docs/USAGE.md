@@ -648,6 +648,20 @@ Safety gates that protect against runaway events:
 - **Echo fence.** Cloud→local rename seeds the fence so the
   watcher's resulting filesystem event for our own move is
   suppressed (otherwise we'd ping-pong forever).
+- **First-start-after-upgrade guard (v0.2.31+).** The daemon
+  stamps its version into state.db at the end of every
+  successful reconcile. On the next start, if the binary's
+  version differs from what's stored (i.e., you just upgraded),
+  the deletion-reconcile pass runs in **skip-propagation
+  mode**: tracked-but-locally-missing rows get parked with
+  `error_state = "missing_pre_upgrade"` instead of cascading
+  to cloud-side deletes. Protects users who rm'd files locally
+  on a version that didn't propagate (the pre-v0.2.27 default)
+  from having those rms silently cascade now that propagation
+  is on. Run `rmsync errors` after upgrade to see the parked
+  rows and pick: `rmapi rm <remote_path>` if you meant to
+  delete on cloud, or `rmsync sync-now` to re-pull the local
+  files from cloud.
 
 To opt out (v0.2.18-style behavior — local delete logs but
 doesn't touch cloud), explicitly set:

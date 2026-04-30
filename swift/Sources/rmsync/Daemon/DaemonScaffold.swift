@@ -176,15 +176,47 @@ enum DaemonScaffold {
             retentionDays: cfg.deletion.trashRetentionDays
         )
 
+        // First-start-after-upgrade detection. v0.2.31+. The
+        // version stamped at the end of the previous successful
+        // reconcile is compared against the current binary's
+        // version. A mismatch (or unset, for state.db files
+        // older than this setting) means we run the deletion
+        // reconcile in *skip-propagation* mode — tracked-but-
+        // locally-missing rows get parked as
+        // ``error_state = "missing_pre_upgrade"`` instead of
+        // cascading to cloud-side deletes. Protects the case
+        // where a user rm'd files locally on a version that
+        // didn't propagate, then upgrades to one that does.
+        let lastSeenVersion = (try? await state.getLastSeenDaemonVersion()) ?? ""
+        let isFirstStartAfterUpgrade = lastSeenVersion != Version.current
+        if isFirstStartAfterUpgrade {
+            Logger.shared.info(
+                "first start after upgrade — deletion reconcile in skip-propagation mode",
+                meta: [
+                    "previous_version": lastSeenVersion.isEmpty ? "(unset)" : lastSeenVersion,
+                    "current_version": Version.current,
+                ]
+            )
+        }
+
         // Reconcile: deletions → initial pull → local creates/edits.
         do {
-            try await Reconcile.localDeletions(state: state, queue: queue)
+            try await Reconcile.localDeletions(
+                state: state, queue: queue,
+                skipDeletePropagation: isFirstStartAfterUpgrade
+            )
             await queue.waitUntilEmpty()
             try await Reconcile.initialPull(cloud: initialCloud, cfg: cfg, queue: queue)
             try await Reconcile.localCreatesAndEdits(
                 state: state, cfg: cfg, queue: queue
             )
             await queue.waitUntilEmpty()
+            // Stamp the version AFTER reconcile completes
+            // successfully. If reconcile crashed mid-way we want
+            // the next start to also treat the boot as "first
+            // after upgrade" — otherwise a half-finished migration
+            // would lose its grace period.
+            try? await state.setLastSeenDaemonVersion(Version.current)
         } catch {
             Logger.shared.error(
                 "initial reconcile failed; continuing into steady state",

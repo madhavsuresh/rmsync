@@ -177,6 +177,25 @@ actor State {
         return fresh
     }
 
+    /// The daemon-binary version stamped at the end of the most
+    /// recent successful startup reconcile. Compared against
+    /// ``Version.current`` on the next startup; a mismatch means
+    /// "first run after an upgrade" and the destructive
+    /// reconcile passes (delete-cascade especially) get a
+    /// one-cycle grace period. v0.2.31+.
+    ///
+    /// Returns ``nil`` for state.db files that predate this
+    /// setting (Python era, or any Swift version <0.2.31). Treat
+    /// nil as "first run after upgrade" — same conservative
+    /// behavior.
+    func getLastSeenDaemonVersion() throws -> String? {
+        try getSetting("last_seen_daemon_version")
+    }
+
+    func setLastSeenDaemonVersion(_ version: String) throws {
+        try setSetting("last_seen_daemon_version", version)
+    }
+
     // MARK: - log
 
     func log(level: String, message: String, docID: String? = nil) throws {

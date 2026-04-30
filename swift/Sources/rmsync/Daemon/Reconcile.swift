@@ -12,11 +12,29 @@ import Foundation
 ///      state (or whose hash differs from ``last_synced_md_hash``) get
 ///      a PUSH job. Runs AFTER the pull so the state DB is current.
 enum Reconcile {
+    /// First-startup deletion reconcile.
+    ///
+    /// ``skipDeletePropagation`` (v0.2.31+): when true, tracked-
+    /// but-locally-missing rows are PARKED with
+    /// ``error_state = "missing_pre_upgrade"`` instead of being
+    /// enqueued for cloud-side delete. Used on the first daemon
+    /// start after a version change — protects users who rm'd
+    /// files locally on a version that didn't propagate (the
+    /// pre-v0.2.27 default behavior) from having those rms
+    /// silently cascade to the cloud now that propagation is on
+    /// by default.
+    ///
+    /// Pending-op resumes still fire even with the flag set;
+    /// those represent in-flight ops the daemon was already
+    /// committed to before the upgrade, not "old deletes from
+    /// before propagation was on".
     static func localDeletions(
-        state: State, queue: JobQueue
+        state: State, queue: JobQueue,
+        skipDeletePropagation: Bool = false
     ) async throws {
         var enqueued = 0
         var resumed = 0
+        var parkedAsUpgradeMissing = 0
         let docs = try await state.allDocuments()
 
         // First pass: resume any in-flight ``pending_delete`` /
@@ -65,6 +83,34 @@ enum Reconcile {
             if doc.pendingOp != nil { continue }
             guard let hash = doc.lastSyncedMDHash, !hash.isEmpty else { continue }
             if FileManager.default.fileExists(atPath: doc.localPath) { continue }
+
+            if skipDeletePropagation {
+                // First-start-after-upgrade guard: park the row
+                // with a distinct error_state so the user sees it
+                // in ``rmsync errors`` and can decide
+                // (intentional delete → ``rmapi rm`` to cloud-
+                // delete; accidental delete → restore from
+                // backup / re-pull from cloud). Crucially, we
+                // do NOT enqueue a deleteRemote — that would
+                // cascade old user rm's into cloud trash and is
+                // exactly the data-loss scenario this guard
+                // exists to prevent.
+                Logger.shared.warn(
+                    "tracked doc missing locally; NOT propagating "
+                      + "(first start after upgrade — see `rmsync errors`)",
+                    meta: [
+                        "doc_id": doc.docID,
+                        "path": doc.localPath,
+                        "remote": doc.remotePath,
+                    ]
+                )
+                try? await state.setError(
+                    docID: doc.docID, state: "missing_pre_upgrade"
+                )
+                parkedAsUpgradeMissing += 1
+                continue
+            }
+
             Logger.shared.info(
                 "local file missing on startup; propagating to cloud trash",
                 meta: [
@@ -78,12 +124,13 @@ enum Reconcile {
             ))
             enqueued += 1
         }
-        if enqueued + resumed > 0 {
+        if enqueued + resumed + parkedAsUpgradeMissing > 0 {
             Logger.shared.info(
                 "startup deletion reconcile",
                 meta: [
                     "enqueued": "\(enqueued)",
                     "resumed": "\(resumed)",
+                    "parked_as_upgrade_missing": "\(parkedAsUpgradeMissing)",
                 ]
             )
         }
