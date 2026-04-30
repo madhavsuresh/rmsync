@@ -34,7 +34,17 @@ jobs:
         # Not strictly required for the non-live test suite, but having
         # it on PATH matches a real dev environment and lets doctor
         # smoke tests run if we ever add them.
-        run: brew install io41/tap/rmapi
+        #
+        # Use OUR tap, not io41/tap. v0.2.24+ pinned rmapi via a
+        # formula we control because io41/tap was stuck at 0.0.29
+        # through the 2026-04 cloud schema-v4 break that 400's
+        # every put. CI was still installing 0.0.29 from io41/tap
+        # for several releases after, which silently invalidated
+        # any live-smoke run against the new cloud (rmapi account
+        # itself returned non-zero, which the auth-check below
+        # mis-classified as "secret expired"). Pulling from our
+        # tap keeps CI on the same rmapi version users get.
+        run: brew install madhavsuresh/rmsync/rmapi
 
       - name: Cache SwiftPM build
         uses: actions/cache@v4
@@ -183,7 +193,9 @@ jobs:
 
       - name: Install rmapi
         if: steps.check.outputs.has_secret == 'true'
-        run: brew install io41/tap/rmapi
+        # Same tap-pinned rmapi as the unit-test job above. See the
+        # comment there for the io41/tap-vs-our-tap story.
+        run: brew install madhavsuresh/rmsync/rmapi
 
       - name: Decode rmapi config
         if: steps.check.outputs.has_secret == 'true'
@@ -213,17 +225,40 @@ jobs:
              "$HOME/.config/rmapi/rmapi.conf"
           chmod 0600 "$HOME/.config/rmapi/rmapi.conf" \
                      "$HOME/Library/Application Support/rmapi/rmapi.conf"
-          # Verify auth without printing the email. rmapi v0.0.29's
-          # ``account`` prints ``User: <email>, SyncVersion: 1.5`` to
-          # stdout on success and a non-zero exit on failure. We
-          # discard the entire output line and rely on rmapi's exit
-          # code (which is reliable: 0 = authed, non-zero = not). The
-          # earlier guess of ``Logged in as`` was wrong and broke
-          # this verification on a real run.
-          if rmapi account >/dev/null 2>&1; then
-            echo "✓ rmapi authenticated"
+
+      - name: Verify rmapi can reach the cloud
+        if: steps.check.outputs.has_secret == 'true'
+        run: |
+          # ``rmapi account`` returns 0 when the cloud accepts the
+          # device-token + user-token + cloud-API-version combo, and
+          # non-zero on ANY of: expired refresh token, broken
+          # rmapi-vs-cloud schema mismatch (the 2026-04 schema-v4
+          # break that bricked rmapi <0.0.32), or transient network
+          # failure. We previously bucketed all three as "secret is
+          # invalid or expired" and lost two hours chasing a stale
+          # secret when the actual cause was io41/tap shipping an
+          # rmapi version too old for the new cloud schema.
+          #
+          # Capture stderr so the failure mode is visible. rmapi's
+          # version is a CRITICAL signal: if the auth-check fails
+          # AND ``rmapi version`` is below the schema-v4 minimum
+          # (0.0.32), the diagnosis is "wrong rmapi installed" not
+          # "credentials bad". Print both before the verdict so
+          # whoever debugs next has the data without re-running.
+          echo "rmapi version: $(rmapi version 2>&1 || echo '<failed>')"
+          if err=$(rmapi account 2>&1 >/dev/null); then
+            echo "✓ rmapi authenticated against cloud"
           else
-            echo "✗ rmapi auth failed; secret is invalid or expired"
+            ec=$?
+            echo "✗ rmapi cloud op failed (exit ${ec})"
+            echo "  stderr: ${err}"
+            echo ""
+            echo "  Diagnosis tree:"
+            echo "    - 'HTTP 4xx' or 'schema' in stderr → rmapi is too old for the current cloud schema"
+            echo "      (this CI installs from madhavsuresh/rmsync; check the formula's pin)"
+            echo "    - 'unauthorized' or '401'         → secret has rotated; re-encode rmapi.conf"
+            echo "      and update the TEST_RMAPI_CONFIG repo secret"
+            echo "    - network / DNS / timeout         → transient; rerun"
             exit 1
           fi
 
