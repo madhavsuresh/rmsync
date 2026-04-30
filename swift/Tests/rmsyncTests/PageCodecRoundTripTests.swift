@@ -161,4 +161,54 @@ struct PageCodecRoundTripTests {
         #expect(parsed.contains("col1"))
         #expect(parsed.contains("col3"))
     }
+
+    // MARK: - paragraph fidelity (WYSIWYG with pandoc)
+
+    /// Round-trip contract: the local file is canonical CommonMark
+    /// (paragraphs separated by `\n\n`), the tablet model never holds
+    /// empty paragraphs (push collapses blank-line runs), and the two
+    /// renderings stay visually aligned. Asserts exact equality so
+    /// regressions back to single-`\n` joining surface immediately.
+
+    @Test("blank-line paragraph break round-trips as canonical \\n\\n")
+    func blankLineRoundTrip() throws {
+        #expect(try roundTrip("a\n\nb\n") == "a\n\nb\n")
+    }
+
+    @Test("multiple blank lines collapse to a single paragraph break")
+    func multipleBlanksCollapse() throws {
+        #expect(try roundTrip("a\n\n\n\nb\n") == "a\n\nb\n")
+    }
+
+    @Test("heading + body get a blank line between them")
+    func headingThenBody() throws {
+        #expect(try roundTrip("# h\n\nbody\n") == "# h\n\nbody\n")
+    }
+
+    @Test("single-newline paragraphs are promoted to \\n\\n")
+    func softBreakPromoted() throws {
+        // Pandoc would render the input "a\nb\n" as one joined paragraph
+        // ("a b"), but the tablet shows them as separate paragraphs. The
+        // round-trip stabilizes on the tablet's interpretation: each model
+        // paragraph becomes its own markdown paragraph.
+        #expect(try roundTrip("a\nb\n") == "a\n\nb\n")
+    }
+
+    @Test("leading and trailing blank lines are dropped")
+    func leadingAndTrailingBlanks() throws {
+        #expect(try roundTrip("\n\na\n") == "a\n")
+        #expect(try roundTrip("a\n\n\n") == "a\n")
+    }
+
+    @Test("plain bullet-prefixed lines round-trip with paragraph breaks")
+    func plainBulletPrefixedLines() throws {
+        // simpleTextDocument always sets .plain style, so a markdown
+        // bullet list pushed from disk lands on the tablet as plain
+        // paragraphs whose body happens to start with "- ". On pull,
+        // those are joined as paragraphs (\n\n), not as a tight list.
+        // Pandoc still parses the result as a (loose) list — semantics
+        // preserved, spacing slightly different. Reconstructing styled
+        // bullets on push is a separate concern.
+        #expect(try roundTrip("- a\n- b\n- c\n") == "- a\n\n- b\n\n- c\n")
+    }
 }

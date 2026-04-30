@@ -29,31 +29,78 @@ enum PageCodec {
     /// Parse one .rm page to Markdown. Returns the empty string when the
     /// page has no typed text (handwriting-only notebooks / drawing
     /// pages); our pull path treats that as "skip".
+    ///
+    /// Block paragraphs join with `\n\n` (canonical CommonMark paragraph
+    /// break) so pandoc renders the file the same way the tablet shows
+    /// it. Adjacent items of the same list family stay tight (single
+    /// `\n`). Empty model paragraphs collapse into the block separator
+    /// rather than emitting extra blank lines — see ``renderPage`` for
+    /// the symmetric push-side normalization.
     static func parsePage(_ rmBytes: Data) throws -> String {
         let decoder = RMSceneDecoder()
         let tree = try decoder.decodeTree(from: rmBytes)
         guard let rootText = tree.rootText else { return "" }
         let doc = try TextDocument.fromSceneItem(rootText)
 
-        var lines: [String] = []
+        let listStyles: Set<ParagraphStyle> = [.bullet, .bullet2, .checkbox, .checkboxChecked]
+        var out = ""
+        var prevWasContent = false
+        var prevWasListItem = false
+        var pendingBlockBreak = false   // empty paragraph seen since last content
         for paragraph in doc.contents {
-            let prefix = Self.prefix(for: paragraph.style.value)
+            let style = paragraph.style.value
+            let prefix = Self.prefix(for: style)
             let body = Self.render(paragraph.contents)
-            if !body.isEmpty || !prefix.isEmpty {
-                lines.append(prefix + body)
+            let isListItem = listStyles.contains(style)
+            let isEmpty = body.isEmpty && prefix.isEmpty
+
+            if isEmpty {
+                // Defer the block break until we see another content
+                // paragraph — otherwise a trailing empty paragraph (which
+                // any text ending in `\n` produces) would emit a phantom
+                // blank line at the end.
+                if prevWasContent {
+                    pendingBlockBreak = true
+                    prevWasListItem = false
+                }
+                continue
             }
+
+            if prevWasContent {
+                if pendingBlockBreak {
+                    out += "\n\n"
+                } else if prevWasListItem && isListItem {
+                    out += "\n"
+                } else {
+                    out += "\n\n"
+                }
+            }
+            pendingBlockBreak = false
+            out += prefix + body
+            prevWasContent = true
+            prevWasListItem = isListItem
         }
-        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+        return out.isEmpty ? "" : out + "\n"
     }
 
     /// Serialize plain text into a v6 .rm byte stream using a stable
     /// author UUID.
+    ///
+    /// Collapses runs of blank lines (`\n{2,}`) to a single `\n` before
+    /// encoding so the tablet model never holds empty paragraphs. The
+    /// tablet renders empty paragraphs as visible blank lines on top of
+    /// its own paragraph spacing, which doesn't match pandoc's
+    /// collapse-to-one-paragraph-break rule. Normalising here keeps the
+    /// tablet view ≈ pandoc PDF for the same source.
     static func renderPage(text: String, authorUUID: String) throws -> Data {
         guard let uuid = UUID(uuidString: authorUUID) else {
             throw CodecError.invalidAuthorUUID(authorUUID)
         }
+        let normalized = text.replacingOccurrences(
+            of: #"\n{2,}"#, with: "\n", options: .regularExpression
+        )
         let encoder = RMSceneEncoder()
-        let blocks = encoder.simpleTextDocument(text, authorID: uuid)
+        let blocks = encoder.simpleTextDocument(normalized, authorID: uuid)
         // Wire version for ``.rm`` files we write. Verified
         // byte-identical against Python ``rmscene.write_blocks`` output
         // for ``simple_text_document``; any v3.4+ produces the same
