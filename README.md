@@ -172,6 +172,18 @@ rmsync doctor                   # should be all ✓
 
 `brew upgrade rmsync` from then on for new versions.
 
+> **Upgrading from a pre-v0.2.24 install?** `brew upgrade` may fail with
+> a conflict on `rmapi`: rmsync v0.2.24 moved to its own pinned `rmapi`
+> formula, which conflicts with `io41/tap/rmapi`. Recover with:
+>
+> ```sh
+> brew uninstall --ignore-dependencies io41/tap/rmapi
+> brew untap io41/tap
+> brew upgrade rmsync
+> ```
+>
+> Your reMarkable cloud auth at `~/.config/rmapi` survives this.
+
 ### Docker (Linux / mini-PC)
 
 If you don't have a Mac, run rmsync as a daemon container on any

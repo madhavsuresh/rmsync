@@ -31,6 +31,7 @@ struct DoctorRun {
         results.append(await rmapiPresent())
         results.append(await rmapiVersion())
         results.append(await rmapiAuthed())
+        results.append(staleIO41Tap())
         results.append(await writingFolder(cfg: cfg, configError: configError))
         results.append(syncDir(cfg: cfg, configError: configError))
         results.append(cloudProviderSyncDir(cfg: cfg))
@@ -123,6 +124,53 @@ struct DoctorRun {
                 message: "`rmapi account` failed: \(error). Run `rmapi` once to authenticate."
             )
         }
+    }
+
+    /// Detect a stale ``io41/tap/rmapi`` install lingering after a
+    /// pre-v0.2.24 → current upgrade. Two failure modes show up here:
+    ///
+    /// 1. The user did `brew upgrade rmsync` and it errored cryptically
+    ///    on the rmapi conflict (``conflicts_with`` in the new formula).
+    ///    rmsync itself is then NOT actually upgraded — they get the
+    ///    half-broken state we're trying to flag.
+    /// 2. The user uninstalled `madhavsuresh/rmsync/rmapi` somehow but
+    ///    left io41/tap/rmapi as the rmapi-on-PATH. Doctor's existing
+    ///    `rmapi version` check will already fail loudly if io41's pin
+    ///    is too old; this check just gives the migration commands.
+    ///
+    /// Linux: brew is rare and io41 doesn't ship a Linux bottle, so the
+    /// check no-ops cleanly.
+    private static func staleIO41Tap() -> CheckResult {
+        let name = "io41/tap migration"
+        #if !os(macOS)
+        return CheckResult(name: name, status: .ok, message: "n/a (non-macOS)")
+        #else
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        // ``brew list --formula io41/tap/rmapi`` exits 0 iff the
+        // formula is currently installed. We don't care about stdout;
+        // the exit code is the signal. Redirect both streams so a
+        // chatty brew doesn't leak into doctor's tidy table.
+        task.arguments = ["brew", "list", "--formula", "io41/tap/rmapi"]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        do { try task.run() } catch {
+            // brew not installed at all — nothing to migrate from.
+            return CheckResult(name: name, status: .ok, message: "brew not on PATH")
+        }
+        task.waitUntilExit()
+        if task.terminationStatus == 0 {
+            return CheckResult(
+                name: name,
+                status: .warn,
+                message: "io41/tap/rmapi still installed; run "
+                       + "`brew uninstall --ignore-dependencies io41/tap/rmapi "
+                       + "&& brew untap io41/tap && brew upgrade rmsync` "
+                       + "to finish the v0.2.24+ migration"
+            )
+        }
+        return CheckResult(name: name, status: .ok, message: "no stale install")
+        #endif
     }
 
     private static func writingFolder(cfg: Config?, configError: String?) async -> CheckResult {

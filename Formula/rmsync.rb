@@ -18,7 +18,7 @@
 class Rmsync < Formula
   desc "Bidirectional macOS ↔ reMarkable tablet Markdown sync daemon"
   homepage "https://github.com/madhavsuresh/rmsync"
-  url "https://github.com/madhavsuresh/rmsync/archive/refs/tags/v0.2.31.tar.gz"
+  url "https://github.com/madhavsuresh/rmsync/archive/refs/tags/v0.2.32.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
   head "https://github.com/madhavsuresh/rmsync.git", branch: "main"
@@ -132,6 +132,14 @@ class Rmsync < Formula
 
   def caveats
     <<~EOS
+      Upgrading from a pre-v0.2.24 install? rmsync v0.2.24 moved to
+      its own tap for rmapi. If `brew upgrade rmsync` fails with a
+      conflict on rmapi, run:
+          brew uninstall --ignore-dependencies io41/tap/rmapi
+          brew untap io41/tap
+          brew upgrade rmsync
+      (Your reMarkable cloud auth at ~/.config/rmapi survives this.)
+
       rmsync ships a sync daemon and a separate menu bar app. Neither
       is started by `brew install` — you finish setup in three steps:
 
