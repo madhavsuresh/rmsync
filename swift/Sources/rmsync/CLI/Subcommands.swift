@@ -593,8 +593,19 @@ struct History: AsyncParsableCommand {
             // ``ordered`` the row at index N's delta is
             // (words at N) - (words at N+1). The oldest row has no
             // predecessor here; show its delta as a baseline +N.
-            print(String(format: "%-26s  %-16s  %7s  %7s  %9s",
-                "ts", "cause", "words", "delta", "bytes"))
+            //
+            // Hand-rolled column padding instead of String(format:).
+            // ``%s`` in NSString-bridged format strings expects a C
+            // ``char *`` and reads memory at the bridged Swift
+            // string's pointer address — segfaults. Using ``%@`` is
+            // safer but width modifiers behave subtly differently
+            // across platforms; explicit padding is the
+            // unambiguous choice.
+            print(History.padR("ts", 26) + "  "
+                + History.padR("cause", 16) + "  "
+                + History.padL("words", 7) + "  "
+                + History.padL("delta", 7) + "  "
+                + History.padL("bytes", 9))
             for (i, e) in ordered.enumerated() {
                 let prev: Int = (i + 1 < ordered.count)
                     ? ordered[i + 1].wordCount
@@ -605,8 +616,11 @@ struct History: AsyncParsableCommand {
                 else if delta < 0 { deltaStr = "\(delta)" }
                 else { deltaStr = "±0" }
                 let display = formatDisplayStamp(e.stamp)
-                print(String(format: "%-26s  %-16s  %7d  %7s  %9d",
-                    display, e.cause, e.wordCount, deltaStr, e.byteCount))
+                print(History.padR(display, 26) + "  "
+                    + History.padR(e.cause, 16) + "  "
+                    + History.padL("\(e.wordCount)", 7) + "  "
+                    + History.padL(deltaStr, 7) + "  "
+                    + History.padL("\(e.byteCount)", 9))
             }
             print("")
             if let newest = ordered.first {
@@ -766,6 +780,31 @@ struct History: AsyncParsableCommand {
         print("hint: history is keyed on the doc's local_path in state.db.")
         print("      run `rmsync status` to see tracked docs.")
         throw ExitCode(1)
+    }
+
+    /// Right-pad ``s`` to exactly ``width`` characters with
+    /// spaces. Used for left-aligned columns in the
+    /// ``history list`` table. We avoid ``String(format:)`` here
+    /// because ``%s`` reads the bridged NSString as a C
+    /// ``char *`` and segfaults; ``%@`` works but width
+    /// behaviour is subtle across platforms.
+    ///
+    /// Internal (rather than fileprivate) so the test suite can
+    /// pin the no-segfault contract — the bug shipped in v0.2.20
+    /// was discoverable only by running the binary against a
+    /// real state.db with snapshots present, which the test suite
+    /// doesn't do; a unit-level guard on the helpers themselves
+    /// is the bisectable defence.
+    static func padR(_ s: String, _ width: Int) -> String {
+        s.count >= width ? s :
+            s + String(repeating: " ", count: width - s.count)
+    }
+
+    /// Left-pad ``s`` to exactly ``width`` characters with
+    /// spaces. Used for right-aligned numeric columns.
+    static func padL(_ s: String, _ width: Int) -> String {
+        s.count >= width ? s :
+            String(repeating: " ", count: width - s.count) + s
     }
 
     /// Reformat a compact stamp (``20260429T221408000Z``) as the
