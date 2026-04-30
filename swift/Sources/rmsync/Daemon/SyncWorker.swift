@@ -30,16 +30,20 @@ actor SyncWorker {
     /// = false``); the worker treats every destructive job as a
     /// no-op in that case.
     private let limiter: DeletionRateLimiter?
-    /// On every ``rmapi put failed`` we ask the probe to classify
-    /// "is this rmapi/cloud broken right now, or just a per-doc
-    /// problem?" The result is cached for ~10 minutes so a burst
-    /// of failures doesn't spawn N probe sequences. ``nil`` means
-    /// no probe wired up — early test workers skip the
-    /// classification step entirely.
-    private let cloudHealth: CloudHealthProbe?
-    /// StateBus we publish the probe outcome to so the menubar
-    /// and `rmsync status` can render it. Same nil-guard reason as
-    /// ``cloudHealth``.
+    /// StateBus we publish cloud-health classifications onto. On
+    /// push failure, the worker classifies the error via
+    /// ``CloudHealthProbe.classifyAndPublish(_:on:)`` and the
+    /// menubar / `rmsync status` reads the result from here.
+    /// ``nil`` means the worker was constructed without IPC
+    /// plumbing (early tests); classification is skipped.
+    ///
+    /// v0.2.29 dropped the previous ``CloudHealthProbe`` actor
+    /// (which shelled out to ``rmapi mkdir`` against a sentinel
+    /// path and left ``.rmsync-health-<uuid>`` directories on
+    /// the cloud whenever the cleanup ``rmapi rm`` couldn't
+    /// clean up). The replacement classifier is stateless —
+    /// inspects the original push error's text — so no extra
+    /// cloud writes happen.
     private let bus: StateBus?
     private var stopFlag = false
 
@@ -52,7 +56,6 @@ actor SyncWorker {
         locks: LockRegistry,
         fence: EchoFence,
         limiter: DeletionRateLimiter? = nil,
-        cloudHealth: CloudHealthProbe? = nil,
         bus: StateBus? = nil
     ) {
         self.id = id
@@ -63,7 +66,6 @@ actor SyncWorker {
         self.locks = locks
         self.fence = fence
         self.limiter = limiter
-        self.cloudHealth = cloudHealth
         self.bus = bus
     }
 
@@ -1328,13 +1330,17 @@ actor SyncWorker {
                 "rmapi put failed",
                 meta: ["doc_id": docID, "error": "\(error)"]
             )
-            // v0.2.25 — classify the failure (cached probe).
-            // This populates ``cloud_health`` on the StateBus so
-            // the menubar can show "rmapi cloud-compat break"
-            // distinct from "individual doc problem". Probe is
-            // cached 10 min; concurrent failures during that
-            // window reuse the result.
-            await runHealthProbeAndPublish()
+            // v0.2.29 — classify the failure from the error
+            // string itself. v0.2.25 ran a separate ``rmapi
+            // mkdir`` canary against a sentinel path, which left
+            // ``.rmsync-health-<uuid>`` cruft on the cloud
+            // whenever the cleanup ``rmapi rm`` couldn't clean
+            // up. The current push error already tells us what
+            // we need (auth/missing/compat-break/unknown); no
+            // extra cloud writes.
+            if let bus {
+                await CloudHealthProbe.classifyAndPublish(error, on: bus)
+            }
             // Park the failure in state.db so the next reconcile
             // pass doesn't re-enqueue this push on every daemon
             // restart. Two distinct paths:
@@ -1411,34 +1417,14 @@ actor SyncWorker {
             mdHash: newHash,
             modified: newModified
         )
-        // v0.2.25 — a successful push contradicts any cached
-        // "rmapi cloud is broken" classification. Invalidate the
-        // probe so the next observer (or the next push failure)
-        // gets a fresh assessment instead of "stale broken".
-        // Also clear the cloudHealth bus field optimistically:
-        // if pushes work, the cloud is fine.
-        if let cloudHealth { await cloudHealth.invalidate() }
-        await bus?.update { s in
-            s.cloudHealth = ""
-            s.cloudHealthDetail = nil
-        }
+        // A successful push contradicts any prior "rmapi cloud
+        // is broken" classification on the bus. Clear it so the
+        // menubar's diagnostic UI flips back to green.
+        if let bus { await CloudHealthProbe.clear(on: bus) }
         Logger.shared.info(
             "pushed",
             meta: ["doc_id": docID, "path": localPath.path]
         )
-    }
-
-    /// Runs the cloud-health probe (cached) and publishes the
-    /// result onto the StateBus so the menubar / `rmsync status`
-    /// see it. No-op if the daemon didn't wire up either piece
-    /// (early test workers).
-    private func runHealthProbeAndPublish() async {
-        guard let cloudHealth, let bus else { return }
-        let result = await cloudHealth.current()
-        await bus.update { s in
-            s.cloudHealth = result.classification.rawValue
-            s.cloudHealthDetail = result.detail
-        }
     }
 
     // MARK: - helpers

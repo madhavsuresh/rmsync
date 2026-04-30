@@ -2,62 +2,113 @@ import Foundation
 import Testing
 @testable import rmsync
 
-/// Tests for the cooldown cache and the no-cloud-required parts of
-/// ``CloudHealthProbe``. The actual probe sequence shells out to
-/// rmapi, so the wire-level classification logic (rmapi 400 →
-/// rmapi_compat_break) is exercised by the live smoke tests in
-/// ``DeleteSmokeTests``-shape — gated on RMSYNC_LIVE.
+/// Tests for ``CloudHealthProbe.classify`` — the stateless
+/// error-pattern classifier that replaced the canary-write
+/// probe in v0.2.29.
 ///
-/// What we cover here without a real cloud:
-///
-///   * Cooldown semantics: a fresh ``current()`` call within the
-///     window returns the cached result; past the window, runs a
-///     new probe.
-///   * ``invalidate()`` drops the cache so the next ``current()``
-///     forces a new probe.
-@Suite("CloudHealthProbe (cooldown)")
+/// Why this matters: the menubar's "Why is sync broken?" menu
+/// reads ``s.cloudHealth`` to decide whether to show
+/// "rmapi missing" / "auth broken" / "this might be an rmapi
+/// issue". A wrong classification confuses the user. So we pin
+/// representative error strings to the buckets they should land
+/// in.
+@Suite("CloudHealthProbe (stateless classifier)")
 struct CloudHealthProbeTests {
-    @Test("invalidate() forces fresh probe on next current() call")
-    func invalidate() async throws {
-        // We can't run the real probe without rmapi/cloud. The
-        // ``cached()`` accessor is the cheap lever — exercise the
-        // pure cache state.
-        let cfg = Config(syncDir: FileManager.default.temporaryDirectory)
-        let cloud = Cloud(rmapiPath: "/usr/bin/false")
-        let probe = CloudHealthProbe(cloud: cloud, cfg: cfg, cooldown: 600)
-
-        // First current() actually runs the probe. With
-        // /usr/bin/false as rmapi, the version step fails →
-        // .rmapiMissing classification.
-        let first = await probe.current()
-        #expect(first.classification == .rmapiMissing)
-
-        // Cached result available.
-        let cached = await probe.cached()
-        #expect(cached?.classification == .rmapiMissing)
-
-        // invalidate() clears it.
-        await probe.invalidate()
-        #expect(await probe.cached() == nil)
+    private struct StringError: Error, CustomStringConvertible {
+        let message: String
+        var description: String { message }
     }
 
-    @Test("cooldown window: repeat current() within window reuses cache")
-    func cooldownReuse() async throws {
-        let cfg = Config(syncDir: FileManager.default.temporaryDirectory)
-        let cloud = Cloud(rmapiPath: "/usr/bin/false")
-        // 1-hour cooldown so second call is well within window.
-        let probe = CloudHealthProbe(cloud: cloud, cfg: cfg, cooldown: 3600)
+    // MARK: - rmapi missing
 
-        let first = await probe.current()
-        let firstAt = first.probedAt
-
-        // Within the window — should return the SAME object
-        // (same probedAt timestamp). Re-running the underlying
-        // shell-out would produce a fresh timestamp.
-        let second = await probe.current()
-        #expect(second.probedAt == firstAt)
-        #expect(second.classification == first.classification)
+    @Test("subprocess 'no such file' on rmapi → rmapiMissing")
+    func rmapiMissing() {
+        let err = StringError(message: "subprocess: launchPath /usr/local/bin/rmapi: no such file or directory")
+        #expect(CloudHealthProbe.classify(err).classification == .rmapiMissing)
     }
+
+    @Test("'rmapi: command not found' → rmapiMissing")
+    func rmapiMissingShellNotFound() {
+        let err = StringError(message: "rmapi: command not found")
+        #expect(CloudHealthProbe.classify(err).classification == .rmapiMissing)
+    }
+
+    // MARK: - auth broken
+
+    @Test("'Refresh token is not set' → authBroken")
+    func authRefreshToken() {
+        let err = StringError(message: "Error: Refresh token is not set, please run rmapi to authenticate first.")
+        #expect(CloudHealthProbe.classify(err).classification == .authBroken)
+    }
+
+    @Test("HTTP 401 → authBroken")
+    func auth401() {
+        let err = StringError(message: "request failed with status 401 unauthorized")
+        #expect(CloudHealthProbe.classify(err).classification == .authBroken)
+    }
+
+    @Test("HTTP 403 → authBroken")
+    func auth403() {
+        let err = StringError(message: "request failed with status 403 forbidden")
+        #expect(CloudHealthProbe.classify(err).classification == .authBroken)
+    }
+
+    // MARK: - rmapi compat break
+
+    @Test("'request failed with status 400' → rmapiCompatBreak")
+    func compat400() {
+        // The 2026-04 schema-v4 break's error wording.
+        let err = StringError(message:
+            "rmapi put --force /tmp/foo.rmdoc /Writing exited 1: " +
+            "ERROR: Error: failed to upload file [/tmp/foo.rmdoc] " +
+            "request failed with status 400")
+        let result = CloudHealthProbe.classify(err)
+        #expect(result.classification == .rmapiCompatBreak)
+        // Detail should include user-actionable text.
+        #expect(result.detail.contains("This might be an rmapi issue"))
+        #expect(result.detail.contains("github.com/ddvk/rmapi/issues"))
+    }
+
+    @Test("'failed to delete existing file' (--force path) → rmapiCompatBreak")
+    func compatForceDelete() {
+        let err = StringError(message:
+            "ERROR: failed to delete existing file: request failed with status 400")
+        #expect(CloudHealthProbe.classify(err).classification == .rmapiCompatBreak)
+    }
+
+    @Test("'failed to create directory' (mkdir path) → rmapiCompatBreak")
+    func compatMkdir() {
+        let err = StringError(message:
+            "ERROR: failed to create directory request failed with status 400")
+        #expect(CloudHealthProbe.classify(err).classification == .rmapiCompatBreak)
+    }
+
+    @Test("HTTP 4xx that isn't 401/403 → rmapiCompatBreak")
+    func compatGeneric4xx() {
+        let err = StringError(message: "request failed with status 422")
+        #expect(CloudHealthProbe.classify(err).classification == .rmapiCompatBreak)
+    }
+
+    // MARK: - unknown fall-through
+
+    @Test("network timeout → unknown (don't claim rmapi-side fault)")
+    func unknownTimeout() {
+        // Timeouts could be local network issues, not rmapi.
+        // Don't misclassify as compat break.
+        let err = StringError(message: "context deadline exceeded")
+        let result = CloudHealthProbe.classify(err)
+        #expect(result.classification == .unknown)
+        // The raw error gets surfaced for bug-reporting.
+        #expect(result.detail.contains("context deadline exceeded"))
+    }
+
+    @Test("fresh-install rmapi error (TOC-like) → unknown")
+    func unknownFreshInstall() {
+        let err = StringError(message: "no entries found")
+        #expect(CloudHealthProbe.classify(err).classification == .unknown)
+    }
+
+    // MARK: - rawValue stability (IPC wire format)
 
     @Test("classification rawValue stable for IPC wire format")
     func rawValuesStable() {

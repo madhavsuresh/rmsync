@@ -1,178 +1,152 @@
 import Foundation
 
-/// Diagnostic probe that classifies "why is the push pipeline
-/// broken?" so the user doesn't have to dig through ``stderr.log``
-/// to figure out whether the bug lives in our code, in rmapi, or
-/// in the cloud itself.
+/// Stateless classifier that answers "why did this push fail?"
+/// from the push error itself — no extra cloud writes.
 ///
-/// Background: v0.2.23 shipped HTTP-400 push-failure parking.
-/// That stopped the retry loop, but the menubar still just said
-/// "out of sync — N parked errors", giving no signal about
-/// **whether retrying ever helps**. The schema-v4 cloud rollout
-/// in 2026-04 broke rmapi (even v0.0.32) for new uploads + mkdir
-/// + force-replace; until ddvk ships a fix, every retry hits
-/// the same 400 and parking accumulates. The user wants to see
-/// "rmapi/cloud is broken right now, your files are safe, wait
-/// for upstream" rather than guess.
+/// **History.** v0.2.25 introduced this as a probe actor that
+/// shelled out to ``rmapi version`` → ``rmapi account`` → a
+/// ``rmapi mkdir`` canary against a sentinel path. That left
+/// ``.rmsync-health-<uuid>`` directories on the cloud whenever
+/// the cleanup ``rmapi rm`` couldn't clean up (typically: the
+/// same compat break that caused the original failure also
+/// blocks the rm). Garbage piled up.
 ///
-/// The probe runs:
+/// v0.2.29 simplified: by the time we'd run the probe we've
+/// already had a push fail, so we already have evidence of the
+/// failure mode in the original error's stderr / Swift error
+/// description. Classifying that string is cheap, deterministic,
+/// and writes nothing to the cloud.
 ///
-///   1. ``rmapi version`` — does the binary even exist + run?
-///   2. ``rmapi account`` — is auth valid? (succeeds iff a token
-///      is on disk; cheap.)
-///   3. A tiny ``rmapi mkdir`` against a sentinel path under
-///      ``/<remoteFolder>``, followed by ``rmapi rm`` to clean
-///      up. This is the canary: if mkdir 400s but account
-///      worked, we've isolated the cloud-API-compat break.
-///
-/// Output: a single ``Classification`` value the daemon broadcasts
-/// over IPC. Cached for ``cooldown`` seconds so multiple
-/// concurrent push failures don't shell out 5× to rmapi —
-/// classify once, reuse.
-actor CloudHealthProbe {
-    /// Why pushes are failing — high-level enough for the
+/// Trade-off: pattern matching on stderr is fragile if rmapi
+/// changes its error messages. Mitigated by:
+///   - Falling through to ``unknown`` for unrecognized patterns
+///     (rather than misclassifying as ``ok`` or breaking).
+///   - The ``rmapi_compat_break`` arm matches several distinct
+///     phrasings of the same underlying issue, so a wording
+///     change in one rmapi release won't drop the whole branch.
+enum CloudHealthProbe {
+    /// Why a cloud operation failed — high-level enough for the
     /// menubar to translate to user-facing text.
     enum Classification: String, Sendable, Equatable {
-        /// All probes passed; failures are per-doc (e.g., the
-        /// individual doc's content tripped a server-side
-        /// validator) rather than systemic.
+        /// Operation succeeded — used by the *invalidate* path
+        /// (a successful push clears any stale failure
+        /// classification).
         case ok = "ok"
-        /// ``rmapi version`` returned non-zero or the binary
-        /// is missing. Doctor / install issue.
+        /// rmapi binary missing or won't run. Doctor / install
+        /// issue.
         case rmapiMissing = "rmapi_missing"
-        /// ``rmapi account`` failed. User needs to re-auth via
-        /// ``rmapi`` interactively.
+        /// rmapi can't authenticate against the cloud — token
+        /// missing, expired, or revoked. User runs ``rmapi``
+        /// interactively to re-authenticate.
         case authBroken = "auth_broken"
-        /// ``rmapi version`` and ``account`` succeed but the
-        /// mkdir canary fails. rmapi is talking to the cloud
-        /// but the cloud rejects writes — typically an
-        /// rmapi-vs-cloud-API mismatch when the cloud rolls
-        /// out a schema bump that rmapi hasn't caught up to yet.
-        /// Files stay parked safely; user upgrades rmapi or
-        /// waits for an upstream fix. The 2026-04 schema-v4
-        /// break (ddvk/rmapi#58) was the first instance; later
-        /// instances will look the same to us but won't
-        /// necessarily map to that specific issue.
+        /// rmapi reaches the cloud but the cloud rejects writes
+        /// — typically a schema-version mismatch when the cloud
+        /// rolls out an API change rmapi hasn't caught up to.
+        /// User upgrades rmapi or waits for an upstream fix.
+        /// First instance: 2026-04 schema-v4 break
+        /// (ddvk/rmapi#58); later instances will look the same
+        /// to us but won't necessarily map to that issue.
         case rmapiCompatBreak = "rmapi_compat_break"
-        /// Probe sequence didn't reach a classifying answer.
-        /// E.g., rmapi version succeeds but auth probe times
-        /// out without a clear yes/no.
+        /// Failure pattern not recognised. Surfaced verbatim in
+        /// ``cloud_health_detail`` so the user can copy-paste
+        /// it to a bug report.
         case unknown = "unknown"
     }
 
-    /// One probe outcome. ``classification`` is the answer the
-    /// menubar consumes; ``detail`` is human-readable text the
-    /// daemon logs at info level so an operator can correlate
-    /// against rmapi changelogs.
+    /// Output of ``classify``. ``classification`` drives menubar
+    /// rendering; ``detail`` is the raw error text we want
+    /// surfaced in ``rmsync status`` and the diagnostic alert.
     struct Result: Sendable, Equatable {
         let classification: Classification
         let detail: String
-        let probedAt: Date
     }
 
-    private let cloud: Cloud
-    private let cfg: Config
-    private let cooldown: TimeInterval
-    private var lastResult: Result?
+    /// Inspect a thrown error's string form and bucket it.
+    ///
+    /// Pattern catalog (in priority order):
+    ///   - "executable not found" / "no such file" with rmapi
+    ///     path → ``rmapiMissing``
+    ///   - "Refresh token is not set" / "401" / "403" →
+    ///     ``authBroken``
+    ///   - "request failed with status 4" /
+    ///     "failed to upload file" /
+    ///     "failed to delete existing file" /
+    ///     "failed to create directory" → ``rmapiCompatBreak``
+    ///   - everything else → ``unknown``
+    static func classify(_ error: Error) -> Result {
+        let text = "\(error)"
+        let lower = text.lowercased()
 
-    init(cloud: Cloud, cfg: Config, cooldown: TimeInterval = 600) {
-        self.cloud = cloud
-        self.cfg = cfg
-        self.cooldown = cooldown
-    }
-
-    /// Look up the most recent classification, running a fresh
-    /// probe if no cached result exists or the cached one has
-    /// aged past ``cooldown``.
-    func current(now: Date = Date()) async -> Result {
-        if let cached = lastResult,
-           now.timeIntervalSince(cached.probedAt) < cooldown {
-            return cached
-        }
-        let fresh = await runProbe(now: now)
-        lastResult = fresh
-        return fresh
-    }
-
-    /// Force-invalidate the cache (e.g., on a successful push:
-    /// whatever was broken evidently isn't anymore, so the next
-    /// caller should get a fresh probe rather than the stale
-    /// "rmapiCompatBreak" result).
-    func invalidate() {
-        lastResult = nil
-    }
-
-    /// For tests / `rmsync doctor` to read the latest probe
-    /// without re-running it.
-    func cached() -> Result? { lastResult }
-
-    // MARK: - probe sequence
-
-    private func runProbe(now: Date) async -> Result {
-        Logger.shared.info("cloud health probe starting")
-
-        // Step 1: rmapi version. Cheapest call; binary loads its
-        // own libraries cleanly and prints a string.
-        do {
-            _ = try await cloud.version()
-        } catch {
-            return cache(.rmapiMissing,
-                "rmapi binary missing or won't run: \(error)",
-                at: now)
+        // rmapi binary missing. Subprocess.run would surface
+        // this as a posix "no such file or directory" or
+        // launchPath-resolution error. Keep both phrasings.
+        if lower.contains("executable not found")
+            || lower.contains("rmapi: command not found")
+            || (lower.contains("no such file or directory")
+                && lower.contains("rmapi")) {
+            return Result(classification: .rmapiMissing, detail: text)
         }
 
-        // Step 2: rmapi account. Reads the local auth token and
-        // hits one HTTP endpoint. Failure means re-auth needed.
-        do {
-            _ = try await cloud.account()
-        } catch {
-            return cache(.authBroken,
-                "rmapi account failed (re-auth needed): \(error)",
-                at: now)
+        // Auth-related. rmapi prints "Refresh token is not set"
+        // when the saved token is missing/expired; HTTP 401/403
+        // come from the API.
+        if lower.contains("refresh token")
+            || text.contains("status 401")
+            || text.contains("status 403")
+            || lower.contains("authorization")
+            || lower.contains("authentication") {
+            return Result(classification: .authBroken, detail: text)
         }
 
-        // Step 3: mkdir canary. Targets a sentinel name unlikely
-        // to collide with user content, under the configured
-        // ``remoteFolder`` so we exercise the same cloud subtree
-        // that the worker writes to. Cleaned up via ``rm``
-        // immediately on success.
-        let sentinel = "/\(cfg.remoteFolder)/.rmsync-health-\(UUID().uuidString.prefix(8))"
-        do {
-            try await cloud.mkdir(sentinel)
-        } catch {
-            // Generic message — early versions hard-coded a link
-            // to ddvk/rmapi#58 (the original schema-v4 break),
-            // but future cloud-API rolls will produce the same
-            // failure shape without mapping to that specific
-            // issue. Point at the rmapi tracker as a whole and
-            // let the user see what's currently filed.
-            return cache(.rmapiCompatBreak,
-                "rmapi can't write to the cloud (mkdir canary at \(sentinel) "
-                  + "errored: \(error)). This might be an rmapi issue — "
-                  + "check https://github.com/ddvk/rmapi/issues for known "
-                  + "problems and recent releases. Files are parked safely; "
-                  + "no data lost.",
-                at: now)
+        // rmapi-vs-cloud compat. Multiple distinct phrasings for
+        // what's structurally the same problem (rmapi can't
+        // produce a payload the cloud accepts). The 4xx range
+        // with the specific failure phrasings catches the
+        // current-known patterns; status 4-prefix as a fallback
+        // catches future variations.
+        if text.contains("request failed with status 4")
+            || lower.contains("failed to upload file")
+            || lower.contains("failed to delete existing file")
+            || lower.contains("failed to create directory") {
+            return Result(classification: .rmapiCompatBreak, detail:
+                "rmapi can't write to the cloud: \(text). "
+                + "This might be an rmapi issue — check "
+                + "https://github.com/ddvk/rmapi/issues for known "
+                + "problems and recent releases. Files are parked "
+                + "safely; no data lost.")
         }
 
-        // mkdir worked → we're healthy. Best-effort cleanup so
-        // the sentinel folder doesn't litter the user's tablet.
-        try? await cloud.rm(sentinel)
-
-        return cache(.ok,
-            "rmapi version + account + mkdir canary all OK",
-            at: now)
+        // Everything else — surface the raw error so the user
+        // can paste it into a bug report.
+        return Result(classification: .unknown, detail: text)
     }
 
-    private func cache(
-        _ kind: Classification, _ detail: String, at now: Date
-    ) -> Result {
-        let r = Result(classification: kind, detail: detail, probedAt: now)
-        lastResult = r
+    /// Convenience used by the worker: classify the error AND
+    /// take action at the StateBus level. Returns nothing — the
+    /// caller doesn't need the result, only the side-effect of
+    /// publishing it.
+    static func classifyAndPublish(_ error: Error, on bus: StateBus) async {
+        let result = classify(error)
         Logger.shared.info(
-            "cloud health probe complete",
-            meta: ["classification": kind.rawValue, "detail": detail]
+            "cloud health classified",
+            meta: [
+                "classification": result.classification.rawValue,
+                "detail": result.detail,
+            ]
         )
-        return r
+        await bus.update { s in
+            s.cloudHealth = result.classification.rawValue
+            s.cloudHealthDetail = result.detail
+        }
+    }
+
+    /// Clear any cached cloud-health classification. Called from
+    /// the worker on a successful push — whatever was broken
+    /// evidently isn't anymore. Idempotent.
+    static func clear(on bus: StateBus) async {
+        await bus.update { s in
+            s.cloudHealth = ""
+            s.cloudHealthDetail = nil
+        }
     }
 }
