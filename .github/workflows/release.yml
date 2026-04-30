@@ -290,14 +290,20 @@ jobs:
           # call can act on the right PR — relying on "the most
           # recent PR on this branch" is racy when a fresh release
           # opens during a daily-cron rmapi bump.
+          #
+          # Body is a single-line string on purpose: a previous
+          # version of this step used ``\<newline>`` continuations
+          # to break the body across lines, but YAML treats any
+          # column-1 content inside a ``run: |`` block as ending
+          # the literal block, so the workflow file was rejected
+          # with "could not find expected ':'" at parse time and
+          # ALL of v0.2.30 / v0.2.31 release runs failed at 0s
+          # before any job could start. Lesson: keep the body
+          # string on one line and put the prose in this comment.
+          BODY="Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}. This PR auto-merges once Formula audit passes."
           PR_URL=$(gh pr create \
             --title "rmsync ${GITHUB_REF_NAME}" \
-            --body  "Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}.\
-\
-This PR auto-merges once Formula audit passes. Cascading bump\
-PRs (one per rmsync release) clogged the queue manually before;\
-v0.2.29 enabled \`allow_auto_merge\` on the tap repo and added\
-this \`gh pr merge --auto\` step to release.yml." \
+            --body  "$BODY" \
             --base  main \
             --head  "bump-${GITHUB_REF_NAME}" \
             | tail -1)

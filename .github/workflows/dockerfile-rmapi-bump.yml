@@ -91,26 +91,14 @@ jobs:
           git add Dockerfile
           git commit -m "Dockerfile: bump rmapi pin to v${NEW_VERSION}"
           git push --set-upstream origin "$branch"
+          # Body is a single-line string (not a multi-line block)
+          # because YAML's ``run: |`` literal-block ends on any
+          # column-1 line. The previous multi-line body broke the
+          # workflow at parse time. Prose moved to this comment.
+          BODY="Automated rmapi pin bump v${OLD_VERSION} -> v${NEW_VERSION}. Upstream notes: https://github.com/ddvk/rmapi/releases/tag/v${NEW_VERSION} . The brew tap's parallel workflow bumps Formula/rmapi.rb; this PR keeps the Docker image on the same version. Auto-merges once CI passes."
           PR_URL=$(gh pr create \
             --title "Dockerfile: bump rmapi to v${NEW_VERSION}" \
-            --body "Automated bump from v${OLD_VERSION} -> v${NEW_VERSION}.
-
-The brew tap's parallel workflow auto-bumps Formula/rmapi.rb in
-[homebrew-rmsync](https://github.com/madhavsuresh/homebrew-rmsync);
-this PR keeps the Docker image on the same version. Both pin
-sources should track current to keep Homebrew users and Docker
-users on the same rmapi version.
-
-Upstream release notes: https://github.com/ddvk/rmapi/releases/tag/v${NEW_VERSION}
-
-After merging, the next \`v0.2.X\` rmsync tag will rebuild the
-container image against rmapi v${NEW_VERSION}.
-
-Tested via:
-  docker build -t rmsync:test .
-  docker run --rm rmsync:test rmapi version  # should print v${NEW_VERSION}
-
-Auto-merges once CI passes." \
+            --body "$BODY" \
             | tail -1)
           echo "Opened PR: $PR_URL"
           # Queue auto-merge. ``--auto`` waits for required CI
