@@ -45,10 +45,14 @@ actor CloudHealthProbe {
         case authBroken = "auth_broken"
         /// ``rmapi version`` and ``account`` succeed but the
         /// mkdir canary fails. rmapi is talking to the cloud
-        /// but the cloud rejects writes — almost certainly the
-        /// 2026-04 schema-v4 break (ddvk/rmapi#58) or its
-        /// successor. Files stay parked safely; user waits for
-        /// upstream rmapi/cloud fix.
+        /// but the cloud rejects writes — typically an
+        /// rmapi-vs-cloud-API mismatch when the cloud rolls
+        /// out a schema bump that rmapi hasn't caught up to yet.
+        /// Files stay parked safely; user upgrades rmapi or
+        /// waits for an upstream fix. The 2026-04 schema-v4
+        /// break (ddvk/rmapi#58) was the first instance; later
+        /// instances will look the same to us but won't
+        /// necessarily map to that specific issue.
         case rmapiCompatBreak = "rmapi_compat_break"
         /// Probe sequence didn't reach a classifying answer.
         /// E.g., rmapi version succeeds but auth probe times
@@ -136,11 +140,18 @@ actor CloudHealthProbe {
         do {
             try await cloud.mkdir(sentinel)
         } catch {
+            // Generic message — early versions hard-coded a link
+            // to ddvk/rmapi#58 (the original schema-v4 break),
+            // but future cloud-API rolls will produce the same
+            // failure shape without mapping to that specific
+            // issue. Point at the rmapi tracker as a whole and
+            // let the user see what's currently filed.
             return cache(.rmapiCompatBreak,
-                "rmapi mkdir 400'd against \(sentinel): \(error). "
-                  + "Likely the cloud schema-v4 incompatibility "
-                  + "(ddvk/rmapi#58). Files are parked safely; "
-                  + "wait for upstream rmapi or cloud fix.",
+                "rmapi can't write to the cloud (mkdir canary at \(sentinel) "
+                  + "errored: \(error)). This might be an rmapi issue — "
+                  + "check https://github.com/ddvk/rmapi/issues for known "
+                  + "problems and recent releases. Files are parked safely; "
+                  + "no data lost.",
                 at: now)
         }
 

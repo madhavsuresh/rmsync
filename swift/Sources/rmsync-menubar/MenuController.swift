@@ -78,7 +78,11 @@ final class MenuController: NSObject, NSMenuDelegate {
         // "Why is sync broken?" — hidden by default, shown when
         // the cloud-health probe surfaces a non-ok classification.
         // Click action varies by classification:
-        //   rmapi_compat_break → opens ddvk/rmapi#58
+        //   rmapi_compat_break → opens the rmapi issue tracker
+        //                        (was ddvk/rmapi#58 specifically;
+        //                        v0.2.28 generalised so future
+        //                        cloud-API rolls don't get
+        //                        misdirected to a stale issue)
         //   auth_broken        → shows a help dialog
         //   rmapi_missing      → opens rmapi releases page
         whyBrokenItem.title = "Why is sync broken?"
@@ -308,18 +312,20 @@ final class MenuController: NSObject, NSMenuDelegate {
         alert.alertStyle = .informational
         switch s.cloudHealth {
         case "rmapi_compat_break":
-            alert.messageText = "rmapi can't reach the reMarkable cloud"
+            alert.messageText = "This might be an rmapi issue"
             alert.informativeText = (s.cloudHealthDetail ?? "")
                 + "\n\nYour files are parked safely in state.db; "
                 + "no data is lost. The daemon will resume pushing "
                 + "automatically once rmapi or the cloud ships a "
                 + "compatible build.\n\n"
-                + "Track upstream: https://github.com/ddvk/rmapi/issues/58"
-            alert.addButton(withTitle: "Open Issue")
+                + "Check the rmapi issue tracker for known problems "
+                + "and recent releases:\n"
+                + "https://github.com/ddvk/rmapi/issues"
+            alert.addButton(withTitle: "Open rmapi Issues")
             alert.addButton(withTitle: "Close")
             if alert.runModal() == .alertFirstButtonReturn {
                 NSWorkspace.shared.open(URL(string:
-                    "https://github.com/ddvk/rmapi/issues/58")!)
+                    "https://github.com/ddvk/rmapi/issues")!)
             }
         case "auth_broken":
             alert.messageText = "rmapi authentication broken"
