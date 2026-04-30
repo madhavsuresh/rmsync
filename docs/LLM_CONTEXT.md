@@ -69,6 +69,7 @@ Use these exact paths when helping the user. macOS first; Linux
 ~/Library/Application Support/rmsync/state.db      # SQLite state
 ~/Library/Application Support/rmsync/ipc.sock      # live IPC socket
 ~/Library/Application Support/rmsync/status.json   # fallback status snapshot
+~/Library/Application Support/rmsync/backups/      # snapshot history (per doc-id; v0.2.20+)
 
 # logs
 ~/Library/Logs/rmsync/stdout.log                   # structured JSON, one event per line
@@ -80,6 +81,7 @@ Use these exact paths when helping the user. macOS first; Linux
 
 # default sync dir (user may have moved it)
 ~/rmsync-writing/
+~/rmsync-writing/.rmsync-trash/                     # soft-delete buffer (v0.2.19+)
 ```
 
 ### Linux (Docker container layout)
@@ -95,7 +97,9 @@ Use these exact paths when helping the user. macOS first; Linux
 /config/rmapi/rmapi.conf                           # cloud auth
 /state/state.db                                    # SQLite state
 /state/ipc.sock                                    # live IPC socket
+/state/backups/                                    # snapshot history (per doc-id; v0.2.20+)
 /sync/                                             # your reMarkable Markdown tree
+/sync/.rmsync-trash/                               # soft-delete buffer (v0.2.19+)
 ```
 
 No menubar. No launchd plists. Logs go to stdout/stderr (the
@@ -210,6 +214,9 @@ on Docker (`docker exec -it rmsync rmapi`).
 | `rmsync trash list` | filesystem | List soft-deleted files under `<sync_dir>/.rmsync-trash/`. | ✓ |
 | `rmsync trash restore <rel>` | filesystem | Move a trashed file back; daemon re-pushes on next watcher tick. `--all` for bulk. | ✓ |
 | `rmsync trash prune` | filesystem | Drop trash entries past `trash_retention_days`. Auto-runs at daemon startup. | ✓ |
+| `rmsync history list <path>` | state DB + filesystem | Per-doc snapshot history (newest first). Each save / pull-overwrite is captured. | ✓ |
+| `rmsync history diff <path> [--against <ts>]` | filesystem | Unified `diff -u` vs a snapshot (default: most recent). | ✓ |
+| `rmsync history restore <path> --to <ts>` | filesystem + IPC | Revert to a snapshot; current → trash; daemon pushes immediately via `push_path` IPC. | ✓ |
 
 Internal-only subcommands: `daemon` (invoked by launchd), `init`
 (legacy pointer to `install.sh`).
@@ -405,6 +412,32 @@ Local files soft-delete into `.rmsync-trash/`; recover via
 operations exceeding `bulk_delete_threshold` of tracked docs in
 `bulk_delete_window_seconds`. See "Rename / move / delete
 propagation" in `docs/USAGE.md`.
+
+### Revert a doc to an earlier version
+
+Snapshot history is always on (v0.2.20+). The daemon parks
+a copy of every tracked `.md` at every push (about-to-go-up
+bytes) and every cloud-pull-overwrite (about-to-be-clobbered
+bytes) under `<stateDir>/backups/<doc-id>/<utc-stamp>.{md,json}`.
+Retention via `backup_snapshots_to_keep` (default 30).
+
+```sh
+rmsync history list ~/rmsync-writing/Chapter-3.md
+# Newest first; columns: ts | cause (push|pull_overwrite) | words | delta | bytes
+
+rmsync history diff ~/rmsync-writing/Chapter-3.md
+# Unified diff vs most recent snapshot. --against <ts> to pick another.
+
+rmsync history restore ~/rmsync-writing/Chapter-3.md \
+    --to 2026-04-29T22:14:08Z
+# Current → trash; snapshot bytes written to local; daemon pushes
+# immediately via the push_path IPC verb.
+```
+
+Storage is keyed on doc UUID, not local path, so `rmsync
+relocate` doesn't orphan history. `history restore` is itself
+recoverable via `rmsync trash restore` (the pre-restore content
+is parked there).
 
 ### Change log level for debugging
 

@@ -231,6 +231,26 @@ Trash auto-prunes at daemon startup. Refused deletes show up as
 `error_state = "bulk_delete_refused"` in `rmsync status` and the
 web dashboard.
 
+## Snapshot history (always on)
+
+Every push and every cloud-pull-overwrite parks a copy of the
+file at `/state/backups/<doc-id>/<utc-stamp>.md`. v0.2.20+. No
+config required — it's running by default. Retention via
+`backup_snapshots_to_keep` (default 30).
+
+```sh
+docker exec rmsync rmsync history list /sync/Chapter-3.md
+docker exec rmsync rmsync history diff /sync/Chapter-3.md
+docker exec rmsync rmsync history restore /sync/Chapter-3.md \
+    --to 2026-04-29T22:14:08Z
+```
+
+`history restore` parks the current file in the trash before
+overwriting and asks the daemon to push the reverted content
+immediately (via the `push_path` IPC verb). If you bind-mount
+the `/state` volume, snapshot history survives container
+restarts — same persistence story as `state.db`.
+
 ## Operational commands
 
 All `rmsync` subcommands work via `docker exec` against the

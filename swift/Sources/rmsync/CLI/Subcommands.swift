@@ -540,3 +540,246 @@ struct TrashCmd: AsyncParsableCommand {
         }
     }
 }
+
+// MARK: - history
+
+/// Browse, diff, and revert per-doc snapshot history.
+///
+/// Snapshots are written by ``SyncWorker`` on every push (about-
+/// to-go-up bytes) and every cloud-pull-overwrite (about-to-be-
+/// clobbered bytes). Storage at
+/// ``<stateDir>/backups/<doc-id>/<utc-stamp>.{md,json}``;
+/// retention controlled by ``backup_snapshots_to_keep``.
+///
+/// All three subcommands run direct against state.db + the
+/// filesystem (no IPC needed). The exception is ``restore``,
+/// which optionally pings the daemon over IPC to enqueue an
+/// immediate push of the reverted content.
+struct History: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "history",
+        abstract: "Browse / diff / revert snapshot history of a tracked .md.",
+        subcommands: [List.self, Diff.self, Restore.self],
+        defaultSubcommand: List.self
+    )
+
+    /// ``rmsync history list <path>`` — chronological table of every
+    /// snapshot for the given file. Newest at top so the most
+    /// useful row is the first one the user sees.
+    struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "list",
+            abstract: "List snapshot history for a tracked file."
+        )
+        @Argument(help: "Path to a tracked .md inside sync_dir.")
+        var path: String
+
+        func run() async throws {
+            let resolved = try await resolveTracked(path: path)
+            let entries = try Snapshots.list(
+                docID: resolved.doc.docID, in: Paths.stateDir
+            )
+            if entries.isEmpty {
+                print("(no snapshots yet for this doc)")
+                return
+            }
+            // Newest first — flip the chronological list.
+            let ordered = Array(entries.reversed())
+            print("doc: \(resolved.relativeOrAbsolute)  (id: \(resolved.doc.docID.prefix(8))…)")
+            print("")
+            // Compute deltas vs the immediately-newer snapshot.
+            // entries[i] is older than entries[i+1] in original
+            // (chronological) order; we reversed to print, so in
+            // ``ordered`` the row at index N's delta is
+            // (words at N) - (words at N+1). The oldest row has no
+            // predecessor here; show its delta as a baseline +N.
+            print(String(format: "%-26s  %-16s  %7s  %7s  %9s",
+                "ts", "cause", "words", "delta", "bytes"))
+            for (i, e) in ordered.enumerated() {
+                let prev: Int = (i + 1 < ordered.count)
+                    ? ordered[i + 1].wordCount
+                    : 0
+                let delta = e.wordCount - prev
+                let deltaStr: String
+                if delta > 0 { deltaStr = "+\(delta)" }
+                else if delta < 0 { deltaStr = "\(delta)" }
+                else { deltaStr = "±0" }
+                let display = formatDisplayStamp(e.stamp)
+                print(String(format: "%-26s  %-16s  %7d  %7s  %9d",
+                    display, e.cause, e.wordCount, deltaStr, e.byteCount))
+            }
+            print("")
+            if let newest = ordered.first {
+                let display = formatDisplayStamp(newest.stamp)
+                print("Use:  rmsync history diff '\(path)' [--against \(display)]")
+                print("      rmsync history restore '\(path)' --to \(display)")
+            }
+        }
+    }
+
+    /// ``rmsync history diff <path>`` — unified diff between
+    /// current local content and a snapshot. Defaults to the
+    /// most recent snapshot when ``--against`` is omitted.
+    struct Diff: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "diff",
+            abstract: "Diff current vs a historical snapshot."
+        )
+        @Argument(help: "Path to a tracked .md inside sync_dir.")
+        var path: String
+        @Option(name: .customLong("against"),
+                help: "Snapshot timestamp (defaults to most recent).")
+        var against: String?
+
+        func run() async throws {
+            let resolved = try await resolveTracked(path: path)
+            let entries = try Snapshots.list(
+                docID: resolved.doc.docID, in: Paths.stateDir
+            )
+            guard !entries.isEmpty else {
+                print("(no snapshots yet for this doc)")
+                throw ExitCode(1)
+            }
+            let entry: Snapshots.Entry
+            if let target = against {
+                guard let found = try Snapshots.find(
+                    docID: resolved.doc.docID, stamp: target,
+                    in: Paths.stateDir
+                ) else {
+                    print("no snapshot matches '\(target)' — try `rmsync history list`")
+                    throw ExitCode(1)
+                }
+                entry = found
+            } else {
+                entry = entries.last!  // most recent
+            }
+            let diff = try Snapshots.unifiedDiff(
+                entry, vs: URL(fileURLWithPath: resolved.absolute)
+            )
+            if diff.isEmpty {
+                print("(no differences vs snapshot \(formatDisplayStamp(entry.stamp)))")
+                return
+            }
+            print(diff, terminator: "")
+        }
+    }
+
+    /// ``rmsync history restore <path> --to <ts>`` — revert local
+    /// file to a previous snapshot, parking the current content in
+    /// trash for safety, then asks the running daemon to push the
+    /// reverted version immediately.
+    struct Restore: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "restore",
+            abstract: "Revert a tracked file to a historical snapshot."
+        )
+        @Argument(help: "Path to a tracked .md inside sync_dir.")
+        var path: String
+        @Option(name: .customLong("to"),
+                help: "Snapshot timestamp to restore.")
+        var to: String
+
+        func run() async throws {
+            let cfg = try Config.load()
+            let resolved = try await resolveTracked(path: path)
+            guard let entry = try Snapshots.find(
+                docID: resolved.doc.docID, stamp: to, in: Paths.stateDir
+            ) else {
+                print("no snapshot matches '\(to)' — try `rmsync history list`")
+                throw ExitCode(1)
+            }
+
+            let target = URL(fileURLWithPath: resolved.absolute)
+
+            // 1. Park the current content in trash so the restore
+            //    is itself recoverable. moveIn returns
+            //    .sourceMissing if the current file is already
+            //    gone — proceed regardless.
+            do {
+                let result = try Trash.moveIn(target, syncDir: cfg.syncDir)
+                switch result {
+                case .moved(let stamp, _):
+                    print("current parked in trash (stamp \(stamp))")
+                case .sourceMissing:
+                    print("(no current file to park)")
+                case .alreadyTrashed(let stamp, _):
+                    print("(current already trashed at \(stamp))")
+                }
+            } catch {
+                print("WARNING: trash move failed (\(error)) — restoring anyway")
+            }
+
+            // 2. Write the snapshot content into the live path.
+            //    Atomic-write so a watcher doesn't observe a
+            //    half-written file (though we don't seed the
+            //    echo fence — restore is a deliberate user
+            //    write that SHOULD reach the daemon).
+            let snapshotText = try Snapshots.read(entry)
+            try PathUtilities.atomicWriteText(snapshotText, to: target)
+            print("restored to snapshot \(formatDisplayStamp(entry.stamp)) (\(entry.wordCount) words)")
+
+            // 3. Tell the daemon to push immediately. Falls
+            //    through quietly if the daemon's down — the
+            //    watcher will pick it up at next start.
+            if IPCClientSync.pushPath(target.path) {
+                print("daemon notified; push enqueued")
+            } else {
+                print("(daemon not running — start it and the file will push)")
+            }
+        }
+    }
+
+    // MARK: - shared helpers
+
+    /// Output of ``resolveTracked``.
+    fileprivate struct Resolved {
+        let doc: Document
+        let absolute: String
+        let relativeOrAbsolute: String
+    }
+
+    /// Resolve a user-supplied path argument to its tracked
+    /// state.db row. Accepts absolute paths, relative paths from
+    /// cwd, or paths relative to ``sync_dir``. Throws ExitCode(1)
+    /// with a hint if the path isn't tracked.
+    fileprivate static func resolveTracked(path: String) async throws -> Resolved {
+        let cfg = try Config.load()
+        let candidates: [URL] = {
+            let raw = NSString(string: path).expandingTildeInPath
+            let direct = URL(fileURLWithPath: raw).standardizedFileURL
+            let underSync = cfg.syncDir.appendingPathComponent(raw).standardizedFileURL
+            return [direct, underSync]
+        }()
+        let state = try State(path: Paths.stateDBPath)
+        for url in candidates {
+            if let doc = try await state.byLocalPath(url.path) {
+                let rel = PathUtilities.resolvedRelativePath(
+                    from: cfg.syncDir, to: url
+                )?.joined(separator: "/")
+                return Resolved(
+                    doc: doc, absolute: url.path,
+                    relativeOrAbsolute: rel ?? url.path
+                )
+            }
+        }
+        print("path not tracked: \(path)")
+        print("hint: history is keyed on the doc's local_path in state.db.")
+        print("      run `rmsync status` to see tracked docs.")
+        throw ExitCode(1)
+    }
+
+    /// Reformat a compact stamp (``20260429T221408000Z``) as the
+    /// ISO form humans paste into ``--against`` /``--to``
+    /// (``2026-04-29T22:14:08Z``). Falls back to the input on
+    /// parse failure.
+    fileprivate static func formatDisplayStamp(_ stamp: String) -> String {
+        let f = DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
+        guard let date = f.date(from: stamp) else { return stamp }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.string(from: date)
+    }
+}

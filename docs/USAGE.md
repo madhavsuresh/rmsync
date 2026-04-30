@@ -325,6 +325,47 @@ rmsync trash prune --days 7              # one-off override
 The daemon also auto-prunes at startup based on
 `trash_retention_days` (set to 0 to keep forever).
 
+### …revert a doc to an earlier version
+
+Every time the daemon writes a `.md` file (either pulled from
+the cloud or about to push), it parks a snapshot of the bytes at
+`<stateDir>/backups/<doc-id>/<utc-stamp>.md`. Default retention
+is 30 snapshots per doc; bump or shrink via
+`backup_snapshots_to_keep` in config.toml.
+
+You don't need to opt in — snapshots are always taken for
+tracked docs. To browse / diff / revert:
+
+```sh
+# all snapshots for this draft, newest first
+rmsync history list ~/rmsync-writing/Chapter-3.md
+
+# unified diff vs the most recent snapshot
+rmsync history diff ~/rmsync-writing/Chapter-3.md
+
+# unified diff vs a specific snapshot (paste timestamp from list)
+rmsync history diff ~/rmsync-writing/Chapter-3.md \
+    --against 2026-04-29T22:14:08Z
+
+# revert. parks the current local file in .rmsync-trash/ first
+# (recoverable via `rmsync trash restore`), then asks the daemon
+# to push the reverted content to the cloud immediately.
+rmsync history restore ~/rmsync-writing/Chapter-3.md \
+    --to 2026-04-29T22:14:08Z
+```
+
+The `cause` column in `history list` distinguishes:
+
+- `push` — bytes saved on a save / push to cloud.
+- `pull_overwrite` — bytes captured before the daemon overwrote
+  the local file with a remote edit. This is the safety net for
+  "the daemon just clobbered something I was working on".
+
+Storage is keyed on the doc UUID (not the local path), so
+`rmsync relocate` doesn't orphan history. Disk usage is bounded
+by `backup_snapshots_to_keep` × file size — typically a few MB
+per actively-written doc.
+
 ---
 
 ## Optional: drop-folder for sending PDFs / EPUBs

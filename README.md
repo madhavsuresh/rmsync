@@ -82,6 +82,33 @@ default is `enable_propagation = false`.
 Full guide: [`docs/USAGE.md`](docs/USAGE.md) → "Rename / move /
 delete propagation is opt-in".
 
+**v0.2.20 — snapshot history (always on).** Every push and every
+cloud-pull-overwrite parks a copy of the file at
+`<stateDir>/backups/<doc-id>/<utc-stamp>.md` so you can always
+roll back. Default 30 snapshots per doc; configurable via
+`backup_snapshots_to_keep`. No setup required — it's already
+running.
+
+```sh
+# what saves do I have for this draft?
+rmsync history list ~/rmsync-writing/Chapter-3.md
+
+# what changed since the last save?
+rmsync history diff ~/rmsync-writing/Chapter-3.md
+
+# revert to an earlier version (current goes to .rmsync-trash/,
+# daemon immediately pushes the reverted content to the cloud)
+rmsync history restore ~/rmsync-writing/Chapter-3.md \
+    --to 2026-04-29T22:14:08Z
+```
+
+`history list` is newest-first with a word-count delta column so
+you can spot the save where you accidentally cut a paragraph.
+`history diff` shells to POSIX `diff -u` (pipes cleanly to
+`delta` / `less`). `history restore` parks the current file in
+trash before overwriting, so a mistaken restore is itself
+recoverable via `rmsync trash restore`.
+
 ---
 
 > ### 🤖 Built with LLM assistance

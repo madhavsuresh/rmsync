@@ -122,6 +122,21 @@ enum DaemonScaffold {
             let snap = await bus.snapshot()
             return Self.snapshotFrame(snap)
         }
+        // ``push_path`` is the immediate-push verb wired up for
+        // ``rmsync history restore`` so a reverted file goes to
+        // the cloud without waiting on the watcher's debounce.
+        // Path-only payload — the worker resolves docID via
+        // state.byLocalPath when the job runs (existing push
+        // semantics handle both tracked and untracked paths
+        // correctly).
+        await server.register("push_path") { frame in
+            let path = (frame.decodeDict()?["path"] as? String) ?? ""
+            guard !path.isEmpty else {
+                return SendableJSON.dict(["error": "missing path"])
+            }
+            await queue.enqueue(Job(kind: .push, docID: nil, hint: path))
+            return SendableJSON.dict(["enqueued": true])
+        }
         try await server.start()
         Logger.shared.info(
             "ipc server listening",

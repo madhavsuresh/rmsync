@@ -124,6 +124,26 @@ enum IPCClientSync {
         return true
     }
 
+    /// Ask the daemon to enqueue a push for ``path`` immediately,
+    /// bypassing the watcher's debounce. Used by
+    /// ``rmsync history restore`` so a reverted file is shipped to
+    /// the cloud the moment the user runs the command, without
+    /// waiting for the watcher to notice the modification.
+    ///
+    /// Returns true if the daemon ack'd; false (with a printed
+    /// warning) if the daemon isn't running. Restore is still
+    /// useful in that case — the local file is already reverted —
+    /// and the watcher will pick it up when the daemon comes back.
+    @discardableResult
+    static func pushPath(_ path: String, timeout: TimeInterval = 2.0) -> Bool {
+        do {
+            _ = try request("push_path", extra: ["path": path], timeout: timeout)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - internals
 
     /// Opens an AF_UNIX socket and connects it to ``path``. Renamed from
