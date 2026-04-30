@@ -26,6 +26,16 @@ struct StatusSnapshot {
     /// didn't send it. Separate from this menubar binary's own
     /// ``Version.current`` — divergence between the two is actionable.
     let daemonVersion: String
+    /// Diagnostic for *why* pushes are failing (v0.2.25+):
+    /// ``ok`` / ``rmapi_missing`` / ``auth_broken``
+    /// / ``rmapi_compat_break`` / ``unknown`` / ``""`` (no probe yet).
+    /// Daemon's ``CloudHealthProbe`` populates this on push failure.
+    /// Older daemons (pre-v0.2.25) don't send it; we read empty
+    /// string and treat that as "no signal".
+    let cloudHealth: String
+    /// Human-readable explanation of the most recent probe.
+    /// Surfaced in the menubar tooltip when cloudHealth ≠ ok.
+    let cloudHealthDetail: String?
 }
 
 /// Persistent Unix-socket client for the rmsync daemon.
@@ -243,7 +253,9 @@ final class IPCClient {
             lastError: raw["last_error"] as? String,
             updatedAt: raw["updated_at"] as? String ?? "",
             pid: raw["pid"] as? Int,
-            daemonVersion: raw["version"] as? String ?? ""
+            daemonVersion: raw["version"] as? String ?? "",
+            cloudHealth: raw["cloud_health"] as? String ?? "",
+            cloudHealthDetail: raw["cloud_health_detail"] as? String
         )
     }
 

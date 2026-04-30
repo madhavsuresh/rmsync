@@ -47,6 +47,17 @@ struct Status: AsyncParsableCommand {
             print("queue depth:    \(live.queueDepth)")
             print("last pull:      \(live.lastPullAt ?? "(never)")")
             print("last push:      \(live.lastPushAt ?? "(never)")")
+            // v0.2.25 — cloud-health probe diagnostic. Empty
+            // means no probe has run yet (daemon healthy from
+            // its perspective). Anything else surfaces the
+            // upstream cause so the user knows whether to wait,
+            // re-auth, or reinstall rmapi.
+            if !live.cloudHealth.isEmpty, live.cloudHealth != "ok" {
+                print("cloud health:   \(live.cloudHealth)")
+                if let detail = live.cloudHealthDetail, !detail.isEmpty {
+                    print("                \(detail)")
+                }
+            }
             // Version line shows BOTH the running daemon's version
             // (from IPC) and this CLI binary's version. Divergence
             // means the on-disk binary was upgraded but the daemon

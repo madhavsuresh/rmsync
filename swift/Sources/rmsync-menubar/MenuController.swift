@@ -15,6 +15,10 @@ final class MenuController: NSObject, NSMenuDelegate {
     private let pushItem = NSMenuItem()
     private let openFolderItem = NSMenuItem()
     private let conflictsItem = NSMenuItem()
+    /// "Why is sync broken?" — only shown when the daemon's
+    /// cloud-health probe (v0.2.25) classifies a non-OK state.
+    /// Keeps the menu uncluttered for healthy installs.
+    private let whyBrokenItem = NSMenuItem()
     private let pauseItem = NSMenuItem()
     private let syncNowItem = NSMenuItem()
     private let restartItem = NSMenuItem()
@@ -70,6 +74,18 @@ final class MenuController: NSObject, NSMenuDelegate {
         conflictsItem.target = self
         conflictsItem.action = #selector(openConflicts(_:))
         menu.addItem(conflictsItem)
+
+        // "Why is sync broken?" — hidden by default, shown when
+        // the cloud-health probe surfaces a non-ok classification.
+        // Click action varies by classification:
+        //   rmapi_compat_break → opens ddvk/rmapi#58
+        //   auth_broken        → shows a help dialog
+        //   rmapi_missing      → opens rmapi releases page
+        whyBrokenItem.title = "Why is sync broken?"
+        whyBrokenItem.target = self
+        whyBrokenItem.action = #selector(openWhyBroken(_:))
+        whyBrokenItem.isHidden = true
+        menu.addItem(whyBrokenItem)
 
         menu.addItem(.separator())
 
@@ -129,6 +145,24 @@ final class MenuController: NSObject, NSMenuDelegate {
                 conflictsItem.isHidden = true
             }
 
+            // "Why is sync broken?" — visible when the daemon's
+            // cloud-health probe (v0.2.25+) flagged something
+            // systemic. Title encodes the classification so the
+            // user gets the gist without clicking.
+            switch s.cloudHealth {
+            case "rmapi_compat_break":
+                whyBrokenItem.title = "Why is sync broken? (rmapi vs cloud)"
+                whyBrokenItem.isHidden = false
+            case "auth_broken":
+                whyBrokenItem.title = "Why is sync broken? (rmapi auth)"
+                whyBrokenItem.isHidden = false
+            case "rmapi_missing":
+                whyBrokenItem.title = "Why is sync broken? (rmapi missing)"
+                whyBrokenItem.isHidden = false
+            default:
+                whyBrokenItem.isHidden = true
+            }
+
             openFolderItem.title = "Open \(URL(fileURLWithPath: s.syncDir).lastPathComponent)"
         } else {
             statusItem.title = "Daemon not running"
@@ -137,6 +171,7 @@ final class MenuController: NSObject, NSMenuDelegate {
             pauseItem.title = "Pause"
             versionItem.title = "v\(Version.current)"
             conflictsItem.isHidden = true
+            whyBrokenItem.isHidden = true
             openFolderItem.title = "Open Sync Folder"
         }
     }
@@ -152,6 +187,24 @@ final class MenuController: NSObject, NSMenuDelegate {
     }
 
     private func humanState(_ s: StatusSnapshot) -> String {
+        // v0.2.25 — when the daemon's cloud-health probe diagnosed
+        // a systemic issue (rmapi missing, auth broken, or the
+        // schema-v4 cloud incompatibility), surface that ABOVE the
+        // generic "parked errors" count. The user sees "rmapi can't
+        // reach cloud" instead of "out of sync — 6 parked errors"
+        // and knows to wait for an upstream fix rather than poke
+        // at rmsync's code.
+        switch s.cloudHealth {
+        case "rmapi_compat_break":
+            let plural = s.errors == 1 ? "" : "s"
+            return "rmapi can't reach cloud — \(s.errors) file\(plural) parked safely"
+        case "auth_broken":
+            return "rmapi auth broken — run `rmapi` to re-authenticate"
+        case "rmapi_missing":
+            return "rmapi binary missing or won't run"
+        default:
+            break
+        }
         // Parked errors / unresolved conflicts override the
         // top-level "synced" reading: a clean idle state with
         // even one push_failed parked is NOT actually clean.
@@ -218,10 +271,75 @@ final class MenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openLogs(_ sender: Any) {
-        let log = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/rmsync/stdout.log")
-        if FileManager.default.fileExists(atPath: log.path) {
-            NSWorkspace.shared.open(log)
+        // The Swift daemon writes structured logs to stderr (see
+        // Logger.emit → FileHandle.standardError.write); launchd
+        // routes that to ``stderr.log``. ``stdout.log`` is the
+        // empty leftover from the Python predecessor — opening
+        // it (the prior behavior) showed users a blank file.
+        // v0.2.23 fixed the same bug in the CLI's `rmsync logs`;
+        // v0.2.25 catches the menubar's matching call site.
+        let logDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/rmsync")
+        let stderrLog = logDir.appendingPathComponent("stderr.log")
+        let stdoutLog = logDir.appendingPathComponent("stdout.log")
+        let fm = FileManager.default
+        let target: URL = {
+            // Prefer stderr.log when it exists and is non-empty.
+            if fm.fileExists(atPath: stderrLog.path),
+               (try? Data(contentsOf: stderrLog))?.isEmpty == false {
+                return stderrLog
+            }
+            // Fall back to stdout.log only if it has anything to
+            // show (e.g., a hypothetical future stdout-writing
+            // logger).
+            if fm.fileExists(atPath: stdoutLog.path) { return stdoutLog }
+            return stderrLog
+        }()
+        if FileManager.default.fileExists(atPath: target.path) {
+            NSWorkspace.shared.open(target)
+        }
+    }
+
+    /// Open the diagnostic page or show a help alert based on
+    /// the current cloud-health classification. v0.2.25+.
+    @objc private func openWhyBroken(_ sender: Any) {
+        guard let s = snapshot else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        switch s.cloudHealth {
+        case "rmapi_compat_break":
+            alert.messageText = "rmapi can't reach the reMarkable cloud"
+            alert.informativeText = (s.cloudHealthDetail ?? "")
+                + "\n\nYour files are parked safely in state.db; "
+                + "no data is lost. The daemon will resume pushing "
+                + "automatically once rmapi or the cloud ships a "
+                + "compatible build.\n\n"
+                + "Track upstream: https://github.com/ddvk/rmapi/issues/58"
+            alert.addButton(withTitle: "Open Issue")
+            alert.addButton(withTitle: "Close")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(URL(string:
+                    "https://github.com/ddvk/rmapi/issues/58")!)
+            }
+        case "auth_broken":
+            alert.messageText = "rmapi authentication broken"
+            alert.informativeText = (s.cloudHealthDetail ?? "")
+                + "\n\nRun `rmapi` in a terminal and paste the "
+                + "8-char code from "
+                + "https://my.remarkable.com/device/desktop/connect"
+            alert.addButton(withTitle: "Close")
+            alert.runModal()
+        case "rmapi_missing":
+            alert.messageText = "rmapi binary missing"
+            alert.informativeText = (s.cloudHealthDetail ?? "")
+                + "\n\nInstall via: brew install madhavsuresh/rmsync/rmapi"
+            alert.addButton(withTitle: "Close")
+            alert.runModal()
+        default:
+            alert.messageText = "No diagnostic available"
+            alert.informativeText = "Check `rmsync logs` for details."
+            alert.addButton(withTitle: "Close")
+            alert.runModal()
         }
     }
 

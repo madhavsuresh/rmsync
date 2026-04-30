@@ -73,6 +73,13 @@ enum DaemonScaffold {
         // bail before calling it; harmless and keeps the wiring
         // identical across the on/off toggle.
         let limiter = DeletionRateLimiter(cfg: cfg, state: state)
+        // Cloud-health probe (v0.2.25). Workers fire it from the
+        // ``rmapi put failed`` handler so the menubar can
+        // distinguish "rmapi/cloud is broken right now" from
+        // "this one doc is malformed". Probes against the
+        // ``steadyCloud`` instance so concurrency caps don't
+        // trip the canary, but result is daemon-wide.
+        let cloudHealth = CloudHealthProbe(cloud: steadyCloud, cfg: cfg)
 
         // Workers come up first so they're ready to drain the queue as
         // soon as the reconciliation step enqueues jobs.
@@ -80,7 +87,8 @@ enum DaemonScaffold {
         for i in 0..<cfg.workerPoolSize {
             workers.append(SyncWorker(
                 id: i, queue: queue, cloud: initialCloud, state: state,
-                cfg: cfg, locks: locks, fence: fence, limiter: limiter
+                cfg: cfg, locks: locks, fence: fence, limiter: limiter,
+                cloudHealth: cloudHealth, bus: bus
             ))
         }
         let workerTasks = workers.map { worker in
@@ -189,7 +197,8 @@ enum DaemonScaffold {
         for i in 0..<cfg.workerPoolSize {
             let steady = SyncWorker(
                 id: i, queue: queue, cloud: steadyCloud, state: state,
-                cfg: cfg, locks: locks, fence: fence, limiter: limiter
+                cfg: cfg, locks: locks, fence: fence, limiter: limiter,
+                cloudHealth: cloudHealth, bus: bus
             )
             workers.append(steady)
             steadyTasks.append(Task.detached { await steady.run() })

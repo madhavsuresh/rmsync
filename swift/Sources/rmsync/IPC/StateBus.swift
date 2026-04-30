@@ -41,28 +41,26 @@ actor StateBus {
     // MARK: - framing
 
     static func statusFrame(for s: IPC.Status) -> SendableJSON {
-        let payload: [String: SendableValue] = [
-            "type": "status",
-            "state": .string(s.state),
-            "sync_dir": .string(s.syncDir),
-            "remote_folder": .string(s.remoteFolder),
-            "tracked_docs": .int(s.trackedDocs),
-            "conflicts": .int(s.conflicts),
-            "errors": .int(s.errors),
-            "queue_depth": .int(s.queueDepth),
-            "paused": .bool(s.paused),
-            "updated_at": .string(s.updatedAt),
-            "pid": .int(s.pid),
-            "version": .string(s.version),
-            "last_pull_at": s.lastPullAt.map { .string($0) } ?? .null,
-            "last_push_at": s.lastPushAt.map { .string($0) } ?? .null,
-            "last_error": s.lastError.map { .string($0) } ?? .null,
-        ]
-        return SendableJSON.dict(payload)
+        SendableJSON.dict(statusPayload(s, includeType: true))
     }
 
     static func helloFrame(for s: IPC.Status) -> SendableJSON {
-        let status: [String: SendableValue] = [
+        SendableJSON.dict([
+            "type": "hello",
+            "status": .object(statusPayload(s, includeType: false)),
+        ])
+    }
+
+    /// Shared field-list builder for both ``statusFrame`` (where
+    /// the dict is the top-level message and needs ``type`` next
+    /// to the data) and ``helloFrame`` (where the dict is nested
+    /// under ``status`` and ``type`` lives at the outer layer).
+    /// Refactored from two near-identical literals in v0.2.25 so
+    /// the cloud-health fields can be added in one place.
+    private static func statusPayload(
+        _ s: IPC.Status, includeType: Bool
+    ) -> [String: SendableValue] {
+        var payload: [String: SendableValue] = [
             "state": .string(s.state),
             "sync_dir": .string(s.syncDir),
             "remote_folder": .string(s.remoteFolder),
@@ -77,7 +75,10 @@ actor StateBus {
             "last_pull_at": s.lastPullAt.map { .string($0) } ?? .null,
             "last_push_at": s.lastPushAt.map { .string($0) } ?? .null,
             "last_error": s.lastError.map { .string($0) } ?? .null,
+            "cloud_health": .string(s.cloudHealth),
+            "cloud_health_detail": s.cloudHealthDetail.map { .string($0) } ?? .null,
         ]
-        return SendableJSON.dict(["type": "hello", "status": .object(status)])
+        if includeType { payload["type"] = .string("status") }
+        return payload
     }
 }

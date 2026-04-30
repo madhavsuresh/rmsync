@@ -24,6 +24,17 @@ enum IPC {
         var updatedAt: String
         var pid: Int
         var version: String
+        /// Diagnostic for *why* pushes are failing, populated by
+        /// ``CloudHealthProbe`` when the daemon hits its first
+        /// ``rmapi put failed`` since startup. Values:
+        ///   ``ok`` / ``rmapi_missing`` / ``auth_broken``
+        ///   / ``rmapi_compat_break`` / ``unknown``
+        /// Empty string means "no probe has run yet" (e.g.,
+        /// daemon just started and no push has failed). v0.2.25+.
+        var cloudHealth: String
+        /// Human-readable detail about the most recent probe.
+        /// Surfaced in `rmsync status` and the menubar tooltip.
+        var cloudHealthDetail: String?
 
         enum CodingKeys: String, CodingKey {
             case state
@@ -40,13 +51,16 @@ enum IPC {
             case updatedAt = "updated_at"
             case pid
             case version
+            case cloudHealth = "cloud_health"
+            case cloudHealthDetail = "cloud_health_detail"
         }
 
         static let empty = Status(
             state: "idle", syncDir: "", remoteFolder: "", trackedDocs: 0,
             conflicts: 0, errors: 0, queueDepth: 0, lastPullAt: nil,
             lastPushAt: nil, lastError: nil, paused: false,
-            updatedAt: "", pid: 0, version: ""
+            updatedAt: "", pid: 0, version: "",
+            cloudHealth: "", cloudHealthDetail: nil
         )
     }
 }

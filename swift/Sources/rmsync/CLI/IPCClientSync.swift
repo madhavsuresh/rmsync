@@ -114,7 +114,9 @@ enum IPCClientSync {
             paused: boolValue("paused"),
             updatedAt: stringValue("updated_at"),
             pid: intValue("pid"),
-            version: stringValue("version")
+            version: stringValue("version"),
+            cloudHealth: stringValue("cloud_health"),
+            cloudHealthDetail: optionalString("cloud_health_detail")
         )
     }
 
