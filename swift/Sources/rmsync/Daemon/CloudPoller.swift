@@ -27,6 +27,12 @@ actor CloudPoller {
     private var forceCycle = false
     /// doc_id → first time we saw it missing on the remote.
     private var pendingDeletes: [String: TimeInterval] = [:]
+    /// Cloud-side collection paths observed in the previous
+    /// cycle. Diffed against this cycle's set so we can detect
+    /// folders that were removed on the tablet and mirror the
+    /// removal into local empty-dir cleanup. Populated lazily —
+    /// stays empty until the first cycle with collection nodes.
+    private var lastObservedCloudFolders: Set<String> = []
 
     private static let activeWindow: TimeInterval = 5 * 60
     private static let idleWindow: TimeInterval = 20 * 60
@@ -68,7 +74,76 @@ actor CloudPoller {
     private func cycle() async throws {
         let nodes = try await cloud.tree("/\(cfg.remoteFolder)")
         var seenIDs: Set<String> = []
+        var seenCloudFolders: Set<String> = []
         var anyChange = false
+
+        // Cloud → local folder mirroring (v0.2.22+). Empty cloud
+        // folders are surfaced by ``cloud.tree`` as ``.collection``
+        // nodes; we ensure each has a matching local directory.
+        // The pull side already auto-creates intermediate dirs
+        // when a doc lands inside, but standalone empty folders
+        // wouldn't appear locally without this branch.
+        for node in nodes where node.type == .collection {
+            seenCloudFolders.insert(node.remotePath)
+            let localDir = PathUtilities.remoteToLocalDir(
+                remotePath: node.remotePath,
+                syncDir: cfg.syncDir,
+                remoteFolder: cfg.remoteFolder
+            )
+            // Symlink-escape / hidden-dir guards apply to the
+            // computed local path too — refuse to materialize a
+            // dir at e.g. ``.git/`` even if the cloud somehow
+            // surfaces such a node.
+            if WatcherFilter.shouldIgnoreDir(
+                localDir.path, root: cfg.syncDir, mode: .markdown
+            ) { continue }
+            if !FileManager.default.fileExists(atPath: localDir.path) {
+                Logger.shared.info(
+                    "creating local dir to mirror cloud folder",
+                    meta: ["remote": node.remotePath, "local": localDir.path]
+                )
+                try? FileManager.default.createDirectory(
+                    at: localDir, withIntermediateDirectories: true
+                )
+                anyChange = true
+            }
+        }
+
+        // Cloud-side folder removal mirrored locally. Conservative:
+        //   1. Only act on folders we observed in a previous cycle
+        //      AND no longer see this cycle (so a daemon restart
+        //      can't immediately wipe local dirs that were never
+        //      confirmed against the cloud).
+        //   2. Only remove if the local dir exists and is empty —
+        //      half-cascaded delete bursts mustn't trash docs.
+        //   3. Gated on ``deletion.enable_propagation`` because
+        //      removing on-disk content is destructive.
+        if cfg.deletion.enablePropagation, !lastObservedCloudFolders.isEmpty {
+            let removed = lastObservedCloudFolders.subtracting(seenCloudFolders)
+            for remotePath in removed {
+                let localDir = PathUtilities.remoteToLocalDir(
+                    remotePath: remotePath,
+                    syncDir: cfg.syncDir,
+                    remoteFolder: cfg.remoteFolder
+                )
+                guard FileManager.default.fileExists(atPath: localDir.path) else { continue }
+                let contents = (try? FileManager.default.contentsOfDirectory(atPath: localDir.path)) ?? []
+                guard contents.isEmpty else {
+                    Logger.shared.debug(
+                        "cloud folder gone but local has content; leaving",
+                        meta: ["remote": remotePath, "local": localDir.path]
+                    )
+                    continue
+                }
+                Logger.shared.info(
+                    "removing local dir to mirror deleted cloud folder",
+                    meta: ["remote": remotePath, "local": localDir.path]
+                )
+                try? FileManager.default.removeItem(at: localDir)
+                anyChange = true
+            }
+        }
+        lastObservedCloudFolders = seenCloudFolders
 
         for node in nodes where node.type == .document {
             seenIDs.insert(node.id)

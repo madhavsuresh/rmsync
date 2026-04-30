@@ -298,4 +298,75 @@ struct PushSmokeTests {
 
         try? await cloud.rm("/rmsync-test/\(probeName)")
     }
+
+    /// Push a new file inside a nested local subdir and verify
+    /// the cloud doc lands at the matching cloud path
+    /// (``/rmsync-test/<sub>/<probe>``) rather than flat at the
+    /// root. v0.2.22+ behavior.
+    @Test("nested local file pushes to matching cloud subfolder")
+    func nestedSubdirPush() async throws {
+        guard live() else { return }
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rmsync-nested-push-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let syncDir = tmp.appendingPathComponent("sync", isDirectory: true)
+        try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
+
+        let state = try State(path: tmp.appendingPathComponent("state.db"))
+        let cfg = Config(
+            syncDir: syncDir, remoteFolder: "rmsync-test",
+            workerPoolSize: 1, pollIntervalSeconds: 60,
+            pollActiveIntervalSeconds: 60, pollIdleIntervalSeconds: 120,
+            debounceSeconds: 2, renameDetectWindowS: 5,
+            echoFenceSeconds: 5, retryMaxAttempts: 3,
+            pushStrategy: .nativePlain, backupSnapshotsToKeep: 5,
+            dryRun: false, log: .init(level: .info)
+        )
+
+        let cloud = Cloud()
+        try? await cloud.mkdir("/rmsync-test")
+
+        // Two-deep nesting on purpose so we exercise the
+        // full mkdir chain.
+        let suffix = UUID().uuidString.prefix(8)
+        let subDir = syncDir.appendingPathComponent("papers/2026", isDirectory: true)
+        try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
+        let probeName = "swift-nested-\(suffix)"
+        let mdPath = subDir.appendingPathComponent("\(probeName).md")
+        try "nested-push-test\nline 2\n".write(
+            to: mdPath, atomically: true, encoding: .utf8
+        )
+
+        let queue = JobQueue()
+        let worker = SyncWorker(
+            id: 0, queue: queue, cloud: cloud, state: state,
+            cfg: cfg, locks: LockRegistry(), fence: EchoFence()
+        )
+        let workerTask = Task { await worker.run() }
+        defer {
+            Task { await worker.stop() }
+            workerTask.cancel()
+        }
+
+        await queue.enqueue(Job(kind: .push, docID: nil, hint: mdPath.path))
+        await queue.waitUntilEmpty()
+
+        // Verify the doc landed under /rmsync-test/papers/2026/
+        // rather than flat at /rmsync-test/.
+        let expected = "/rmsync-test/papers/2026/\(probeName)"
+        let stat = try await cloud.stat(expected)
+        #expect(stat != nil, "doc should exist at \(expected)")
+
+        // Sanity: state.db's remote_path matches.
+        let stored = try await state.byLocalPath(mdPath.path)
+        #expect(stored?.remotePath == expected)
+
+        // Cleanup. Ignore errors — leftover papers/2026/ folder
+        // on the cloud is benign noise; subsequent runs use
+        // unique probe names.
+        try? await cloud.rm(expected)
+    }
 }

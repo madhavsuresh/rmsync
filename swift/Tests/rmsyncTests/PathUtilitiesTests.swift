@@ -97,6 +97,27 @@ struct PathUtilitiesTests {
         ])
     }
 
+    @Test("remoteToLocalDir: bare /<remoteFolder> maps to sync_dir")
+    func remoteToLocalDirTopLevel() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let result = PathUtilities.remoteToLocalDir(
+            remotePath: "/Writing", syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.path == "/tmp/sync")
+    }
+
+    @Test("remoteToLocalDir: nested cloud folder maps to nested local dir")
+    func remoteToLocalDirNested() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let result = PathUtilities.remoteToLocalDir(
+            remotePath: "/Writing/papers/2026",
+            syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.path == "/tmp/sync/papers/2026")
+        // No .md suffix added — we're naming a directory, not a file.
+        #expect(!result.path.hasSuffix(".md"))
+    }
+
     @Test("dir helper: sync_dir itself maps to remoteFolder root")
     func dirChainTopLevel() {
         let sync = URL(fileURLWithPath: "/tmp/sync")

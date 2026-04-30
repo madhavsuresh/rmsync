@@ -413,6 +413,27 @@ operations exceeding `bulk_delete_threshold` of tracked docs in
 `bulk_delete_window_seconds`. See "Rename / move / delete
 propagation" in `docs/USAGE.md`.
 
+### Organize docs in folders
+
+Subdirectories under `sync_dir` propagate as cloud folders, in
+both directions (v0.2.22+):
+
+- `mkdir <sync_dir>/foo/` → cloud `mkdir /Writing/foo/`.
+  Always-on; non-destructive.
+- Save `<sync_dir>/foo/note.md` → doc lands at
+  `/Writing/foo/note` on the cloud (NEW files derive
+  `remoteParent` from local path; previously flattened).
+- Tablet-side `mkdir foo/` → next cloud poll cycle creates
+  empty `<sync_dir>/foo/` locally.
+- `rmdir <sync_dir>/foo/` (when empty) → cloud rmdir.
+  Gated on `[deletion] enable_propagation = true` AND
+  cloud-side empty check (so a half-cascaded delete burst
+  can't trash docs).
+- Tablet-side rmdir → next poll cycle removes the local empty
+  dir. Same propagation + empty checks.
+
+Hidden dirs (`.git`, `.obsidian`, dot-anything) are filtered.
+
 ### Revert a doc to an earlier version
 
 Snapshot history is always on (v0.2.20+). The daemon parks

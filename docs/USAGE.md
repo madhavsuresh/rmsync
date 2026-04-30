@@ -325,6 +325,28 @@ rmsync trash prune --days 7              # one-off override
 The daemon also auto-prunes at startup based on
 `trash_retention_days` (set to 0 to keep forever).
 
+### …organize my docs in folders
+
+`mkdir <sync_dir>/papers/2026/` creates a matching folder on the
+cloud (and on the tablet) on the next sync cycle. Save
+`<sync_dir>/papers/2026/foo.md` and the doc lands at
+`/Writing/papers/2026/foo` on the cloud rather than flat at the
+top. Folder creation works in both directions:
+
+- Local mkdir → cloud mkdir (always-on, v0.2.22+).
+- Cloud mkdir on the tablet → local empty dir on next poll.
+- Local rmdir on an empty dir → cloud rmdir (gated on
+  `[deletion] enable_propagation = true`; only fires once the
+  cloud folder is verified empty).
+- Cloud rmdir → local empty-dir cleanup (same propagation gate;
+  only removes if the local dir is also empty).
+
+So you can structure a long writing project however you like —
+chapters, sections, sub-projects — and it stays in sync. Hidden
+dirs (`.git`, `.obsidian`, anything starting with `.`) are
+filtered out, so an Obsidian vault inside `sync_dir` won't
+leak its `.obsidian/` plugins folder to the cloud.
+
 ### …revert a doc to an earlier version
 
 Every time the daemon writes a `.md` file (either pulled from

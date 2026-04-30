@@ -82,6 +82,18 @@ default is `enable_propagation = false`.
 Full guide: [`docs/USAGE.md`](docs/USAGE.md) → "Rename / move /
 delete propagation is opt-in".
 
+**v0.2.22 — folder structure mirrors both ways.** Subdirectories
+under `sync_dir` propagate to the cloud as folders, and vice
+versa. `mkdir <sync_dir>/papers/2026/` creates `/Writing/papers/
+2026/` on the cloud; saving `<sync_dir>/papers/2026/foo.md`
+lands the doc inside that cloud folder rather than flat at the
+top. Empty cloud folders (created on the tablet) get mirrored
+locally on the next poll cycle. mkdir is always-on (non-
+destructive); `rmdir` of an empty local folder propagates only
+when `[deletion] enable_propagation = true` and the cloud
+folder is verified empty (so a half-cascaded delete burst can't
+accidentally trash docs).
+
 **v0.2.20 — snapshot history (always on).** Every push and every
 cloud-pull-overwrite parks a copy of the file at
 `<stateDir>/backups/<doc-id>/<utc-stamp>.md` so you can always

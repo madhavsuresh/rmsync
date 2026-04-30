@@ -99,6 +99,32 @@ enum PathUtilities {
         return (parentPath: prefix, mkdirChain: chain)
     }
 
+    /// Inverse of ``localDirToRemoteChain``: cloud directory
+    /// path → local directory URL. Like ``remoteToLocal`` but
+    /// without appending the ``.md`` suffix to the leaf, since
+    /// directories aren't files. Used by ``CloudPoller`` to
+    /// mirror cloud-side empty folders into local empty dirs.
+    ///
+    /// The remote-folder prefix segment is stripped exactly the
+    /// same way ``remoteToLocal`` does it, and segments are
+    /// sanitised through ``sanitizeSegment``. A bare
+    /// ``/<remoteFolder>`` returns ``syncDir`` itself.
+    static func remoteToLocalDir(
+        remotePath: String, syncDir: URL, remoteFolder: String
+    ) -> URL {
+        var parts = remotePath.split(separator: "/").map(String.init)
+        if let first = parts.first, first == remoteFolder {
+            parts.removeFirst()
+        }
+        let safe = parts.map(sanitizeSegment)
+        if safe.isEmpty { return syncDir }
+        var url = syncDir
+        for segment in safe {
+            url.appendPathComponent(segment, isDirectory: true)
+        }
+        return url
+    }
+
     /// Inverse of ``remoteToLocal`` for a *directory* path
     /// (rather than a file's parent). Returns the cloud-side
     /// path of the directory plus the chain of prefixes to
