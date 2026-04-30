@@ -159,6 +159,27 @@ final class LocalWatcher: @unchecked Sendable {
             )
             let flag = LocalWatcher.Flag(rawValue: raw)
 
+            // Directory create / remove — emit dedicated mkdir /
+            // rmdir jobs so empty-folder structure propagates to
+            // the cloud. Markdown mode only; inbox is flat.
+            // FSEvents bundles ``itemIsDir`` with create/remove on
+            // same-event so a single flag check suffices.
+            if mode == .markdown, flag.contains(.itemIsDir) {
+                if flag.contains(.itemCreated) {
+                    handleDirCreate(path: path)
+                    continue
+                }
+                if flag.contains(.itemRemoved) {
+                    handleDirRemove(path: path)
+                    continue
+                }
+                // Renames on directories are deferred — they're
+                // rare and the file-side rename pipeline handles
+                // doc moves correctly via per-file renameRemote
+                // events. Don't emit anything for dir renames.
+                if flag.contains(.itemRenamed) { continue }
+            }
+
             // Rename pairing — only meaningful in .markdown mode
             // (inbox is push-only; there's nothing to "rename" on
             // the cloud side). Same-volume mv produces .itemRenamed
@@ -253,6 +274,35 @@ final class LocalWatcher: @unchecked Sendable {
         }
     }
 
+    /// User created a directory inside ``sync_dir``. Emit a
+    /// ``.mkdirRemote`` job so the worker mirrors it on the
+    /// cloud. ``hint`` is the absolute local directory path; the
+    /// worker derives the cloud-side path via
+    /// ``PathUtilities.localToRemoteParentChain``.
+    ///
+    /// Filtered through ``shouldIgnoreDir`` (skips ``.git``,
+    /// hidden dirs, anything escaping ``syncDir`` via symlink).
+    /// Always-on — mkdir is non-destructive, no propagation gate.
+    private func handleDirCreate(path: String) {
+        if WatcherFilter.shouldIgnoreDir(path, root: syncDir, mode: mode) { return }
+        Task {
+            await queue.enqueue(Job(kind: .mkdirRemote, docID: nil, hint: path))
+        }
+    }
+
+    /// User removed an empty directory inside ``sync_dir``. Emit
+    /// a ``.rmdirRemote`` job; the worker's handler gates on
+    /// ``deletion.enable_propagation`` AND verifies the cloud
+    /// folder is empty before issuing ``cloud.rm`` (so a
+    /// half-cascaded delete burst doesn't trash docs whose
+    /// removes are still in flight).
+    private func handleDirRemove(path: String) {
+        if WatcherFilter.shouldIgnoreDir(path, root: syncDir, mode: mode) { return }
+        Task {
+            await queue.enqueue(Job(kind: .rmdirRemote, docID: nil, hint: path))
+        }
+    }
+
     private func scheduleDebounced(path: String) {
         // Dispatch onto ``timerQueue`` asynchronously. We cannot call
         // ``timerQueue.sync`` from a block that might itself run on
@@ -302,6 +352,7 @@ final class LocalWatcher: @unchecked Sendable {
         static let itemRemoved  = Flag(rawValue: UInt32(kFSEventStreamEventFlagItemRemoved))
         static let itemRenamed  = Flag(rawValue: UInt32(kFSEventStreamEventFlagItemRenamed))
         static let itemModified = Flag(rawValue: UInt32(kFSEventStreamEventFlagItemModified))
+        static let itemIsDir    = Flag(rawValue: UInt32(kFSEventStreamEventFlagItemIsDir))
     }
 }
 

@@ -113,6 +113,110 @@ actor SyncWorker {
 
         case .renameLocal:
             try await renameOnLocal(job)
+
+        case .mkdirRemote:
+            try await mkdirOnCloud(job)
+
+        case .rmdirRemote:
+            try await rmdirOnCloud(job)
+        }
+    }
+
+    // MARK: - directory propagation
+
+    /// Mirror a local mkdir on the cloud. Always-on (no
+    /// propagation gate) — creating a folder is non-destructive
+    /// and the case where rmapi mkdir errors because the folder
+    /// already exists is the expected idempotent behavior.
+    ///
+    /// ``hint`` is the absolute local directory path. Empty /
+    /// missing local dir is a logic bug (the watcher only fires
+    /// when the dir exists), but we tolerate it: missing → log
+    /// and bail.
+    private func mkdirOnCloud(_ job: Job) async throws {
+        let localDir = URL(fileURLWithPath: job.hint)
+        guard FileManager.default.fileExists(atPath: localDir.path) else {
+            Logger.shared.debug(
+                "mkdirRemote: local dir vanished before worker fire",
+                meta: ["path": job.hint]
+            )
+            return
+        }
+        let derivation = PathUtilities.localDirToRemoteChain(
+            localDir: localDir,
+            syncDir: cfg.syncDir,
+            remoteFolder: cfg.remoteFolder
+        )
+        // mkdir each prefix; rmapi mkdir errors when the dir
+        // exists — swallow with try?, the goal is "ensure
+        // exists", not "create fresh".
+        for prefix in derivation.mkdirChain {
+            try? await cloud.mkdir(prefix)
+        }
+        Logger.shared.info(
+            "mkdir: cloud folder ensured",
+            meta: ["local": localDir.path, "remote": derivation.cloudPath]
+        )
+    }
+
+    /// Mirror a local rmdir on the cloud. Destructive on the
+    /// cloud (rmapi rm on a folder cascades into its contents),
+    /// so:
+    ///
+    ///   1. Skip if propagation is off.
+    ///   2. Skip if the cloud folder still has children — a
+    ///      cascading delete burst may not have caught up yet.
+    ///      Better to leave the folder than to nuke half-deleted
+    ///      docs.
+    ///   3. Cloud.rm only when verified empty.
+    private func rmdirOnCloud(_ job: Job) async throws {
+        guard cfg.deletion.enablePropagation else {
+            Logger.shared.debug(
+                "rmdir propagation disabled; ignoring rmdirRemote",
+                meta: ["path": job.hint]
+            )
+            return
+        }
+        let localDir = URL(fileURLWithPath: job.hint)
+        let derivation = PathUtilities.localDirToRemoteChain(
+            localDir: localDir,
+            syncDir: cfg.syncDir,
+            remoteFolder: cfg.remoteFolder
+        )
+        let cloudPath = derivation.cloudPath
+
+        // Safety: walk the cloud subtree. If anything is in
+        // there, refuse — a cascading file-delete burst probably
+        // hasn't completed yet.
+        let children: [Node]
+        do {
+            children = try await cloud.tree(cloudPath)
+        } catch {
+            Logger.shared.warn(
+                "rmdir: tree walk failed; refusing to delete",
+                meta: ["remote": cloudPath, "error": "\(error)"]
+            )
+            return
+        }
+        guard children.isEmpty else {
+            Logger.shared.info(
+                "rmdir: cloud folder not empty; leaving in place",
+                meta: ["remote": cloudPath, "child_count": "\(children.count)"]
+            )
+            return
+        }
+
+        do {
+            try await cloud.rm(cloudPath)
+            Logger.shared.info(
+                "rmdir: cloud folder removed",
+                meta: ["local": localDir.path, "remote": cloudPath]
+            )
+        } catch {
+            Logger.shared.error(
+                "rmdir: cloud rm failed",
+                meta: ["remote": cloudPath, "error": "\(error)"]
+            )
         }
     }
 

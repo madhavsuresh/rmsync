@@ -97,4 +97,35 @@ struct WatcherIgnoreTests {
             ))
         }
     }
+
+    // MARK: - shouldIgnoreDir (directory-event filter, v0.2.22+)
+
+    @Test("dir helper: regular subdir passes")
+    func dirRegular() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        #expect(!WatcherFilter.shouldIgnoreDir("/tmp/sync/papers", root: sync, mode: .markdown))
+        #expect(!WatcherFilter.shouldIgnoreDir("/tmp/sync/papers/2026", root: sync, mode: .markdown))
+    }
+
+    @Test("dir helper: hidden dirs blocked")
+    func dirHiddenBlocked() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        #expect(WatcherFilter.shouldIgnoreDir("/tmp/sync/.git", root: sync, mode: .markdown))
+        #expect(WatcherFilter.shouldIgnoreDir("/tmp/sync/.obsidian", root: sync, mode: .markdown))
+        #expect(WatcherFilter.shouldIgnoreDir("/tmp/sync/.rmsync-trash/20260429T000000000Z", root: sync, mode: .markdown))
+    }
+
+    @Test("dir helper: anything below a hidden dir blocked")
+    func dirNestedHidden() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        #expect(WatcherFilter.shouldIgnoreDir(
+            "/tmp/sync/.git/refs/heads", root: sync, mode: .markdown
+        ))
+    }
+
+    @Test("dir helper: inbox mode rejects every dir event")
+    func dirInboxRejected() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        #expect(WatcherFilter.shouldIgnoreDir("/tmp/sync/papers", root: sync, mode: .inbox))
+    }
 }

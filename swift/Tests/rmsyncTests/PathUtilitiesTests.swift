@@ -97,6 +97,40 @@ struct PathUtilitiesTests {
         ])
     }
 
+    @Test("dir helper: sync_dir itself maps to remoteFolder root")
+    func dirChainTopLevel() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let result = PathUtilities.localDirToRemoteChain(
+            localDir: sync, syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.cloudPath == "/Writing")
+        #expect(result.mkdirChain == ["/Writing"])
+    }
+
+    @Test("dir helper: single subdir resolves to matching cloud path")
+    func dirChainSingleSubdir() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let dir = sync.appendingPathComponent("papers")
+        let result = PathUtilities.localDirToRemoteChain(
+            localDir: dir, syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.cloudPath == "/Writing/papers")
+        #expect(result.mkdirChain == ["/Writing", "/Writing/papers"])
+    }
+
+    @Test("dir helper: nested path builds full chain ending at the dir")
+    func dirChainNested() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let dir = sync.appendingPathComponent("papers/2026")
+        let result = PathUtilities.localDirToRemoteChain(
+            localDir: dir, syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.cloudPath == "/Writing/papers/2026")
+        #expect(result.mkdirChain == [
+            "/Writing", "/Writing/papers", "/Writing/papers/2026",
+        ])
+    }
+
     @Test("file outside sync_dir falls back to remoteFolder root")
     func parentChainOutsideSync() {
         // resolvedRelativePath returns nil for paths outside the

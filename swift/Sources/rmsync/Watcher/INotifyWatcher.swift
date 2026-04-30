@@ -280,6 +280,11 @@ final class INotifyWatcher: @unchecked Sendable {
             if isDir, let inotify {
                 walkAndWatch(rootURL: url, inotify: inotify)
                 rescanFiles(under: url)
+                // Empty-folder propagation: mirror the new local
+                // directory on the cloud as well. Always-on; no
+                // propagation gate (mkdir is non-destructive).
+                // Markdown mode only — inbox is flat.
+                handleDirCreate(path: url.path)
             } else {
                 handleChange(path: url.path)
             }
@@ -290,7 +295,11 @@ final class INotifyWatcher: @unchecked Sendable {
             return
         }
         if (event.mask & InotifyMask.delete) != 0 {
-            handleDelete(path: url.path)
+            if isDir {
+                handleDirRemove(path: url.path)
+            } else {
+                handleDelete(path: url.path)
+            }
             return
         }
     }
@@ -357,6 +366,26 @@ final class INotifyWatcher: @unchecked Sendable {
         if WatcherFilter.shouldIgnore(path, root: syncDir, mode: mode) { return }
         Task {
             await queue.enqueue(Job(kind: .deleteLocal, docID: nil, hint: path))
+        }
+    }
+
+    /// User created a directory inside ``sync_dir``. Mirrors the
+    /// macOS LocalWatcher counterpart — emits ``.mkdirRemote``
+    /// so the worker creates the cloud folder.
+    private func handleDirCreate(path: String) {
+        if WatcherFilter.shouldIgnoreDir(path, root: syncDir, mode: mode) { return }
+        Task {
+            await queue.enqueue(Job(kind: .mkdirRemote, docID: nil, hint: path))
+        }
+    }
+
+    /// User removed an empty directory inside ``sync_dir``.
+    /// Worker handler gates on ``deletion.enable_propagation``
+    /// AND the cloud-side empty check.
+    private func handleDirRemove(path: String) {
+        if WatcherFilter.shouldIgnoreDir(path, root: syncDir, mode: mode) { return }
+        Task {
+            await queue.enqueue(Job(kind: .rmdirRemote, docID: nil, hint: path))
         }
     }
 

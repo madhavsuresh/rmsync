@@ -99,6 +99,45 @@ enum PathUtilities {
         return (parentPath: prefix, mkdirChain: chain)
     }
 
+    /// Inverse of ``remoteToLocal`` for a *directory* path
+    /// (rather than a file's parent). Returns the cloud-side
+    /// path of the directory plus the chain of prefixes to
+    /// defensive-mkdir before any operation on it.
+    ///
+    /// For ``<sync_dir>/papers/2026`` with
+    /// ``remoteFolder = "Writing"``:
+    /// ```
+    ///   cloudPath  = "/Writing/papers/2026"
+    ///   mkdirChain = [
+    ///     "/Writing",
+    ///     "/Writing/papers",
+    ///     "/Writing/papers/2026",
+    ///   ]
+    /// ```
+    /// The sync_dir itself maps to ``/<remoteFolder>`` with a
+    /// single-element chain. Directories outside ``syncDir`` get
+    /// the same fallback as ``localToRemoteParentChain``.
+    ///
+    /// Distinct from ``localToRemoteParentChain`` (which drops
+    /// the last segment because it's keyed on a file's *parent*).
+    /// For directories we want the directory itself.
+    static func localDirToRemoteChain(
+        localDir: URL, syncDir: URL, remoteFolder: String
+    ) -> (cloudPath: String, mkdirChain: [String]) {
+        let topLevel = "/\(remoteFolder)"
+        var dirSegs: [String] = []
+        if let relSegs = resolvedRelativePath(from: syncDir, to: localDir) {
+            dirSegs = relSegs
+        }
+        var prefix = topLevel
+        var chain: [String] = [topLevel]
+        for seg in dirSegs {
+            prefix += "/\(seg)"
+            chain.append(prefix)
+        }
+        return (cloudPath: prefix, mkdirChain: chain)
+    }
+
     /// Resolve symlinks in both paths before checking whether ``target``
     /// stays under ``base``. This closes the case where a symlinked
     /// subdirectory inside the sync tree points outside it.

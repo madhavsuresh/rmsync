@@ -65,4 +65,27 @@ enum WatcherFilter {
         }
         return false
     }
+
+    /// Variant for directory create / remove events. Same hidden-
+    /// path rules as ``shouldIgnore`` (skip ``.git``, hidden
+    /// dirs, anything escaping ``root`` via symlink), but
+    /// **bypasses the file-extension filter** since directories
+    /// have no extension. Inbox mode rejects every directory
+    /// event — the inbox is a flat drop folder; nested subdirs
+    /// under it aren't part of the contract.
+    static func shouldIgnoreDir(_ path: String, root: URL, mode: WatcherMode = .markdown) -> Bool {
+        if mode == .inbox { return true }
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent
+        if name.hasPrefix(".") { return true }
+        guard let rel = PathUtilities.resolvedRelativePath(from: root, to: url)
+        else { return true }
+        for part in rel {
+            if ["\\.rmsync-trash", ".rmsync-trash", ".git", ".obsidian"].contains(part) {
+                return true
+            }
+            if part.hasPrefix(".") { return true }
+        }
+        return false
+    }
 }
