@@ -152,6 +152,18 @@ final class MenuController: NSObject, NSMenuDelegate {
     }
 
     private func humanState(_ s: StatusSnapshot) -> String {
+        // Parked errors / unresolved conflicts override the
+        // top-level "synced" reading: a clean idle state with
+        // even one push_failed parked is NOT actually clean.
+        // Surface the count so the user can click into Status.
+        if s.errors > 0 {
+            let plural = s.errors == 1 ? "" : "s"
+            return "Out of sync — \(s.errors) parked error\(plural)"
+        }
+        if s.conflicts > 0 {
+            let plural = s.conflicts == 1 ? "" : "s"
+            return "Conflicts — \(s.conflicts) doc\(plural) need attention"
+        }
         switch s.state {
         case "idle":
             return "Synced (\(s.trackedDocs) docs)"

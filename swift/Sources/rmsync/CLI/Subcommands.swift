@@ -206,7 +206,26 @@ struct Logs: ParsableCommand {
             try runDiagnose()
             return
         }
-        let path = Paths.logDir.appendingPathComponent("stdout.log")
+        // The Swift daemon writes structured JSON to stderr (see
+        // ``Logger.emit`` → ``FileHandle.standardError.write``).
+        // launchd routes that to ``stderr.log``. ``stdout.log``
+        // exists for parity with the launchd plist but is always
+        // empty under the Swift daemon — it was the Python
+        // implementation's primary log. Read stderr.log here so
+        // ``rmsync logs`` shows the actual daemon activity, and
+        // fall back to stdout.log if some future caller restores
+        // a stdout-writing logger.
+        let stderrPath = Paths.logDir.appendingPathComponent("stderr.log")
+        let stdoutPath = Paths.logDir.appendingPathComponent("stdout.log")
+        let path: URL = {
+            let fm = FileManager.default
+            if fm.fileExists(atPath: stderrPath.path),
+               (try? Data(contentsOf: stderrPath))?.isEmpty == false {
+                return stderrPath
+            }
+            if fm.fileExists(atPath: stdoutPath.path) { return stdoutPath }
+            return stderrPath
+        }()
         guard FileManager.default.fileExists(atPath: path.path) else {
             print("no log file at \(path.path)")
             print("(run `rmsync logs --diagnose` if you expect this file to exist)")

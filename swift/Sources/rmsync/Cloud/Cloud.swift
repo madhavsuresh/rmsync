@@ -15,12 +15,19 @@ import Foundation
 /// - Under sync15 the ``Version`` field is pinned to 0; use
 ///   ``ModifiedClient`` as the change signal.
 actor Cloud {
-    /// rmapi versions we've validated against. See scripts/cloud_probe*.py
-    /// in the Python tree for the details. Minimum is pinned at 0.0.29
-    /// because that's what the `io41/tap/rmapi` Homebrew formula ships;
-    /// end-to-end sync has been observed working against 0.0.29 on
-    /// real cloud data.
-    static let rmapiMin = (0, 0, 29)
+    /// rmapi versions we've validated against.
+    ///
+    /// Bumped from 0.0.29 → 0.0.32 in v0.2.23 after a cloud-side
+    /// schema rollout (see ddvk/rmapi#58 filed 2026-04-29) broke
+    /// every ``put`` against rmapi <0.0.32 with HTTP 400. v0.0.32
+    /// adds "schema v4 with content-based hashing" and
+    /// ``detect root.docSchema from server`` — both required by
+    /// the new cloud API.
+    ///
+    /// The ``checkVersion`` warning is the only user-facing
+    /// signal until the user upgrades rmapi; we surface it loud
+    /// at startup and via ``rmsync doctor``.
+    static let rmapiMin = (0, 0, 32)
     static let rmapiMaxExclusive = (0, 1, 0)
 
     private let rmapiPath: String
@@ -50,9 +57,17 @@ actor Cloud {
         let tuple = (v.0, v.1, v.2)
         if !(Self.tupleLE(Self.rmapiMin, tuple)
              && Self.tupleLT(tuple, Self.rmapiMaxExclusive)) {
+            // Bumped from "warn" to a clearer "outdated" event
+            // in v0.2.23: a cloud-side schema rollout means
+            // rmapi < 0.0.32 will 400 on every put. Users who
+            // see this in logs should know exactly what to do.
             Logger.shared.warn(
-                "rmapi version outside tested range",
-                meta: ["found": "\(v.0).\(v.1).\(v.2)"]
+                "rmapi version outdated — uploads WILL fail with HTTP 400",
+                meta: [
+                    "found": "\(v.0).\(v.1).\(v.2)",
+                    "minimum_required": "\(Self.rmapiMin.0).\(Self.rmapiMin.1).\(Self.rmapiMin.2)",
+                    "fix": "download rmapi v0.0.32+ from https://github.com/ddvk/rmapi/releases",
+                ]
             )
         }
     }

@@ -80,10 +80,21 @@ struct DoctorRun {
                     message: "\(v.0).\(v.1).\(v.2)"
                 )
             }
+            // Below the minimum is now a hard fail (was warn).
+            // The cloud's schema-v4 rollout in late April 2026
+            // means rmapi <0.0.32 returns HTTP 400 on every put;
+            // users who see "warn" are tempted to ignore it,
+            // but uploads silently break. Fail makes
+            // ``rmsync doctor`` exit non-zero so the issue
+            // surfaces in any automated install / health probe.
+            let isTooOld = Cloud.tupleLT(tuple, Cloud.rmapiMin)
             return CheckResult(
                 name: "rmapi version",
-                status: .warn,
-                message: "\(v.0).\(v.1).\(v.2) outside tested range"
+                status: isTooOld ? .fail : .warn,
+                message: isTooOld
+                    ? "\(v.0).\(v.1).\(v.2) too old — uploads WILL fail with HTTP 400. "
+                      + "Upgrade to v0.0.32+ from https://github.com/ddvk/rmapi/releases"
+                    : "\(v.0).\(v.1).\(v.2) newer than tested range"
             )
         } catch {
             return CheckResult(name: "rmapi version", status: .fail, message: "\(error)")

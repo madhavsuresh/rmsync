@@ -41,6 +41,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
         let state = snapshot?.state ?? "unknown"
         let hasConflicts = (snapshot?.conflicts ?? 0) > 0
+        // v0.2.23: parked errors (push_failed, parse_failed,
+        // bulk_delete_refused) need to be loud in the menubar.
+        // Previously the icon stayed green-checkmark even when
+        // every push of a particular doc was failing — silent
+        // breakage. Treat ≥1 parked error like a conflict for
+        // icon purposes (⚠), distinct from a daemon-down ✗.
+        let hasErrors = (snapshot?.errors ?? 0) > 0
 
         let symbolName: String
         var decorator = ""
@@ -54,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if state == "paused" {
             symbolName = "tablet.and.pencil"
             decorator = " ⏸"
-        } else if hasConflicts {
+        } else if hasConflicts || hasErrors {
             symbolName = "tablet.and.pencil"
             decorator = " ⚠"
         } else if state == "syncing" {

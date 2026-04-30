@@ -1292,6 +1292,50 @@ actor SyncWorker {
                 "rmapi put failed",
                 meta: ["doc_id": docID, "error": "\(error)"]
             )
+            // Park the failure in state.db so the next reconcile
+            // pass doesn't re-enqueue this push on every daemon
+            // restart. Two distinct paths:
+            //
+            //   * stored == nil — a brand-new file's first push
+            //     failed. Without this row, the file remains
+            //     "untracked" and Reconcile.localCreatesAndEdits
+            //     re-enqueues it on every startup → infinite
+            //     retry loop on a permanent failure (e.g. rmapi
+            //     400 from a duplicate-name collision). Insert
+            //     the row with lastSyncedMDHash = the bytes we
+            //     just tried to push, so reconcile's
+            //     ``hash != currentHash`` gate stays false until
+            //     the user actually edits the file again.
+            //
+            //   * stored != nil — an existing tracked doc's
+            //     update failed. Stamp error_state on the
+            //     existing row; lastSyncedMDHash unchanged so
+            //     the next user edit (different hash) re-enqueues
+            //     and retries.
+            //
+            // Either way, ``error_state = "push_failed"`` shows
+            // up in ``rmsync status`` (parked errors count) and
+            // the web dashboard so the user sees the failure
+            // instead of the daemon silently retrying forever.
+            // ``markPushed`` will clear it on the first
+            // successful retry.
+            if stored == nil {
+                let parked = Document(
+                    docID: docID,
+                    parentID: "",
+                    docType: "DocumentType",
+                    title: visible,
+                    remotePath: "\(remoteParent)/\(visible)",
+                    localPath: localPath.path,
+                    remoteVersion: 0,                 // never reached cloud
+                    lastSyncedMDHash: newHash,
+                    errorState: "push_failed",
+                    pageIDs: pageIDs
+                )
+                try? await state.upsert(parked)
+            } else if let stored {
+                try? await state.setError(docID: stored.docID, state: "push_failed")
+            }
             return
         }
 
