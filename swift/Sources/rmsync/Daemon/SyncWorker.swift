@@ -1152,12 +1152,30 @@ actor SyncWorker {
             to: outArchive
         )
 
-        let remoteParent: String = {
-            if let stored, let lastSlash = stored.remotePath.lastIndex(of: "/") {
-                return String(stored.remotePath[..<lastSlash])
+        let remoteParent: String
+        if let stored, let lastSlash = stored.remotePath.lastIndex(of: "/") {
+            // Existing tracked doc: keep its current parent. Local
+            // moves are handled by the rename pipeline (Phase 4
+            // of the v0.2.19 propagation work).
+            remoteParent = String(stored.remotePath[..<lastSlash])
+        } else {
+            // New doc: derive remoteParent from the local file's
+            // position under sync_dir so subdirectory structure
+            // propagates to the cloud. Each prefix in the chain
+            // gets a defensive mkdir; rmapi's mkdir errors when
+            // the folder already exists, so we swallow with
+            // ``try?`` — the goal is "ensure exists", not "create
+            // fresh".
+            let derivation = PathUtilities.localToRemoteParentChain(
+                localPath: localPath,
+                syncDir: cfg.syncDir,
+                remoteFolder: cfg.remoteFolder
+            )
+            for prefix in derivation.mkdirChain {
+                try? await cloud.mkdir(prefix)
             }
-            return "/\(cfg.remoteFolder)"
-        }()
+            remoteParent = derivation.parentPath
+        }
 
         do {
             try await cloud.put(

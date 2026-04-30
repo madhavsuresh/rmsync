@@ -60,6 +60,57 @@ struct PathUtilitiesTests {
         #expect(result.path == "/tmp/sync/Research/paper.md")
     }
 
+    // MARK: - localToRemoteParentChain (push side)
+
+    @Test("top-level file maps to remoteFolder root")
+    func parentChainTopLevel() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let local = sync.appendingPathComponent("foo.md")
+        let result = PathUtilities.localToRemoteParentChain(
+            localPath: local, syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.parentPath == "/Writing")
+        #expect(result.mkdirChain == ["/Writing"])
+    }
+
+    @Test("single-subdir file derives matching cloud parent")
+    func parentChainSingleSubdir() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let local = sync.appendingPathComponent("papers/foo.md")
+        let result = PathUtilities.localToRemoteParentChain(
+            localPath: local, syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.parentPath == "/Writing/papers")
+        #expect(result.mkdirChain == ["/Writing", "/Writing/papers"])
+    }
+
+    @Test("nested-subdir file builds full mkdir chain")
+    func parentChainNested() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let local = sync.appendingPathComponent("papers/2026/foo.md")
+        let result = PathUtilities.localToRemoteParentChain(
+            localPath: local, syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.parentPath == "/Writing/papers/2026")
+        #expect(result.mkdirChain == [
+            "/Writing", "/Writing/papers", "/Writing/papers/2026",
+        ])
+    }
+
+    @Test("file outside sync_dir falls back to remoteFolder root")
+    func parentChainOutsideSync() {
+        // resolvedRelativePath returns nil for paths outside the
+        // tree; the helper should default to /<remoteFolder> so a
+        // misrouted job lands at the top rather than crashing.
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let local = URL(fileURLWithPath: "/tmp/elsewhere/foo.md")
+        let result = PathUtilities.localToRemoteParentChain(
+            localPath: local, syncDir: sync, remoteFolder: "Writing"
+        )
+        #expect(result.parentPath == "/Writing")
+        #expect(result.mkdirChain == ["/Writing"])
+    }
+
     @Test("resolvedRelativePath rejects symlink escapes")
     func resolvedRelativePathRejectsSymlinkEscape() throws {
         let tmp = FileManager.default.temporaryDirectory
