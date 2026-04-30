@@ -328,7 +328,7 @@ daemon does not watch the file.
 | `[web].bind_addr` | `127.0.0.1` | `0.0.0.0` to expose to LAN. |
 | `[web].port` | `7878` | TCP port. |
 | `[web].auth_token` | unset | Empty → daemon generates one in `$STATE_DIR/web-token`. |
-| `[deletion].enable_propagation` | `false` | Master switch for rename/delete propagation. v0.2.19+. |
+| `[deletion].enable_propagation` | `true` | Master switch for rename/delete propagation. Default flipped on in v0.2.27 (was false in v0.2.19–v0.2.26). |
 | `[deletion].trash_retention_days` | `30` | Reaped at daemon startup. `0` keeps forever. |
 | `[deletion].bulk_delete_threshold` | `0.5` | Refuse if `> N%` of tracked docs would be deleted in window. |
 | `[deletion].bulk_delete_window_seconds` | `30` | Rolling window for the brake. |
@@ -393,25 +393,33 @@ Or just run `./install.sh` — it's idempotent.
 
 ### Delete a doc from the cloud
 
-By default, local-delete doesn't propagate (safety gate). To
-actually remove:
+**Default since v0.2.27** — local delete and tablet-side delete
+propagate automatically:
 
-```sh
-rmapi rm /Writing/foo
+- `rm <sync_dir>/foo.md` → local file moves to
+  `<sync_dir>/.rmsync-trash/<utc-stamp>/foo.md` and the cloud
+  doc moves to the reMarkable cloud's trash via `rmapi rm`.
+- Deleting `Writing/foo` on the tablet → next cloud poll moves
+  the local file into `.rmsync-trash/`.
+- Recover either side via `rmsync trash list` /
+  `rmsync trash restore <rel-path>`. Cloud trash recoverable
+  via the reMarkable web UI within reMarkable's retention
+  window.
+
+A bulk-delete brake refuses operations exceeding
+`[deletion].bulk_delete_threshold` (default 0.5) of tracked
+docs in `[deletion].bulk_delete_window_seconds` (default 30s) —
+caps the blast radius of an accidental `rm -rf`.
+
+**To opt out** (v0.2.18-style: local delete logs but doesn't
+propagate), set:
+
+```toml
+[deletion]
+enable_propagation = false
 ```
 
-The next poll removes it locally (moves to
-`<sync_dir>/.rmsync-trash/<utc-stamp>/foo.md`).
-
-**v0.2.19+ alternative — opt-in propagation.** Add
-`[deletion] enable_propagation = true` to config.toml and
-`rmsync restart`; from then on `rm foo.md` propagates to the
-cloud (rmapi rm), and tablet-side deletes propagate to local.
-Local files soft-delete into `.rmsync-trash/`; recover via
-`rmsync trash list / restore`. A bulk-delete brake refuses
-operations exceeding `bulk_delete_threshold` of tracked docs in
-`bulk_delete_window_seconds`. See "Rename / move / delete
-propagation" in `docs/USAGE.md`.
+In that mode, manually delete from cloud via `rmapi rm /Writing/foo`.
 
 ### Organize docs in folders
 
@@ -674,14 +682,12 @@ tool) makes the daemon re-track it as a new doc on next edit.
 
 ## Rough edges (things that surprise people)
 
-- **Local delete of a `.md` does NOT delete the cloud doc by
-  default.** FSEvents can misfire and a single unverified event
-  is too risky to drive a destructive cloud action. Either:
-  (a) use `rmapi rm /Writing/foo` explicitly, or (b) opt in to
-  propagation via `[deletion] enable_propagation = true` in
-  config.toml — files soft-delete into `<sync_dir>/.rmsync-trash/`
-  with a bulk-delete brake, and `rmsync trash list / restore`
-  recovers. v0.2.19+.
+- **Local delete propagates by default** (v0.2.27+) — `rm`
+  parks the file in `<sync_dir>/.rmsync-trash/` AND cloud-trashes
+  the doc. Soft-delete + bulk-delete brake (50%-in-30s) make
+  this safe. To opt out: `[deletion] enable_propagation = false`.
+  v0.2.19–v0.2.26 had this opt-in; v0.2.27 flipped the default
+  after enough field-test cycles.
 - **Handwriting pages pull as empty.** Only typed text extracts. A
   notebook mixing typed text and handwriting keeps only typed text.
 - **Never hand-invoke `rmapi put --content-only`.** That flag is

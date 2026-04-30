@@ -18,7 +18,7 @@
 class Rmsync < Formula
   desc "Bidirectional macOS ↔ reMarkable tablet Markdown sync daemon"
   homepage "https://github.com/madhavsuresh/rmsync"
-  url "https://github.com/madhavsuresh/rmsync/archive/refs/tags/v0.2.26.tar.gz"
+  url "https://github.com/madhavsuresh/rmsync/archive/refs/tags/v0.2.27.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
   head "https://github.com/madhavsuresh/rmsync.git", branch: "main"
@@ -250,13 +250,16 @@ class Rmsync < Formula
       # bind_addr  = "127.0.0.1"
       # port       = 7878
 
-      # Optional: rename / move / delete propagation. OFF by default.
-      # When enabled, deletes and renames propagate both ways. Local
-      # files soft-delete into <sync_dir>/.rmsync-trash first;
-      # 'rmsync trash list / restore' recovers them. The bulk-delete
-      # brake caps the blast radius of an accidental 'rm -rf'.
+      # Rename / move / delete propagation: ON by default (v0.2.27+).
+      # Local delete -> cloud trash; tablet delete -> local trash.
+      # Files soft-delete into <sync_dir>/.rmsync-trash first;
+      # 'rmsync trash list / restore' recovers them. Bulk-delete
+      # brake refuses bursts >50% of tracked docs in a 30s window.
+      #
+      # Opt OUT by uncommenting below and setting false. Tunables
+      # can be adjusted independently.
       # [deletion]
-      # enable_propagation         = false
+      # enable_propagation         = true
       # trash_retention_days       = 30
       # bulk_delete_threshold      = 0.5
       # bulk_delete_window_seconds = 30

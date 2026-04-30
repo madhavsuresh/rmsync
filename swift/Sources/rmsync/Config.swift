@@ -103,13 +103,23 @@ struct Config: Decodable, Sendable {
     }
 
     struct DeletionConfig: Decodable, Sendable {
-        /// Master switch. When false (the default for v0.2.19), all
-        /// of the rename / delete machinery is dormant: watchers
-        /// emit jobs but the worker treats them as no-ops, the cloud
-        /// poller doesn't propagate cloud-side deletes, and trash
-        /// stays unwritten. Flip to true once the user trusts the
-        /// safety gates on their workflow. A future release will
-        /// flip the default to true.
+        /// Master switch. **Default is true as of v0.2.27.**
+        ///
+        /// History: v0.2.19 introduced rename / move / delete
+        /// propagation behind this flag, defaulted to false for a
+        /// "field-test before flipping" period. v0.2.27 flipped
+        /// the default after enough release cycles confirmed the
+        /// safety gates work as intended (soft-delete to
+        /// ``<syncDir>/.rmsync-trash``, 50%-in-30s bulk-delete
+        /// brake, per-doc lock, echo fence on cloud→local
+        /// rename). The opt-in default was costing more in
+        /// confused-user-reports ("I deleted on the tablet but
+        /// the local file is still there") than it was worth.
+        ///
+        /// Set false explicitly in config.toml to keep deletes
+        /// from propagating either way (the v0.2.18 behavior).
+        /// Pulls and pushes still work; only the
+        /// rename/move/delete machinery is gated.
         var enablePropagation: Bool
         /// Stamps older than this in ``<syncDir>/.rmsync-trash``
         /// are pruned at startup. Set to 0 to keep forever.
@@ -133,14 +143,14 @@ struct Config: Decodable, Sendable {
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            self.enablePropagation = try c.decodeIfPresent(Bool.self, forKey: .enablePropagation) ?? false
+            self.enablePropagation = try c.decodeIfPresent(Bool.self, forKey: .enablePropagation) ?? true
             self.trashRetentionDays = try c.decodeIfPresent(Int.self, forKey: .trashRetentionDays) ?? 30
             self.bulkDeleteThreshold = try c.decodeIfPresent(Double.self, forKey: .bulkDeleteThreshold) ?? 0.5
             self.bulkDeleteWindowSeconds = try c.decodeIfPresent(Int.self, forKey: .bulkDeleteWindowSeconds) ?? 30
         }
 
         init(
-            enablePropagation: Bool = false,
+            enablePropagation: Bool = true,
             trashRetentionDays: Int = 30,
             bulkDeleteThreshold: Double = 0.5,
             bulkDeleteWindowSeconds: Int = 30

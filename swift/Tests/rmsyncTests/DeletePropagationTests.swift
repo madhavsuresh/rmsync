@@ -271,15 +271,27 @@ struct DeletePropagationTests {
 
     // MARK: - propagation flag
 
-    @Test("delete handler is a no-op when enable_propagation = false")
+    @Test("delete handler bails when enable_propagation is explicitly false")
     func propagationDisabledIsNoop() async throws {
-        // We can verify this without a real Cloud: the worker
-        // bails before any cloud / trash side effect when
-        // ``cfg.deletion.enablePropagation == false``.
-        // The check is a guard at the top of deleteLocalAndCloud.
-        // Here we just assert the default is off.
-        let cfg = Config(syncDir: FileManager.default.temporaryDirectory)
+        // The worker bails before any cloud / trash side effect
+        // when ``cfg.deletion.enablePropagation == false``.
+        // Default flipped to true in v0.2.27 (was false in
+        // v0.2.19–v0.2.26 as a field-test guard); the gate
+        // itself still works for users who explicitly opt out.
+        let cfg = Config(
+            syncDir: FileManager.default.temporaryDirectory,
+            deletion: Config.DeletionConfig(enablePropagation: false)
+        )
         #expect(cfg.deletion.enablePropagation == false)
+    }
+
+    @Test("default config has propagation enabled (v0.2.27+)")
+    func propagationDefaultIsOn() async throws {
+        // Pin the new default so a future inadvertent flip back
+        // to false fails loudly. New users / fresh configs should
+        // get propagation on out of the box.
+        let cfg = Config(syncDir: FileManager.default.temporaryDirectory)
+        #expect(cfg.deletion.enablePropagation == true)
     }
 
     // MARK: - helpers

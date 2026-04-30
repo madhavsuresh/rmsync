@@ -36,22 +36,14 @@ by default). Pushes happen ~5s after you save; pulls land within
 15–120s after a tablet edit. The menu bar icon (macOS) or web
 dashboard (`[web] enabled = true`) shows live status.
 
-**v0.2.19 — rename / move / delete propagation (opt-in).** Add
-this block to `~/.config/rmsync/config.toml` and `rmsync restart`:
-
-```toml
-[deletion]
-enable_propagation         = true   # off by default — opt in
-trash_retention_days       = 30     # 0 keeps trash forever
-bulk_delete_threshold      = 0.5    # >50% of tracked → refuse
-bulk_delete_window_seconds = 30
-```
-
-With propagation on, all four directions sync:
+**Rename / move / delete propagation — default in v0.2.27+.**
+Deleting a file locally (or on the tablet) cleans it up on the
+other side automatically; renaming likewise. All four directions
+sync without configuration:
 
 - **Local delete → cloud trash.** `rm hello.md` parks the file in
-  `<sync_dir>/.rmsync-trash/<utc-stamp>/` and moves the cloud doc
-  to the reMarkable cloud's trash.
+  `<sync_dir>/.rmsync-trash/<utc-stamp>/` (recoverable) and moves
+  the cloud doc to the reMarkable cloud's trash.
 - **Cloud delete → local trash.** Deleting on the tablet drops the
   local file into `.rmsync-trash/` on the next poll.
 - **Local rename → cloud rename.** `mv old.md new.md` calls
@@ -68,19 +60,38 @@ rmsync trash restore --all           # bulk restore
 rmsync trash prune                   # drop entries past retention
 ```
 
-A bulk-delete brake refuses any operation that would remove more
-than `bulk_delete_threshold` of tracked docs in
-`bulk_delete_window_seconds` — caps the blast radius of an
-accidental `rm -rf`. Refused deletes show up as
-`error_state = "bulk_delete_refused"` in `rmsync status` and the
-web dashboard.
+Safety gates that protect against accidents:
 
-If you'd rather keep the v0.2.18 behavior (local delete logs but
-doesn't propagate), leave the `[deletion]` block out — the
-default is `enable_propagation = false`.
+- **Soft-delete to `.rmsync-trash`.** Nothing is hard-deleted on
+  the local side — recoverable for `trash_retention_days` (default
+  30 days, set to 0 to keep forever).
+- **Bulk-delete brake.** If a single 30s window contains more
+  than 50% of tracked docs being deleted, the worker refuses the
+  rest and surfaces `error_state = "bulk_delete_refused"` in
+  `rmsync status` and the menubar — caps the blast radius of an
+  accidental `rm -rf` or runaway watcher storm.
+- **Per-doc lock.** Rename / delete / push on the same doc
+  serialize so destructive ops don't race in-flight pushes.
+
+To opt back out (v0.2.18 behavior — local delete logs but
+doesn't touch cloud), explicitly set:
+
+```toml
+[deletion]
+enable_propagation = false
+```
+
+Tunable thresholds (defaults shown):
+
+```toml
+[deletion]
+trash_retention_days       = 30
+bulk_delete_threshold      = 0.5
+bulk_delete_window_seconds = 30
+```
 
 Full guide: [`docs/USAGE.md`](docs/USAGE.md) → "Rename / move /
-delete propagation is opt-in".
+delete propagation".
 
 **v0.2.22 — folder structure mirrors both ways.** Subdirectories
 under `sync_dir` propagate to the cloud as folders, and vice
@@ -336,11 +347,13 @@ without being subject to File Provider eviction.
   default) for a browser-based status / sync-now / pause UI. Useful for
   Linux/Docker users without a menubar; a parity option for macOS users
   who prefer the browser. Token-authed.
-- **Optional rename / move / delete propagation (v0.2.19+).** Opt in
-  via `[deletion] enable_propagation = true` and the daemon mirrors
-  deletes and renames in both directions, with soft-delete into
-  `<sync_dir>/.rmsync-trash/` and a bulk-delete brake. `rmsync
-  trash list / restore` recovers; default 30-day retention auto-prunes.
+- **Rename / move / delete propagation (default in v0.2.27+).** The
+  daemon mirrors deletes and renames in both directions: local
+  delete → cloud trash, cloud delete → local trash (soft-delete
+  into `<sync_dir>/.rmsync-trash/`, recoverable via `rmsync trash
+  list / restore`). Bulk-delete brake (refuses >50% of tracked
+  docs in a 30s window) caps the blast radius of accidents.
+  Opt out via `[deletion] enable_propagation = false`.
 - **Diagnosable.** `rmsync logs --diagnose` distinguishes "daemon
   never ran" / "crashed pre-logging" / "running but quiet" in one
   command. `rmsync conflicts --resolve-stale` clears stuck conflict
@@ -354,9 +367,6 @@ without being subject to File Provider eviction.
   can't convert those annotations to Markdown.
 - Image / drawing round-trip.
 - Anything outside `Writing/` on your tablet.
-- Propagate deletes / renames *by default*. The `[deletion]` block
-  above turns it on; without it, local deletes are logged but don't
-  touch the cloud — same behavior as v0.2.18 and earlier.
 
 ---
 

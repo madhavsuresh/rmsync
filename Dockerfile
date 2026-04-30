@@ -61,22 +61,29 @@ RUN apt-get update \
         unzip \
  && rm -rf /var/lib/apt/lists/*
 
-# Pull rmapi from upstream releases. Pinned version — bump explicitly
-# when upstream releases a new one. Architecture-aware via TARGETARCH
-# (set automatically by buildx during multi-arch builds).
+# Pull rmapi from upstream releases. Pinned version — bump
+# explicitly when upstream releases a new one.
 #
-# Asset naming verified against ddvk/rmapi v0.0.32 release page:
+# **Bumped to v0.0.33 in v0.2.27** to match the macOS Homebrew
+# tap pin. v0.0.33 is the FIRST release that talks to the
+# post-2026-04 reMarkable cloud (schema-v4 root writes; see
+# ddvk/rmapi#56 + ddvk/rmapi#58). Anything below v0.0.33 will
+# 400 on every put/mkdir/mv against current-state accounts.
+# ``Cloud.rmapiMin`` enforces the floor at v0.0.32, so the
+# Linux container's startup probe will warn loudly if we ever
+# regress to an older version.
+#
+# When bumping: update both ``RMAPI_VERSION`` here AND
+# ``Formula/rmapi.rb`` in the tap repo (the brew daily-cron
+# auto-bumps the tap; this Dockerfile pin is manual until we
+# add a parallel workflow). Keeping both pins on the same
+# version means Docker users and Homebrew users get the same
+# behavior.
+#
+# Asset naming verified against ddvk/rmapi v0.0.33 release page:
 #   rmapi-linux-amd64.tar.gz
 #   rmapi-linux-arm64.tar.gz
-#   rmapi-macos-{arm64,intel}.zip
-#
-# v0.0.32 is the first release with consistent ``linux-{arch}.tar.gz``
-# asset names AND a Linux arm64 build. v0.0.30 didn't ship arm64,
-# v0.0.31's naming is inconsistent. Lower bound for both archs is
-# v0.0.32. macOS CI uses v0.0.29 from io41/tap; the Linux daemon's
-# version probe (``Cloud.rmapiMin``) accepts down to 0.0.29 and up
-# to 0.1.0, so v0.0.32 is in-range.
-ARG RMAPI_VERSION=v0.0.32
+ARG RMAPI_VERSION=v0.0.33
 ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \

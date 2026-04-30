@@ -288,7 +288,7 @@ Config keys and defaults (all paths relative to your home):
 | `push_strategy` | `native_plain` | Also: `native_formatted` (stub), `pdf` (stub) |
 | `dry_run` | `false` | Log intent, don't execute |
 | `[log].level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `[deletion].enable_propagation` | `false` | Master switch for rename/delete propagation. v0.2.19+. See "Rough edges". |
+| `[deletion].enable_propagation` | `true` | Master switch for rename/delete propagation. Default flipped on in v0.2.27 (was opt-in in v0.2.19–v0.2.26). Set false to disable. |
 | `[deletion].trash_retention_days` | `30` | Auto-prune cadence (`0` = keep forever). |
 | `[deletion].bulk_delete_threshold` | `0.5` | Refuse if `>N` of tracked docs would be deleted in window. |
 | `[deletion].bulk_delete_window_seconds` | `30` | Rolling window for the bulk-delete brake. |
@@ -606,25 +606,17 @@ to remove those manually.
 
 ## Rough edges to know about
 
-### Rename / move / delete propagation is opt-in
+### Rename / move / delete propagation (default)
 
-Available as of v0.2.19. **Off by default** — the daemon does not
-delete or rename anything on either side until you flip
-`enable_propagation = true` in `~/.config/rmsync/config.toml`:
+**Default since v0.2.27** (was opt-in via `[deletion]
+enable_propagation = true` in v0.2.19–v0.2.26).
 
-```toml
-[deletion]
-enable_propagation         = true
-trash_retention_days       = 30
-bulk_delete_threshold      = 0.5    # >50% of tracked → refuse
-bulk_delete_window_seconds = 30
-```
-
-After restarting (`rmsync restart`):
+The daemon mirrors deletes and renames in both directions
+without any configuration:
 
 - **Local delete → cloud trash.** Removing `hello.md` from
   `sync_dir` parks the file in `<sync_dir>/.rmsync-trash/` and
-  moves the cloud doc to the reMarkable cloud's trash (rmapi rm
+  moves the cloud doc to the reMarkable cloud's trash (`rmapi rm`
   is a soft-delete — recoverable from the cloud UI within
   reMarkable's retention window).
 - **Cloud delete → local trash.** Deleting a doc on the tablet
@@ -642,6 +634,9 @@ auto-prunes at daemon startup based on `trash_retention_days`;
 set to 0 to keep forever.
 
 Safety gates that protect against runaway events:
+- **Soft-delete to `.rmsync-trash/`.** Nothing is hard-deleted
+  on the local side — recoverable for `trash_retention_days`
+  (default 30 days).
 - **Bulk-delete brake.** Refuses to apply more than
   `bulk_delete_threshold` of tracked docs in a
   `bulk_delete_window_seconds` window. An accidental
@@ -654,12 +649,21 @@ Safety gates that protect against runaway events:
   watcher's resulting filesystem event for our own move is
   suppressed (otherwise we'd ping-pong forever).
 
-If you'd rather keep the v0.2.18 behavior — local delete logs but
-doesn't propagate — leave `enable_propagation` at its default
-(`false`) and use `rmapi rm` by hand:
+To opt out (v0.2.18-style behavior — local delete logs but
+doesn't touch cloud), explicitly set:
 
-```sh
-~/bin/rmapi rm /Writing/hello
+```toml
+[deletion]
+enable_propagation = false
+```
+
+Tunables (defaults shown):
+
+```toml
+[deletion]
+trash_retention_days       = 30   # 0 keeps trash forever
+bulk_delete_threshold      = 0.5  # >50% of tracked → refuse burst
+bulk_delete_window_seconds = 30
 ```
 
 ### `rmapi put --force` only

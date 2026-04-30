@@ -1,0 +1,112 @@
+name: Watch ddvk/rmapi for Dockerfile bumps
+
+# Polls ddvk/rmapi once a day. When the latest tag is newer than the
+# version pinned in ``Dockerfile`` (the ``ARG RMAPI_VERSION=`` line),
+# opens a PR with the bumped pin. Mirrors the equivalent workflow in
+# the homebrew-rmsync tap repo so Docker users and Homebrew users
+# stay on the same rmapi version.
+#
+# Why not share state with the brew tap workflow: the two outputs
+# live in different repos (rmsync source vs homebrew-rmsync tap)
+# and changing one requires committing to its own git tree. Two
+# parallel cron jobs are the simplest way to keep both pins in
+# sync without introducing cross-repo build dependencies.
+#
+# Manual override: workflow_dispatch trigger for emergencies (e.g.,
+# the user just hit a cloud-side schema break and rmapi shipped a
+# fix today rather than tomorrow).
+
+on:
+  schedule:
+    # Daily at 14:23 UTC. Offset 6 minutes from the brew-tap
+    # bump cron (14:17 UTC) so the two PRs don't race the same
+    # GitHub-cron load window — and so a reviewer scanning the
+    # bot's PR queue sees them in a predictable order.
+    - cron: '23 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve current vs latest rmapi versions
+        id: resolve
+        run: |
+          set -euo pipefail
+          # Current pin lives in the Dockerfile's
+          # ``ARG RMAPI_VERSION=vX.Y.Z`` line.
+          current=$(grep -E '^ARG\s+RMAPI_VERSION=' Dockerfile \
+            | head -1 \
+            | sed -E 's/.*=v?([0-9.]+).*/\1/')
+          latest=$(curl -fsSL https://api.github.com/repos/ddvk/rmapi/releases/latest \
+            | python3 -c 'import sys, json; print(json.load(sys.stdin)["tag_name"].lstrip("v"))')
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest"   >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then
+            echo "no_bump=true" >> "$GITHUB_OUTPUT"
+            echo "Dockerfile already pinned at v$current; nothing to do."
+          else
+            echo "no_bump=false" >> "$GITHUB_OUTPUT"
+            echo "Bumping Dockerfile rmapi: v$current -> v$latest"
+          fi
+
+      - name: Rewrite Dockerfile pin
+        if: steps.resolve.outputs.no_bump == 'false'
+        env:
+          NEW_VERSION: ${{ steps.resolve.outputs.latest }}
+        run: |
+          set -euo pipefail
+          # Single in-place edit: replace the version on the
+          # ``ARG RMAPI_VERSION=`` line. Not a full template
+          # rewrite — keeps the surrounding comment block
+          # (which discusses why we pinned to the current
+          # version) for the PR reviewer to update if the
+          # rationale changed.
+          sed -i -E "s|^ARG RMAPI_VERSION=v[0-9.]+\$|ARG RMAPI_VERSION=v${NEW_VERSION}|" Dockerfile
+          # Sanity check: the file actually changed.
+          grep "ARG RMAPI_VERSION=v${NEW_VERSION}" Dockerfile
+
+      - name: Open bump PR
+        if: steps.resolve.outputs.no_bump == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.resolve.outputs.latest }}
+          OLD_VERSION: ${{ steps.resolve.outputs.current }}
+        run: |
+          set -euo pipefail
+          branch="bump-dockerfile-rmapi-v${NEW_VERSION}"
+          git config user.name "rmapi-dockerfile-bumper"
+          git config user.email "noreply@github.com"
+          if gh pr list --head "$branch" --json number --jq '.[0].number' | grep -q .; then
+            echo "PR for $branch already open; skipping."
+            exit 0
+          fi
+          git checkout -b "$branch"
+          git add Dockerfile
+          git commit -m "Dockerfile: bump rmapi pin to v${NEW_VERSION}"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --title "Dockerfile: bump rmapi to v${NEW_VERSION}" \
+            --body "Automated bump from v${OLD_VERSION} -> v${NEW_VERSION}.
+
+The brew tap's parallel workflow auto-bumps Formula/rmapi.rb in
+[homebrew-rmsync](https://github.com/madhavsuresh/homebrew-rmsync);
+this PR keeps the Docker image on the same version. Both pin
+sources should track current to keep Homebrew users and Docker
+users on the same rmapi version.
+
+Upstream release notes: https://github.com/ddvk/rmapi/releases/tag/v${NEW_VERSION}
+
+After merging, the next \`v0.2.X\` rmsync tag will rebuild the
+container image against rmapi v${NEW_VERSION}.
+
+Tested via:
+  docker build -t rmsync:test .
+  docker run --rm rmsync:test rmapi version  # should print v${NEW_VERSION}
+"

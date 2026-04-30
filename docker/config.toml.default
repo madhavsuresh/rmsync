@@ -35,16 +35,18 @@ level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 # remote_folder     = "Inbox"
 # delete_after_push = true
 
-# Optional: rename / move / delete propagation. OFF by default —
-# when ``enable_propagation = true``, deletes and renames in the
-# sync dir or on the tablet propagate to the other side. Local
-# files are soft-deleted into ``<sync_dir>/.rmsync-trash`` first;
+# Rename / move / delete propagation: ON by default (v0.2.27+).
+# Local delete → cloud trash; tablet delete → local trash. Files
+# soft-delete into ``<sync_dir>/.rmsync-trash`` first;
 # ``rmsync trash list / restore`` recovers them. The bulk-delete
 # brake refuses to apply more than ``bulk_delete_threshold`` of
 # tracked docs in a ``bulk_delete_window_seconds`` window — caps
 # the blast radius of an accidental ``rm -rf``.
+#
+# To opt OUT (v0.2.18-style: local delete logs but doesn't touch
+# cloud), uncomment below and set ``enable_propagation = false``.
 # [deletion]
-# enable_propagation         = false
+# enable_propagation         = true
 # trash_retention_days       = 30
 # bulk_delete_threshold      = 0.5
 # bulk_delete_window_seconds = 30
