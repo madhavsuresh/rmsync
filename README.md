@@ -368,13 +368,27 @@ without being subject to File Provider eviction.
 - **Xcode command-line tools** (`xcode-select --install`). Provides
   Swift 6.0+. If the installer errors "swift not found," run that
   command first.
-- **rmapi** — the reMarkable cloud CLI. The installer offers to fetch
-  this automatically (Homebrew preferred, GitHub release binary as
-  fallback). Manual:
+- **rmapi** — the reMarkable cloud CLI. Pulled in automatically by
+  `brew install madhavsuresh/rmsync/rmsync` from this same tap; no
+  separate install needed. Manual install (rare):
   ```sh
-  brew install io41/tap/rmapi                     # recommended
-  # or download from https://github.com/ddvk/rmapi/releases
+  brew install madhavsuresh/rmsync/rmapi          # recommended
+  # or download a release zip from https://github.com/ddvk/rmapi/releases
   ```
+  **Migrating from `io41/tap/rmapi`:** if you installed rmapi from
+  the older io41 tap, brew will refuse to install ours alongside.
+  Run once:
+  ```sh
+  brew uninstall io41/tap/rmapi
+  brew untap io41/tap
+  ```
+  Then `brew install madhavsuresh/rmsync/rmsync` (or
+  `brew upgrade rmsync`) pulls the version-pinned rmapi we test
+  against. **Why not io41 anymore?** The 2026-04 cloud schema-v4
+  rollout broke rmapi <0.0.32 with HTTP 400 on every `put`; io41/tap
+  stayed pinned at 0.0.29 for weeks. Pulling rmapi from this tap
+  cuts the upstream-coordination delay — when ddvk releases a new
+  rmapi, our tap auto-opens a bump PR within 24h.
 
 ### Linux / Docker install path
 

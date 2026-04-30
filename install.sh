@@ -82,9 +82,9 @@ if [[ -z "$RMAPI_BIN" ]]; then
     installed=0
     if [[ "$OFFER_RMAPI" -eq 1 ]]; then
         if command -v brew >/dev/null; then
-            echo "  Homebrew is available. Install via 'brew install io41/tap/rmapi'?"
+            echo "  Homebrew is available. Install via 'brew install madhavsuresh/rmsync/rmapi'?"
             if confirm "  Install rmapi with brew?"; then
-                brew install io41/tap/rmapi
+                brew install madhavsuresh/rmsync/rmapi
                 RMAPI_BIN="$(command -v rmapi || true)"
                 [[ -n "$RMAPI_BIN" ]] && installed=1
             fi
@@ -92,8 +92,11 @@ if [[ -z "$RMAPI_BIN" ]]; then
     fi
     if [[ "$installed" -eq 0 ]]; then
         red "rmapi is required. Install one of these ways and re-run:"
-        red "    brew install io41/tap/rmapi"
+        red "    brew install madhavsuresh/rmsync/rmapi"
         red "    https://github.com/ddvk/rmapi/releases  (verify the release manually, then drop the binary at ~/bin/rmapi)"
+        red ""
+        red "If you previously installed rmapi from io41/tap, uninstall it first:"
+        red "    brew uninstall io41/tap/rmapi && brew untap io41/tap"
         exit 1
     fi
 fi

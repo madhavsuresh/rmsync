@@ -66,7 +66,8 @@ actor Cloud {
                 meta: [
                     "found": "\(v.0).\(v.1).\(v.2)",
                     "minimum_required": "\(Self.rmapiMin.0).\(Self.rmapiMin.1).\(Self.rmapiMin.2)",
-                    "fix": "download rmapi v0.0.32+ from https://github.com/ddvk/rmapi/releases",
+                    "fix_brew": "brew install madhavsuresh/rmsync/rmapi  (uninstall io41/tap/rmapi first if installed)",
+                    "fix_manual": "https://github.com/ddvk/rmapi/releases",
                 ]
             )
         }

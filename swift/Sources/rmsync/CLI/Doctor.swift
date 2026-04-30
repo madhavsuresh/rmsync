@@ -93,7 +93,9 @@ struct DoctorRun {
                 status: isTooOld ? .fail : .warn,
                 message: isTooOld
                     ? "\(v.0).\(v.1).\(v.2) too old — uploads WILL fail with HTTP 400. "
-                      + "Upgrade to v0.0.32+ from https://github.com/ddvk/rmapi/releases"
+                      + "Upgrade: `brew install madhavsuresh/rmsync/rmapi` "
+                      + "(uninstall io41/tap/rmapi first), or download from "
+                      + "https://github.com/ddvk/rmapi/releases"
                     : "\(v.0).\(v.1).\(v.2) newer than tested range"
             )
         } catch {
