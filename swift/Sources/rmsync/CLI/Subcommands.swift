@@ -43,7 +43,15 @@ struct Status: AsyncParsableCommand {
             print("paused:         \(live.paused)")
             print("tracked docs:   \(live.trackedDocs)")
             print("conflicts:      \(live.conflicts)")
-            print("parked errors:  \(live.errors)")
+            // v0.2.30: when parked errors > 0, point at the
+            // ``rmsync errors`` subcommand inline so the user
+            // doesn't have to remember it. The count alone tells
+            // them something's wrong but not which docs or why.
+            if live.errors > 0 {
+                print("parked errors:  \(live.errors)   (run `rmsync errors` to list)")
+            } else {
+                print("parked errors:  \(live.errors)")
+            }
             print("queue depth:    \(live.queueDepth)")
             print("last pull:      \(live.lastPullAt ?? "(never)")")
             print("last push:      \(live.lastPushAt ?? "(never)")")
@@ -936,5 +944,157 @@ struct RetryParked: AsyncParsableCommand {
         print("Enqueued \(enqueued)/\(parked.count) push(es). Watch progress:")
         print("    rmsync status              # parked count drops as pushes succeed")
         print("    rmsync logs --tail         # see per-doc push results")
+    }
+}
+
+// MARK: - errors
+
+/// List every doc currently parked with a non-NULL ``error_state``,
+/// grouped by error class. v0.2.30+.
+///
+/// Prior versions surfaced only the count (``parked errors: N``
+/// in ``rmsync status``) and the most-recent diagnostic
+/// (``cloud_health`` in ``rmsync status``); to actually see WHICH
+/// docs were parked you had to ``sqlite3`` the state DB. This
+/// command closes that gap.
+///
+/// Output groups by ``error_state`` value so the user sees the
+/// failure shape at a glance:
+///
+/// ```
+///   push_failed (3):
+///     /Users/madhav/.../foo.md          (last push: 2026-04-30T11:38Z)
+///     /Users/madhav/.../bar.md          (last push: never)
+///     /Users/madhav/.../baz.md          (last push: 2026-04-29T22:14Z)
+///
+///   parse_failed (1):
+///     /Users/madhav/.../old-notebook.md (last pull: 2026-04-18)
+///
+///   bulk_delete_refused (2): ...
+/// ```
+///
+/// And tails with class-specific next-action hints (``rmsync
+/// retry-parked`` for ``push_failed``, ``rmapi rm`` + repull
+/// for ``parse_failed``, etc.). The ``cloud_health`` IPC field
+/// (if non-empty + non-OK) gets shown above the table so the user
+/// sees "this is rmapi's fault" before the per-doc detail.
+struct Errors: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "errors",
+        abstract: "List parked errors (docs with non-NULL error_state in state.db)."
+    )
+
+    func run() async throws {
+        guard FileManager.default.fileExists(atPath: Paths.stateDBPath.path) else {
+            print("no state DB at \(Paths.stateDBPath.path)")
+            return
+        }
+
+        // Show daemon-level diagnostic FIRST if present — that's
+        // the systemic cause when many docs are parked at once.
+        // Read via IPC if the daemon's running, otherwise skip
+        // (the per-doc list still surfaces).
+        if let live = IPCClientSync.getStatus(),
+           !live.cloudHealth.isEmpty, live.cloudHealth != "ok" {
+            print("daemon diagnostic: \(live.cloudHealth)")
+            if let detail = live.cloudHealthDetail, !detail.isEmpty {
+                // Wrap detail at ~70 chars per line for terminal
+                // readability. Keeps long messages from making
+                // the per-doc table land off-screen.
+                for line in Self.softWrap(detail, width: 70) {
+                    print("  \(line)")
+                }
+            }
+            print("")
+        }
+
+        let state = try State(path: Paths.stateDBPath)
+        let docs = try await state.allDocuments()
+        let parked = docs.filter { $0.errorState != nil }
+
+        if parked.isEmpty {
+            print("no parked errors.")
+            print("")
+            print("(``rmsync logs --tail`` shows recent daemon activity)")
+            return
+        }
+
+        // Group by error_state value. Sort group keys
+        // alphabetically so output is stable across runs.
+        let grouped = Dictionary(grouping: parked, by: { $0.errorState ?? "" })
+        let orderedKeys = grouped.keys.sorted()
+
+        for key in orderedKeys {
+            let group = grouped[key] ?? []
+            print("\(key) (\(group.count)):")
+            for d in group.sorted(by: { $0.localPath < $1.localPath }) {
+                let lastPush = d.lastPushAt.map { "last push: \(Self.shortISO($0))" }
+                    ?? "last push: never"
+                print("  \(d.localPath)")
+                print("    doc_id: \(d.docID)   \(lastPush)")
+            }
+            print("")
+        }
+
+        // Per-class next-action hints. The user shouldn't have to
+        // remember which command to run for which failure mode —
+        // print the right one inline.
+        let classes = Set(parked.compactMap(\.errorState))
+        if classes.contains("push_failed") {
+            print("To retry push_failed docs (no SQL, no file edits):")
+            print("    rmsync retry-parked")
+            print("")
+        }
+        if classes.contains("parse_failed") {
+            print("parse_failed means a page's .rm bytes wouldn't decode")
+            print("(handwriting-only page, or a decoder bug). Workarounds:")
+            print("  • Edit the doc on the tablet to add typed text → re-pull")
+            print("  • rmapi rm <remote_path> + edit locally + push fresh")
+            print("")
+        }
+        if classes.contains("bulk_delete_refused") {
+            print("bulk_delete_refused means the bulk-delete brake")
+            print("(`[deletion].bulk_delete_threshold`) tripped. Either:")
+            print("  • Run `rmsync retry-parked` to re-attempt — the brake's")
+            print("    rolling window will have aged out.")
+            print("  • Restore the file(s) you didn't mean to delete via")
+            print("    `rmsync trash list / restore`.")
+            print("")
+        }
+
+        print("Inspect the daemon's recent attempts:")
+        print("    rmsync logs --tail")
+    }
+
+    /// Soft-wrap a long string at ``width`` columns on whitespace
+    /// boundaries. Greedy — doesn't try to be a paragraph
+    /// formatter. Used to make the cloud-health detail readable
+    /// without scrolling.
+    static func softWrap(_ s: String, width: Int) -> [String] {
+        var out: [String] = []
+        var line = ""
+        for word in s.split(whereSeparator: { $0.isWhitespace }) {
+            if line.isEmpty {
+                line = String(word)
+            } else if line.count + 1 + word.count <= width {
+                line += " " + word
+            } else {
+                out.append(line)
+                line = String(word)
+            }
+        }
+        if !line.isEmpty { out.append(line) }
+        return out
+    }
+
+    /// Shorten an ISO-8601 timestamp by dropping the millisecond
+    /// fraction. ``2026-04-30T11:38:07.998Z`` →
+    /// ``2026-04-30T11:38:07Z``. Doesn't try to convert to local
+    /// time — UTC is what the rest of the daemon log lines show
+    /// so consistency wins over user-friendliness.
+    static func shortISO(_ s: String) -> String {
+        guard let dotIdx = s.firstIndex(of: ".") else { return s }
+        let zIdx = s.lastIndex(of: "Z") ?? s.endIndex
+        return String(s[..<dotIdx]) + (zIdx < s.endIndex ? "Z" : "")
     }
 }

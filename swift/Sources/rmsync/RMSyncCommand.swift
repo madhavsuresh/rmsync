@@ -30,6 +30,7 @@ struct RMSyncCommand: AsyncParsableCommand {
             TrashCmd.self,
             History.self,
             RetryParked.self,
+            Errors.self,
         ],
         defaultSubcommand: nil
     )
