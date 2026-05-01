@@ -200,15 +200,78 @@ struct PageCodecRoundTripTests {
         #expect(try roundTrip("a\n\n\n") == "a\n")
     }
 
-    @Test("plain bullet-prefixed lines round-trip with paragraph breaks")
-    func plainBulletPrefixedLines() throws {
-        // simpleTextDocument always sets .plain style, so a markdown
-        // bullet list pushed from disk lands on the tablet as plain
-        // paragraphs whose body happens to start with "- ". On pull,
-        // those are joined as paragraphs (\n\n), not as a tight list.
-        // Pandoc still parses the result as a (loose) list — semantics
-        // preserved, spacing slightly different. Reconstructing styled
-        // bullets on push is a separate concern.
-        #expect(try roundTrip("- a\n- b\n- c\n") == "- a\n\n- b\n\n- c\n")
+    // MARK: - paragraph styles round-trip (push-side prefix detection)
+
+    /// Push side now parses Markdown prefixes and assigns the matching
+    /// ``ParagraphStyle`` on the tablet, so pull reads them back via
+    /// the prefix table — round-trip is identity for every style the
+    /// tablet supports.
+
+    @Test("tight bullet list round-trips identity")
+    func bulletListTightRoundTrip() throws {
+        #expect(try roundTrip("- a\n- b\n- c\n") == "- a\n- b\n- c\n")
+    }
+
+    @Test("nested bullets round-trip identity")
+    func nestedBullets() throws {
+        #expect(try roundTrip("- a\n  - b\n  - c\n- d\n") == "- a\n  - b\n  - c\n- d\n")
+    }
+
+    @Test("checkboxes round-trip identity, both states")
+    func checkboxesRoundTrip() throws {
+        #expect(try roundTrip("- [ ] todo\n- [x] done\n") == "- [ ] todo\n- [x] done\n")
+    }
+
+    @Test("H1 heading round-trips identity")
+    func headingRoundTrip() throws {
+        #expect(try roundTrip("# Title\n\nbody\n") == "# Title\n\nbody\n")
+    }
+
+    @Test("H2 (bold-style heading) round-trips identity")
+    func heading2RoundTrip() throws {
+        #expect(try roundTrip("## Subtitle\n\nbody\n") == "## Subtitle\n\nbody\n")
+    }
+
+    @Test("mixed document with all paragraph styles round-trips canonically")
+    func mixedParagraphStyles() throws {
+        // Push collapses \n{2,} → \n so the tablet never holds empty
+        // paragraphs (see renderPage). On pull, consecutive list-family
+        // paragraphs join with single \n (tight list). Net effect: the
+        // blank line the user wrote between the bullet section and the
+        // checkbox section is fused into one continuous list — pandoc
+        // still renders the result as a single visual list, matching
+        // the tablet's view. Adjacent non-list paragraphs still get
+        // \n\n between them.
+        let input  = "# H1\n\n## H2\n\nbody\n\n- bullet\n  - nested\n\n- [ ] todo\n- [x] done\n\nmore\n"
+        let output = "# H1\n\n## H2\n\nbody\n\n- bullet\n  - nested\n- [ ] todo\n- [x] done\n\nmore\n"
+        #expect(try roundTrip(input) == output)
+    }
+
+    // MARK: - inline formatting round-trip
+
+    @Test("bold inline survives round-trip")
+    func boldInline() throws {
+        #expect(try roundTrip("hello **world**\n") == "hello **world**\n")
+    }
+
+    @Test("italic inline survives round-trip")
+    func italicInline() throws {
+        #expect(try roundTrip("hello *world*\n") == "hello *world*\n")
+    }
+
+    @Test("bold + italic combined survives round-trip")
+    func boldItalicInline() throws {
+        #expect(try roundTrip("***both***\n") == "***both***\n")
+    }
+
+    @Test("inline formatting inside a heading round-trips")
+    func inlineInHeading() throws {
+        #expect(try roundTrip("# **bold** title\n") == "# **bold** title\n")
+    }
+
+    @Test("multiple inline runs in one paragraph round-trip")
+    func mixedInlineSpans() throws {
+        let input = "regular **bold** middle *italic* tail\n"
+        #expect(try roundTrip(input) == input)
     }
 }

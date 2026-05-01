@@ -293,6 +293,175 @@ public struct RMSceneEncoder {
             )),
         ]
     }
+
+    /// One styled span within a paragraph: a run of text plus its inline
+    /// (bold/italic) attributes. Spans are flattened when building the
+    /// CRDT — adjacent spans with identical style merge implicitly.
+    public struct Span {
+        public var text: String
+        public var style: InlineTextStyle
+        public init(text: String, style: InlineTextStyle = InlineTextStyle()) {
+            self.text = text
+            self.style = style
+        }
+    }
+
+    /// One paragraph: its block style (heading / bullet / etc.) plus the
+    /// inline-styled spans that make up its body. Empty body is allowed
+    /// (an empty paragraph) but is rare — the higher-level markdown
+    /// pipeline collapses runs of blanks before reaching us.
+    public struct StyledParagraph {
+        public var style: ParagraphStyle
+        public var spans: [Span]
+        public init(style: ParagraphStyle, spans: [Span]) {
+            self.style = style
+            self.spans = spans
+        }
+    }
+
+    /// Build a `.rm` page from styled paragraphs, preserving paragraph
+    /// styles (heading / bullet / checkbox / …) and inline bold + italic
+    /// runs. Mirrors ``simpleTextDocument`` but emits a multi-item CRDT
+    /// sequence so the `text.styles` map can key each paragraph's style
+    /// to the CRDT ID of its leading newline (or `.zero` for the first
+    /// paragraph) — that keying is what `TextDocument.fromSceneItem`
+    /// reads back on the pull side.
+    ///
+    /// CRDT IDs are assigned sequentially starting at `(1, 16)` (matching
+    /// `simpleTextDocument`'s base) so every character / format-code
+    /// owns a unique slot, and items chain forward via `leftID` /
+    /// `rightID`. Inline transitions emit format codes 1/2 (bold on/off)
+    /// and 3/4 (italic on/off) — the exact codes `Core.applyFormatting`
+    /// reads on parse.
+    public func richTextDocument(_ paragraphs: [StyledParagraph], authorID: UUID? = nil) -> [SceneBlock] {
+        let authorID = authorID ?? UUID()
+
+        var items: [CrdtSequenceItem<TextItemValue>] = []
+        var styleEntries: [(CrdtID, LWWValue<ParagraphStyle>)] = []
+        var nextSlot = 16
+        var totalChars = 0
+        var prevLastID: CrdtID = .zero
+        var inlineState = InlineTextStyle()
+
+        // Helper to emit a CRDT item that takes `slots` ID slots. Returns
+        // the itemID assigned. The leftID is wired to the previous item's
+        // last ID; the rightID is left as `.zero` and re-stitched after
+        // the loop completes (we don't know the next item's first ID
+        // until we've decided what to emit next).
+        func append(_ value: TextItemValue, slots: Int) -> CrdtID {
+            let itemID = CrdtID(1, nextSlot)
+            items.append(CrdtSequenceItem(
+                itemID: itemID,
+                leftID: prevLastID,
+                rightID: .zero,
+                deletedLength: 0,
+                value: value
+            ))
+            // Last expanded ID for this item is itemID + (slots - 1).
+            prevLastID = CrdtID(1, nextSlot + slots - 1)
+            nextSlot += slots
+            return itemID
+        }
+
+        // Emit format-code transitions to move from `inlineState` to
+        // `target`. Order matches what the pull-side `applyFormatting`
+        // expects: bold first, then italic. Format codes occupy 1 slot.
+        func transitionInlineTo(_ target: InlineTextStyle) {
+            if target.fontWeight != inlineState.fontWeight {
+                let code = (target.fontWeight == .bold) ? 1 : 2
+                _ = append(.formatCode(code), slots: 1)
+                totalChars += 0 // format codes are not user-visible chars
+            }
+            if target.fontStyle != inlineState.fontStyle {
+                let code = (target.fontStyle == .italic) ? 3 : 4
+                _ = append(.formatCode(code), slots: 1)
+            }
+            inlineState = target
+        }
+
+        // First paragraph's style is keyed by `.zero` — `fromSceneItem`
+        // assigns `.zero` as the startID for any paragraph whose CRDT
+        // sequence doesn't begin with a `\n` character.
+        if let first = paragraphs.first {
+            styleEntries.append((.zero, LWWValue(timestamp: CrdtID(1, 15), value: first.style)))
+        }
+
+        for (paraIdx, paragraph) in paragraphs.enumerated() {
+            for span in paragraph.spans where !span.text.isEmpty {
+                transitionInlineTo(span.style)
+                _ = append(.string(span.text), slots: span.text.count)
+                totalChars += span.text.count
+            }
+
+            // Inter-paragraph newline. Acts as both the paragraph
+            // terminator AND the CRDT key for the next paragraph's
+            // style. Skipped after the last paragraph — the document
+            // doesn't carry a trailing empty paragraph.
+            if paraIdx < paragraphs.count - 1 {
+                // Reset inline style at paragraph boundary so the next
+                // paragraph starts clean. We emit any closing format
+                // codes BEFORE the newline so the paragraph break
+                // doesn't fall inside a styled run.
+                transitionInlineTo(InlineTextStyle())
+                let newlineID = append(.string("\n"), slots: 1)
+                totalChars += 1
+                let nextStyle = paragraphs[paraIdx + 1].style
+                styleEntries.append((newlineID, LWWValue(timestamp: CrdtID(1, 15), value: nextStyle)))
+            }
+        }
+
+        // Close any open inline run at the end of the document so the
+        // wire format never has a dangling bold-on with no matching
+        // bold-off — keeps the file deterministic and round-trippable.
+        transitionInlineTo(InlineTextStyle())
+
+        // Re-stitch rightIDs: each item's rightID points at the next
+        // item's itemID. The final item retains `.zero`. Done as a
+        // post-pass so we don't need to know "next item's first ID"
+        // while iterating. ``indices.dropLast()`` is empty when items
+        // has 0 or 1 entries — both are valid (handwriting page or a
+        // single text run).
+        for i in items.indices.dropLast() {
+            let next = items[i + 1]
+            items[i] = CrdtSequenceItem(
+                itemID: items[i].itemID,
+                leftID: items[i].leftID,
+                rightID: next.itemID,
+                deletedLength: items[i].deletedLength,
+                value: items[i].value
+            )
+        }
+
+        let lineCount = max(paragraphs.count, 1)
+
+        return [
+            .authorIDs(AuthorIDsBlock(authorUUIDs: [AuthorIDEntry(authorID: 1, uuid: authorID)])),
+            .migrationInfo(MigrationInfoBlock(migrationID: CrdtID(1, 1), isDevice: true)),
+            .pageInfo(PageInfoBlock(
+                loadsCount: 1,
+                mergesCount: 0,
+                textCharsCount: totalChars + 1,
+                textLinesCount: lineCount
+            )),
+            .sceneTree(SceneTreeBlock(treeID: CrdtID(0, 11), nodeID: CrdtID(0, 0), isUpdate: true, parentID: SceneTree.rootID)),
+            .rootText(RootTextBlock(
+                blockID: .zero,
+                value: Text(
+                    items: CrdtSequence(items),
+                    styles: OrderedMap(styleEntries),
+                    posX: -468.0,
+                    posY: 234.0,
+                    width: 936.0
+                )
+            )),
+            .treeNode(TreeNodeBlock(group: Group(nodeID: SceneTree.rootID))),
+            .treeNode(TreeNodeBlock(group: Group(nodeID: CrdtID(0, 11), label: LWWValue(timestamp: CrdtID(0, 12), value: "Layer 1")))),
+            .sceneGroupItem(SceneGroupItemBlock(
+                parentID: SceneTree.rootID,
+                item: CrdtSequenceItem(itemID: CrdtID(0, 13), leftID: .zero, rightID: .zero, deletedLength: 0, value: CrdtID(0, 11))
+            )),
+        ]
+    }
 }
 
 public func buildTree(_ tree: SceneTree, from blocks: [SceneBlock]) throws {
