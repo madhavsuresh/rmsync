@@ -200,30 +200,45 @@ struct PageCodecRoundTripTests {
         #expect(try roundTrip("a\n\n\n") == "a\n")
     }
 
-    // MARK: - paragraph styles round-trip (push-side prefix detection)
+    // MARK: - paragraph styles + inline formatting (deferred)
 
-    /// Push side now parses Markdown prefixes and assigns the matching
-    /// ``ParagraphStyle`` on the tablet, so pull reads them back via
-    /// the prefix table — round-trip is identity for every style the
-    /// tablet supports.
-
-    @Test("tight bullet list round-trips identity")
+    /// These tests describe the rich-text round-trip the
+    /// ``richTextDocument`` encoder added in v0.2.33 (PRs #20/#21):
+    /// markdown prefixes (``# ``, ``## ``, ``- ``, ``  - ``,
+    /// ``- [ ] ``, ``- [x] ``) and inline ``**bold**`` / ``*italic*``
+    /// runs are pushed as native tablet paragraph styles + inline
+    /// spans, and round-trip back to canonical markdown on pull.
+    ///
+    /// The encoder was reverted in v0.2.36 because emitting many CRDT
+    /// items per page (one per character / format-code) restarted slot
+    /// numbering at 16 every push; subsequent pushes collided with
+    /// prior pushes' CrdtIDs and the tablet's CRDT engine merged the
+    /// overlap into a tangle (rendering only the resolved tail).
+    /// Restoring rich text requires giving each push a unique CRDT
+    /// slot range (e.g. a per-doc monotonic counter persisted in
+    /// state.db) so subsequent pushes don't overlap. Until that lands,
+    /// these tests stay in the file as documentation of the desired
+    /// behaviour but are skipped.
+    @Test("tight bullet list round-trips identity", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func bulletListTightRoundTrip() throws {
         #expect(try roundTrip("- a\n- b\n- c\n") == "- a\n- b\n- c\n")
     }
 
-    @Test("nested bullets round-trip identity")
+    @Test("nested bullets round-trip identity", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func nestedBullets() throws {
         #expect(try roundTrip("- a\n  - b\n  - c\n- d\n") == "- a\n  - b\n  - c\n- d\n")
     }
 
-    @Test("checkboxes round-trip identity, both states")
+    @Test("checkboxes round-trip identity, both states", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func checkboxesRoundTrip() throws {
         #expect(try roundTrip("- [ ] todo\n- [x] done\n") == "- [ ] todo\n- [x] done\n")
     }
 
     @Test("H1 heading round-trips identity")
     func headingRoundTrip() throws {
+        // Plain-text round-trip — heading marker is preserved as
+        // literal markdown bytes; tablet shows ``# Title`` rather
+        // than a styled heading. Identity holds.
         #expect(try roundTrip("# Title\n\nbody\n") == "# Title\n\nbody\n")
     }
 
@@ -232,46 +247,69 @@ struct PageCodecRoundTripTests {
         #expect(try roundTrip("## Subtitle\n\nbody\n") == "## Subtitle\n\nbody\n")
     }
 
-    @Test("mixed document with all paragraph styles round-trips canonically")
+    @Test(
+        "mixed document with all paragraph styles round-trips canonically",
+        .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert")
+    )
     func mixedParagraphStyles() throws {
-        // Push collapses \n{2,} → \n so the tablet never holds empty
-        // paragraphs (see renderPage). On pull, consecutive list-family
-        // paragraphs join with single \n (tight list). Net effect: the
-        // blank line the user wrote between the bullet section and the
-        // checkbox section is fused into one continuous list — pandoc
-        // still renders the result as a single visual list, matching
-        // the tablet's view. Adjacent non-list paragraphs still get
-        // \n\n between them.
         let input  = "# H1\n\n## H2\n\nbody\n\n- bullet\n  - nested\n\n- [ ] todo\n- [x] done\n\nmore\n"
         let output = "# H1\n\n## H2\n\nbody\n\n- bullet\n  - nested\n- [ ] todo\n- [x] done\n\nmore\n"
         #expect(try roundTrip(input) == output)
     }
 
-    // MARK: - inline formatting round-trip
+    // MARK: - inline formatting round-trip (deferred)
 
-    @Test("bold inline survives round-trip")
+    @Test("bold inline survives round-trip", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func boldInline() throws {
         #expect(try roundTrip("hello **world**\n") == "hello **world**\n")
     }
 
-    @Test("italic inline survives round-trip")
+    @Test("italic inline survives round-trip", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func italicInline() throws {
         #expect(try roundTrip("hello *world*\n") == "hello *world*\n")
     }
 
-    @Test("bold + italic combined survives round-trip")
+    @Test("bold + italic combined survives round-trip", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func boldItalicInline() throws {
         #expect(try roundTrip("***both***\n") == "***both***\n")
     }
 
-    @Test("inline formatting inside a heading round-trips")
+    @Test("inline formatting inside a heading round-trips", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func inlineInHeading() throws {
         #expect(try roundTrip("# **bold** title\n") == "# **bold** title\n")
     }
 
-    @Test("multiple inline runs in one paragraph round-trip")
+    @Test("multiple inline runs in one paragraph round-trip", .disabled("deferred until per-push CRDT slot uniqueness lands; see v0.2.36 revert"))
     func mixedInlineSpans() throws {
         let input = "regular **bold** middle *italic* tail\n"
         #expect(try roundTrip(input) == input)
+    }
+
+    // MARK: - LWW idempotence (regression for v0.2.33's CRDT collision)
+
+    @Test("two pushes with different content both decode correctly")
+    func twoPushesDecodeIndependently() throws {
+        // The bug we're regressing on: push N emits CRDT items at
+        // slots 16..N1, push N+1 also at 16..N2. Tablet treats them
+        // as concurrent ops on the same IDs and renders only the
+        // merged tail (e.g. "test"). With simpleTextDocument's
+        // single-item-per-page model, each push is one CrdtID; LWW
+        // resolves cleanly, and a pull-back of either push decodes
+        // to the same content that was pushed.
+        let authorUUID = "5cff3add-0000-0000-0000-000000000000"
+        let first  = "first content with several paragraphs\n\nsecond paragraph\n\nthird\n"
+        let second = "completely different content\n\nthat replaces it\n"
+
+        let bytes1 = try PageCodec.renderPage(text: first, authorUUID: authorUUID)
+        let parsed1 = try PageCodec.parsePage(bytes1)
+        #expect(parsed1.contains("first content"))
+        #expect(parsed1.contains("third"))
+
+        let bytes2 = try PageCodec.renderPage(text: second, authorUUID: authorUUID)
+        let parsed2 = try PageCodec.parsePage(bytes2)
+        #expect(parsed2.contains("completely different"))
+        #expect(parsed2.contains("replaces it"))
+        #expect(!parsed2.contains("first content"))
+        #expect(!parsed2.contains("third"))
     }
 }
