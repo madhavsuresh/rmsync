@@ -1133,6 +1133,83 @@ actor SyncWorker {
             return
         }
 
+        // Pre-push remote-change guard. ``cloud.put --force`` blindly
+        // overwrites the cloud doc; if the tablet edited the same doc
+        // since our last sync, that edit silently disappears the
+        // moment we put. Symmetric to the pull-side ``localChanged``
+        // guard at line ~894 — there the local file is the side we
+        // refuse to clobber, here it's the cloud.
+        //
+        // Skipped when:
+        //   - first push (stored == nil) — no baseline to compare against
+        //   - stored.remoteModified empty — also no baseline. This
+        //     happens after a previous push whose post-put stat failed
+        //     or hit a stale path; the next user edit re-pushes
+        //     without the guard, but that's a one-cycle exposure
+        //     window, not a permanent gap.
+        //   - force == true — ``rmsync retry-parked`` and similar
+        //     explicit user actions. The user told us to push anyway.
+        //
+        // On detection: enqueue a pull instead of pushing. The pull's
+        // existing ``localChanged`` check will write a proper
+        // .conflict file and surface to the user via Notification
+        // Center — they pick a side. This avoids duplicating the
+        // conflict-write logic at the push site.
+        if !force,
+           let stored,
+           let baseline = stored.remoteModified,
+           !baseline.isEmpty {
+            // ``try?`` rather than ``try`` on the stat: a thrown
+            // error here usually means rmapi auth / network is
+            // broken, and the subsequent ``cloud.put`` would fail
+            // loudly with the same root cause. Skipping the guard
+            // on stat-throw is the optimistic path; it never
+            // silently overwrites because the loud put-failure
+            // surfaces the real problem.
+            let stat = try? await cloud.stat(stored.remotePath)
+            if let stat {
+                // Cloud doc exists. Compare modifiedClient.
+                if stat.modifiedClient != baseline {
+                    Logger.shared.warn(
+                        "push aborted: remote changed since last sync; enqueuing pull to resolve",
+                        meta: [
+                            "doc_id": stored.docID,
+                            "stored_modified": baseline,
+                            "cloud_modified": stat.modifiedClient,
+                            "path": localPath.path,
+                        ]
+                    )
+                    await queue.enqueue(Job(
+                        kind: .pull,
+                        docID: stored.docID,
+                        hint: stored.remotePath
+                    ))
+                    return
+                }
+            } else {
+                // stat succeeded (didn't throw) but returned nil —
+                // the cloud doc is gone at the path state.db
+                // remembered. Either the cloud poller is about to
+                // detect the deletion, or stored.remotePath is
+                // stale (rare, but seen post-v0.2.35 around parked
+                // renames). Either way, ``cloud.put --force`` at a
+                // path with no same-name target creates a NEW cloud
+                // doc rather than updating the existing UUID —
+                // i.e., a duplicate. Refuse the push and let the
+                // poller's deletion-detection (or rename-detection)
+                // path own the resolution.
+                Logger.shared.warn(
+                    "push aborted: cloud doc missing at stored path; deferring to poller",
+                    meta: [
+                        "doc_id": stored.docID,
+                        "stored_remote": stored.remotePath,
+                        "path": localPath.path,
+                    ]
+                )
+                return
+            }
+        }
+
         // Snapshot the about-to-be-pushed bytes for tracked docs.
         // Skipped on first-push (stored == nil): brand-new files
         // have no prior history to capture, and the doc-id isn't

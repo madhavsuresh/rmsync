@@ -37,6 +37,34 @@ actor CloudPoller {
     private static let activeWindow: TimeInterval = 5 * 60
     private static let idleWindow: TimeInterval = 20 * 60
 
+    /// Decide whether the current poll cycle's ``seenIDs`` cardinality
+    /// is plausible enough to act on for delete detection. A
+    /// drastically-shortened listing relative to what state.db tracks
+    /// is more likely a partial response from rmapi (transient,
+    /// retryable on the next cycle) than a genuine wave of cloud-side
+    /// deletions, so we refuse to enqueue ``deleteLocal`` jobs in
+    /// that case.
+    ///
+    /// Threshold logic:
+    ///   - Trivial libraries (``trackedCount < 5``): no gate. The
+    ///     bulk-delete brake at the worker level is sufficient
+    ///     protection at small scale, and a strict ratio gate at
+    ///     these sizes would refuse legitimate deletions of 1-2 docs
+    ///     out of 4-5 total.
+    ///   - Otherwise: ``seenCount`` must be at least 70 % of
+    ///     ``trackedCount``. So a 50-doc library missing 20 in one
+    ///     listing trips the gate (likely partial listing); missing
+    ///     5 of 50 (90 %) does not (legitimate deletion path).
+    /// Static so unit tests can drive the decision directly without
+    /// constructing a CloudPoller.
+    static func shouldRunMissingDetection(
+        seenCount: Int, trackedCount: Int
+    ) -> Bool {
+        guard trackedCount >= 5 else { return true }
+        let floor = Int(Double(trackedCount) * 0.7)
+        return seenCount >= floor
+    }
+
     init(cloud: Cloud, state: State, cfg: Config, queue: JobQueue) {
         self.cloud = cloud
         self.state = state
@@ -209,7 +237,46 @@ actor CloudPoller {
             }
         }
 
-        await handleMissing(seenIDs: seenIDs)
+        // Cardinality gate before delete-detection. If ``cloud.tree``
+        // returned a partial listing (rmapi quirk, paginated-endpoint
+        // mid-flight failure that didn't bubble up as a thrown error,
+        // etc.), ``seenIDs`` would be incomplete and ``handleMissing``
+        // would treat every absent tracked doc as cloud-deleted.
+        // Combined with the two-poll grace and the bulk-delete brake,
+        // a sustained partial listing could still slip through and
+        // mass-trash the user's library.
+        //
+        // First line of defense: if the listing came back with far
+        // fewer documents than state.db tracks, refuse delete-
+        // detection this cycle — wait for the next poll. The
+        // tracked-doc count is read here (not in handleMissing) so
+        // the warn-log is precise about what was suspect.
+        let trackedDocs = (try? await state.allDocuments()) ?? []
+        let trackedDocCount = trackedDocs
+            .filter { $0.docType == "DocumentType" }
+            .count
+        if Self.shouldRunMissingDetection(
+            seenCount: seenIDs.count,
+            trackedCount: trackedDocCount
+        ) {
+            await handleMissing(seenIDs: seenIDs)
+        } else {
+            Logger.shared.warn(
+                "cloud listing returned suspiciously few docs; skipping delete detection this cycle",
+                meta: [
+                    "seen": "\(seenIDs.count)",
+                    "tracked": "\(trackedDocCount)",
+                ]
+            )
+            // Reset pendingDeletes so a subsequent recovered listing
+            // doesn't punish us for the missing-detection skip we
+            // just performed. Otherwise a doc that's *legitimately*
+            // gone but happened to land in a partial-listing cycle
+            // would be one cycle older in pendingDeletes than it
+            // should be — fine, but cleaner to clear and let the
+            // next good listing restart the grace timer.
+            pendingDeletes.removeAll()
+        }
 
         if anyChange {
             lastChangeAt = now()
