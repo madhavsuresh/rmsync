@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-/// One tracked reMarkable document. Mirrors the Python ``Document`` dataclass
-/// and the ``documents`` table schema at v4.
+/// One tracked reMarkable document. Mirrors the ``documents`` table
+/// schema (current at v6 — see ``SchemaMigrator``).
 ///
 /// Invariants carried over from the Python port (see ``CHANGES_FROM_SPEC.md``):
 ///   - ``pageIDs`` is persisted JSON; it MUST be reused across pushes of
@@ -15,7 +15,6 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
     var docID: String
     var parentID: String
     var docType: String            // "DocumentType" | "CollectionType"
-    var title: String
     var remotePath: String
     var localPath: String
     var remoteVersion: Int
@@ -42,7 +41,6 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         case docID = "doc_id"
         case parentID = "parent_id"
         case docType = "doc_type"
-        case title
         case remotePath = "remote_path"
         case localPath = "local_path"
         case remoteVersion = "remote_version"
@@ -63,7 +61,6 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         docID = row["doc_id"]
         parentID = row["parent_id"]
         docType = row["doc_type"]
-        title = row["title"]
         remotePath = row["remote_path"]
         localPath = row["local_path"]
         remoteVersion = row["remote_version"]
@@ -82,7 +79,6 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         container["doc_id"] = docID
         container["parent_id"] = parentID
         container["doc_type"] = docType
-        container["title"] = title
         container["remote_path"] = remotePath
         container["local_path"] = localPath
         container["remote_version"] = remoteVersion
@@ -104,7 +100,6 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         docID: String,
         parentID: String = "",
         docType: String = "DocumentType",
-        title: String = "",
         remotePath: String = "",
         localPath: String = "",
         remoteVersion: Int = 0,
@@ -120,7 +115,6 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         self.docID = docID
         self.parentID = parentID
         self.docType = docType
-        self.title = title
         self.remotePath = remotePath
         self.localPath = localPath
         self.remoteVersion = remoteVersion

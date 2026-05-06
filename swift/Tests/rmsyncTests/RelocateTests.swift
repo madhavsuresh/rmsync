@@ -16,7 +16,6 @@ struct RelocateTests {
             docID: "doc-1",
             parentID: "",
             docType: "DocumentType",
-            title: "Doc 1",
             remotePath: "/Writing/Doc 1",
             localPath: old.appendingPathComponent("Doc 1.md").path
         ))
@@ -24,7 +23,6 @@ struct RelocateTests {
             docID: "doc-2",
             parentID: "",
             docType: "DocumentType",
-            title: "Doc 2",
             remotePath: "/Writing/sub/Doc 2",
             localPath: old.appendingPathComponent("sub/Doc 2.md").path
         ))

@@ -39,7 +39,6 @@ struct PushFailureParkingTests {
         try await state.upsert(Document(
             docID: "parked-doc",
             docType: "DocumentType",
-            title: "parked",
             remotePath: "/Writing/parked",
             localPath: canonical,
             lastSyncedMDHash: hash,
@@ -73,7 +72,6 @@ struct PushFailureParkingTests {
         try await state.upsert(Document(
             docID: "edited-doc",
             docType: "DocumentType",
-            title: "edited",
             remotePath: "/Writing/edited",
             localPath: canonical,
             lastSyncedMDHash: oldHash,
