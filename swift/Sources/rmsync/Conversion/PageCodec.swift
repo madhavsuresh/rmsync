@@ -84,42 +84,38 @@ enum PageCodec {
     }
 
     /// Serialize Markdown into a v6 ``.rm`` byte stream using a stable
-    /// author UUID, preserving every paragraph and inline style the
-    /// tablet supports.
+    /// author UUID. Pushes the entire markdown as a SINGLE CRDT item at
+    /// the canonical slot ``(1, 16)``.
     ///
-    /// Two transforms run before the bytes hit the encoder:
+    /// **Why one item, not many:** v0.2.33 briefly used the rich-text
+    /// encoder (``richTextDocument``) which emits one CRDT item per
+    /// character / format-code, starting at slot 16 every push. Two
+    /// pushes from the same author UUID produced overlapping CRDT IDs
+    /// — the tablet's CRDT engine merged them into a tangle and only
+    /// rendered the resolved tail (e.g. just the most recent paragraph
+    /// the user typed). Under the single-item model each push replaces
+    /// the value at ``(1, 16)`` via last-write-wins; idempotent, no
+    /// collision possible.
     ///
-    ///   1. **Blank-line collapse.** `\n{2,}` → `\n`. The tablet
-    ///      renders empty paragraphs as visible blank lines on top of
-    ///      its own paragraph spacing, which doesn't match pandoc's
-    ///      collapse-to-one-paragraph-break rule. Normalising here
-    ///      keeps the tablet view ≈ pandoc PDF for the same source.
-    ///   2. **Markdown → styled paragraphs.** Each line's leading
-    ///      prefix (`# `, `## `, `- `, `  - `, `- [ ] `, `- [x] `) maps
-    ///      to a tablet ``ParagraphStyle``; the prefix is stripped
-    ///      from the body. Within each body, `***x***` / `**x**` /
-    ///      `*x*` runs become inline bold / italic / bold+italic spans.
-    ///
-    /// The resulting `.rm` round-trips back through ``parsePage`` to
-    /// the same canonical Markdown.
+    /// Cost of the revert: tablet renders headings / bullets / inline
+    /// bold-italic as their literal markdown markers (``# Heading``,
+    /// ``- item``, ``**bold**``) rather than as styled blocks. That's
+    /// the v0.2.0..v0.2.32 behaviour. Restoring rich-text styles would
+    /// require giving each push a unique CRDT slot range (e.g.
+    /// monotonic per-doc counter persisted in state.db) so subsequent
+    /// pushes don't collide with prior ones — out of scope here, this
+    /// commit only stops the data-loss bleeding.
     static func renderPage(text: String, authorUUID: String) throws -> Data {
         guard let uuid = UUID(uuidString: authorUUID) else {
             throw CodecError.invalidAuthorUUID(authorUUID)
         }
-        let normalized = text.replacingOccurrences(
-            of: #"\n{2,}"#, with: "\n", options: .regularExpression
-        )
-        let paragraphs = parseMarkdown(normalized)
         let encoder = RMSceneEncoder()
-        let blocks = encoder.richTextDocument(paragraphs, authorID: uuid)
+        let blocks = encoder.simpleTextDocument(text, authorID: uuid)
         // Wire version for ``.rm`` files we write. Verified
         // byte-identical against Python ``rmscene.write_blocks`` output
         // for ``simple_text_document``; any v3.4+ produces the same
         // bytes for plain-text documents because later revisions only
         // add fields our simple encoding path never touches.
-        //
-        // Constructed per-call because the upstream type isn't
-        // ``Sendable`` yet and we don't want to modify vendored code.
         return try encoder.encode(blocks, version: RemarkableVersion("3.4"))
     }
 
