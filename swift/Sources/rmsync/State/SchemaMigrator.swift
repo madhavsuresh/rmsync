@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Keeps the ``schema_version`` row honest. Fresh databases open at v4.
+/// Keeps the ``schema_version`` row honest. Fresh databases open at v6.
 /// Older DBs from the Python implementation migrate in place: each step
 /// is idempotent and safe to re-run.
 ///
@@ -96,6 +96,24 @@ enum SchemaMigrator {
             }
         }
 
+        // v6 — drop ``title``. The column was a denormalized cache of
+        // "what is this doc called" with two authoritative sources
+        // (local stem, cloud rmdoc.visibleName) and a write-amplification
+        // bug: ``renameRemote`` / ``renameOnLocal`` updated paths but
+        // not ``title``, so retried pushes after a local rename packed
+        // the rmdoc under the stale stem and the cloud rejected with
+        // HTTP 400 (UUID/name mismatch). Killing the field eliminates
+        // the bug class — push now reads the local stem directly. Pull
+        // ignores ``rmdoc.visibleName`` because the local filename is
+        // the WYSIWYG source of truth (v0.2.27+ filenames sync both
+        // ways). SQLite ``DROP COLUMN`` lands in 3.35 (Mar 2021); we
+        // require macOS 13+ which ships 3.39+.
+        migrator.registerMigration("v6_drop_documents_title") { db in
+            if try columnExists(db, table: "documents", column: "title") {
+                try db.execute(sql: "ALTER TABLE documents DROP COLUMN title")
+            }
+        }
+
         try migrator.migrate(writer)
 
         // Keep the legacy ``schema_version`` row in sync for the CLI
@@ -108,7 +126,7 @@ enum SchemaMigrator {
         }
     }
 
-    static let currentSchemaVersion = 5
+    static let currentSchemaVersion = 6
 
     private static func columnExists(
         _ db: Database, table: String, column: String

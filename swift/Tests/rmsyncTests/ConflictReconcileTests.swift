@@ -61,7 +61,6 @@ struct ConflictReconcileTests {
             docID: "test-doc-1",
             parentID: "",
             docType: "DocumentType",
-            title: "note",
             remotePath: "/rmsync-test/note",
             localPath: mdPath,
             remoteVersion: 1,
@@ -107,7 +106,6 @@ struct ConflictReconcileTests {
             docID: "live-conflict-1",
             parentID: "",
             docType: "DocumentType",
-            title: "note",
             remotePath: "/rmsync-test/note",
             localPath: md.path,
             remoteVersion: 1,
@@ -153,7 +151,7 @@ struct ConflictReconcileTests {
         for (id, path) in [("doc-a", mdA.path), ("doc-b", mdB.path)] {
             let doc = Document(
                 docID: id, parentID: "", docType: "DocumentType",
-                title: id, remotePath: "/x/\(id)", localPath: path,
+                remotePath: "/x/\(id)", localPath: path,
                 remoteVersion: 1, remoteModified: "",
                 lastSyncedMDHash: PathUtilities.sha256("x\n"), pageIDs: []
             )

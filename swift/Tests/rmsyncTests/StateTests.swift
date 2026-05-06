@@ -2,9 +2,9 @@ import Foundation
 import Testing
 @testable import rmsync
 
-@Suite("State DB (schema v4)")
+@Suite("State DB")
 struct StateTests {
-    @Test("fresh DB opens at v4")
+    @Test("fresh DB opens at currentSchemaVersion")
     func freshDB() async throws {
         let dir = try tempDir()
         let dbPath = dir.appendingPathComponent("state.db")
@@ -23,7 +23,6 @@ struct StateTests {
             docID: "abc",
             parentID: "",
             docType: "DocumentType",
-            title: "Hello",
             remotePath: "/Writing/Hello",
             localPath: "/tmp/hello.md",
             remoteVersion: 1,
@@ -34,7 +33,7 @@ struct StateTests {
 
         let loaded = try await state.get(docID: "abc")
         #expect(loaded != nil)
-        #expect(loaded?.title == "Hello")
+        #expect(loaded?.remotePath == "/Writing/Hello")
         #expect(loaded?.pageIDs == ["p1", "p2"])
     }
 

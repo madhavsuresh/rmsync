@@ -953,7 +953,6 @@ actor SyncWorker {
             docID: docID,
             parentID: stored?.parentID ?? "",
             docType: "DocumentType",
-            title: rmdoc.visibleName,
             remotePath: remotePath,
             localPath: localPath.path,
             remoteVersion: rmdoc.version,
@@ -1257,11 +1256,12 @@ actor SyncWorker {
 
         // rmapi v0.0.32 names the cloud doc after the .rmdoc filename,
         // not the ``visibleName`` inside the archive. So pack the file
-        // with the visible/local stem — packing by ``doc_id`` spawns
-        // UUID-named cloud phantoms.
-        let visible = stored?.title.isEmpty == false
-            ? stored!.title
-            : localPath.deletingPathExtension().lastPathComponent
+        // with the local stem — packing by ``doc_id`` spawns
+        // UUID-named cloud phantoms. The local file is the WYSIWYG
+        // source of truth (v0.2.27+ filename round-trip), so reading
+        // the stem here means a rename always lands the next push at
+        // the new name — no cached field to drift.
+        let visible = localPath.deletingPathExtension().lastPathComponent
 
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("rmsync-push-\(UUID().uuidString)")
@@ -1373,7 +1373,6 @@ actor SyncWorker {
                     docID: docID,
                     parentID: "",
                     docType: "DocumentType",
-                    title: visible,
                     remotePath: "\(remoteParent)/\(visible)",
                     localPath: localPath.path,
                     remoteVersion: 0,                 // never reached cloud
@@ -1399,7 +1398,6 @@ actor SyncWorker {
                 docID: docID,
                 parentID: "",
                 docType: "DocumentType",
-                title: visible,
                 remotePath: remoteDocPath,
                 localPath: localPath.path,
                 remoteVersion: nextVersion,
