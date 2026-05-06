@@ -316,6 +316,44 @@ actor SyncWorker {
         updated.pendingOp = "pending_rename"
         try await state.upsert(updated)
 
+        // Probe the cloud source before attempting mv. Two failure
+        // modes used to collapse into the same "leak pending_op for
+        // retry" path:
+        //   (a) Network blip / rmapi transient — genuinely retryable.
+        //   (b) Source never existed — e.g. a doc parked from a failed
+        //       first push, then renamed locally. The cloud has
+        //       nothing at ``doc.remotePath``; cloud.mv will fail on
+        //       every restart forever, and ``pending_op`` leaks.
+        // Only (a) deserves the restart-resume treatment. (b) is
+        // permanently moot — clear pending_op and let the next push
+        // create the doc at the new local-derived location (push now
+        // always derives parent from localPath, so it'll land
+        // correctly without needing the rename pipeline to run).
+        let sourceExists: Bool
+        do {
+            sourceExists = try await cloud.stat(doc.remotePath) != nil
+        } catch {
+            // Probe itself failed — assume the source might exist and
+            // attempt mv. If mv also fails, we'll fall through to the
+            // transient-leak path below.
+            sourceExists = true
+        }
+
+        if !sourceExists {
+            Logger.shared.info(
+                "renameRemote: cloud source absent; rename moot, clearing pending_op",
+                meta: [
+                    "doc_id": doc.docID,
+                    "from": doc.remotePath,
+                    "to": newRemote,
+                ]
+            )
+            var giveUp = updated
+            giveUp.pendingOp = nil
+            try? await state.upsert(giveUp)
+            return
+        }
+
         do {
             try await cloud.mv(from: doc.remotePath, to: newRemote)
         } catch {
@@ -495,7 +533,7 @@ actor SyncWorker {
         } else {
             stored = try await state.byLocalPath(job.hint)
         }
-        guard let doc = stored else {
+        guard let preLockDoc = stored else {
             Logger.shared.info(
                 "deleteLocal ignored: no state row (untracked file)",
                 meta: ["hint": job.hint, "doc_id": job.docID ?? ""]
@@ -503,8 +541,23 @@ actor SyncWorker {
             return
         }
 
-        let token = await locks.acquire(doc.docID)
+        let token = await locks.acquire(preLockDoc.docID)
         defer { Task { await token.release() } }
+
+        // Re-read inside the critical section. The pre-lock read
+        // above is needed to compute the lock key (docID), but its
+        // result may be stale if a concurrent renameOnLocal /
+        // renameRemote updated localPath / remotePath while we
+        // waited for the lock. Trash and cloud-rm both consume those
+        // path fields, so a stale snapshot would trash from the
+        // wrong path or rm the wrong cloud entry.
+        guard let doc = try await state.get(docID: preLockDoc.docID) else {
+            Logger.shared.info(
+                "deleteLocal ignored: doc disappeared while waiting for lock",
+                meta: ["doc_id": preLockDoc.docID]
+            )
+            return
+        }
 
         // Bulk-delete brake.
         if let limiter, await !limiter.mayDelete(docID: doc.docID) {
@@ -1042,7 +1095,22 @@ actor SyncWorker {
         let lockKey = stored?.docID ?? "new:\(localPath.path)"
         let token = await locks.acquire(lockKey)
         defer { Task { await token.release() } }
-        try await doPush(localPath: localPath, stored: stored, force: job.force)
+
+        // Re-read state.db inside the critical section. The pre-lock
+        // read above is needed to compute lockKey, but its result may
+        // be stale if a concurrent renameRemote / renameOnLocal /
+        // delete updated state.db while we waited for the lock. Push
+        // operates on path-shaped fields (remotePath, conflictState,
+        // pendingOp, lastSyncedMDHash) that any of those operations
+        // can mutate; using a stale snapshot caused at least one
+        // documented duplicate-cloud-doc race.
+        let storedFresh: Document?
+        if let docID = stored?.docID {
+            storedFresh = try await state.get(docID: docID)
+        } else {
+            storedFresh = try await state.byLocalPath(localPath.path)
+        }
+        try await doPush(localPath: localPath, stored: storedFresh, force: job.force)
     }
 
     private func doPush(
@@ -1281,43 +1349,26 @@ actor SyncWorker {
             to: outArchive
         )
 
-        let remoteParent: String
-        if let stored, let lastSlash = stored.remotePath.lastIndex(of: "/") {
-            // Existing tracked doc: keep its current parent. Local
-            // moves are handled by the rename pipeline (Phase 4
-            // of the v0.2.19 propagation work).
-            remoteParent = String(stored.remotePath[..<lastSlash])
-            // v0.2.26 bugfix: a doc parked from a prior failed
-            // push (v0.2.23+) carries an optimistic
-            // ``stored.remotePath`` that promises a cloud
-            // location whose intermediate folders may never
-            // have been actually created. Phase A only ran the
-            // mkdir chain for ``stored == nil`` — so retries
-            // skipped it and put() failed with "directory
-            // doesn't exist". Defensive-mkdir each prefix here
-            // too. Cheap (rmapi mkdir errors on existing dirs
-            // and we swallow with try?), idempotent.
-            for prefix in PathUtilities.remoteParentPrefixes(remoteParent) {
-                try? await cloud.mkdir(prefix)
-            }
-        } else {
-            // New doc: derive remoteParent from the local file's
-            // position under sync_dir so subdirectory structure
-            // propagates to the cloud. Each prefix in the chain
-            // gets a defensive mkdir; rmapi's mkdir errors when
-            // the folder already exists, so we swallow with
-            // ``try?`` — the goal is "ensure exists", not "create
-            // fresh".
-            let derivation = PathUtilities.localToRemoteParentChain(
-                localPath: localPath,
-                syncDir: cfg.syncDir,
-                remoteFolder: cfg.remoteFolder
-            )
-            for prefix in derivation.mkdirChain {
-                try? await cloud.mkdir(prefix)
-            }
-            remoteParent = derivation.parentPath
+        // Derive remoteParent from the local file's current position
+        // under sync_dir. The local file is the WYSIWYG source of truth
+        // (v0.2.27+), and reading ``stored.remotePath`` here was the
+        // shape behind a class of bugs: parked-then-renamed docs whose
+        // ``renameRemote`` cloud.mv failed left ``stored.remotePath``
+        // stale, and the next push retry then landed at the cached
+        // (wrong) cloud parent. By always re-deriving, push is robust
+        // to any prior rename pipeline state — successful, in-flight,
+        // or failed. Each prefix gets a defensive mkdir (rmapi errors
+        // on existing dirs; we swallow with ``try?``) so retries don't
+        // need to remember whether intermediate folders exist.
+        let derivation = PathUtilities.localToRemoteParentChain(
+            localPath: localPath,
+            syncDir: cfg.syncDir,
+            remoteFolder: cfg.remoteFolder
+        )
+        for prefix in derivation.mkdirChain {
+            try? await cloud.mkdir(prefix)
         }
+        let remoteParent = derivation.parentPath
 
         do {
             try await cloud.put(

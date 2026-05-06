@@ -125,37 +125,6 @@ enum PathUtilities {
         return url
     }
 
-    /// Split a remote folder path like ``/Writing/papers/2026``
-    /// into the chain of nested-prefix paths to defensive-mkdir
-    /// before operating against the leaf:
-    /// ```
-    ///   ["/Writing", "/Writing/papers", "/Writing/papers/2026"]
-    /// ```
-    /// Used by the push retry path: when a previously-parked doc
-    /// is being retried, ``stored.remotePath`` carries the
-    /// originally-intended cloud location, but the cloud directory
-    /// chain may never have been actually created (the original
-    /// push died before mkdir succeeded). Re-running the mkdir
-    /// chain is idempotent and cheap (the caller swallows
-    /// "already exists" errors).
-    ///
-    /// Distinct from ``localToRemoteParentChain`` /
-    /// ``localDirToRemoteChain`` — those derive the cloud path
-    /// from a *local* URL. This one operates on a cloud path
-    /// directly.
-    static func remoteParentPrefixes(_ remoteParent: String) -> [String] {
-        let parts = remoteParent
-            .split(separator: "/", omittingEmptySubsequences: true)
-            .map(String.init)
-        var prefix = ""
-        var result: [String] = []
-        for part in parts {
-            prefix += "/\(part)"
-            result.append(prefix)
-        }
-        return result
-    }
-
     /// Inverse of ``remoteToLocal`` for a *directory* path
     /// (rather than a file's parent). Returns the cloud-side
     /// path of the directory plus the chain of prefixes to
