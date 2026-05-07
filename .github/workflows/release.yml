@@ -264,6 +264,24 @@ jobs:
           # ran on the installed binary because the tap's Formula
           # still matched v0.2.0's shape.
           FORMULA="Formula/rmsync.rb"
+
+          # Re-anchor on the latest tap origin/main right before we
+          # build the bump branch. ``actions/checkout`` fetched main
+          # once at the start of this job, but a previous release's
+          # tap PR can land in the window between checkout and now —
+          # we'd otherwise commit on top of a stale base and the
+          # resulting bump PR would open in the ``CONFLICTING`` state
+          # the moment GitHub re-evaluates against main. Using ``-B``
+          # makes the branch creation idempotent for workflow re-runs;
+          # ``--force-with-lease`` on the push below is the matching
+          # safety net (refuses to overwrite if someone else pushed to
+          # this branch concurrently). Lesson from v0.2.36: a stale
+          # bump-v0.2.36 sat at v0.2.34's main while v0.2.35's tap PR
+          # was still open; once #35 merged, #36 conflicted on the
+          # url/sha lines and required manual resolution.
+          git fetch origin main
+          git checkout -B "bump-${GITHUB_REF_NAME}" origin/main
+
           cp "${GITHUB_WORKSPACE}/main-repo/Formula/rmsync.rb" "$FORMULA"
           # Rewrite the canonical upstream ``url``/``sha256`` placeholders
           # to this tag's values. The upstream Formula ships with
@@ -274,10 +292,9 @@ jobs:
 
           git config user.name "rmsync release bot"
           git config user.email "actions@users.noreply.github.com"
-          git checkout -b "bump-${GITHUB_REF_NAME}"
           git add "$FORMULA"
           git commit -m "rmsync ${GITHUB_REF_NAME}"
-          git push -u origin "bump-${GITHUB_REF_NAME}"
+          git push -u origin "bump-${GITHUB_REF_NAME}" --force-with-lease
 
       - name: Open PR on tap (auto-merge)
         if: steps.check.outputs.has_token == 'true'
