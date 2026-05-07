@@ -296,7 +296,7 @@ jobs:
           git commit -m "rmsync ${GITHUB_REF_NAME}"
           git push -u origin "bump-${GITHUB_REF_NAME}" --force-with-lease
 
-      - name: Open PR on tap (auto-merge)
+      - name: Open PR on tap (wait for CI, then merge)
         if: steps.check.outputs.has_token == 'true'
         working-directory: tap
         env:
@@ -317,7 +317,7 @@ jobs:
           # ALL of v0.2.30 / v0.2.31 release runs failed at 0s
           # before any job could start. Lesson: keep the body
           # string on one line and put the prose in this comment.
-          BODY="Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}. This PR auto-merges once Formula audit passes."
+          BODY="Automated bump from $GITHUB_REPOSITORY release ${GITHUB_REF_NAME}. Merges after Formula audit passes."
           PR_URL=$(gh pr create \
             --title "rmsync ${GITHUB_REF_NAME}" \
             --body  "$BODY" \
@@ -326,9 +326,24 @@ jobs:
             | tail -1)
           echo "Opened tap PR: $PR_URL"
 
-          # Queue auto-merge. Squash commit because the bump's only
-          # one file change and the squash subject doubles as the
-          # changelog entry on tap main. ``--auto`` waits for the
-          # tap's CI (Formula audit) to pass before merging — we
-          # never want a red bump merging silently.
-          gh pr merge "$PR_URL" --squash --auto --delete-branch
+          # Wait for tap CI (Formula audit) to terminate, then merge.
+          #
+          # v0.2.37: replaced ``gh pr merge --auto`` because the
+          # tap's default branch isn't behind branch-protection
+          # rules with auto-merge enabled. ``--auto`` returned
+          # "Pull request is in clean status (enablePullRequestAuto-
+          # Merge)" / "Protected branch rules not configured"
+          # depending on the PR's mergeable-state at call time and
+          # exited 1 — every release run since v0.2.30 went red on
+          # this step even though the PRs eventually merged via a
+          # separate path (or by hand).
+          #
+          # ``gh pr checks --watch`` polls every 10s until all
+          # checks reach a terminal status; exits non-zero if any
+          # required check failed. With ``set -e`` (default for
+          # ``run: |``), a red CI fails this step — preserving the
+          # "never merge a red bump silently" property the old
+          # ``--auto`` flag was meant to provide. On green, fall
+          # through to a direct squash-merge.
+          gh pr checks "$PR_URL" --watch
+          gh pr merge "$PR_URL" --squash --delete-branch
