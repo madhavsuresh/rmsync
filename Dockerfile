@@ -83,7 +83,7 @@ RUN apt-get update \
 # Asset naming verified against ddvk/rmapi v0.0.33 release page:
 #   rmapi-linux-amd64.tar.gz
 #   rmapi-linux-arm64.tar.gz
-ARG RMAPI_VERSION=v0.0.33
+ARG RMAPI_VERSION=v0.0.34
 ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
