@@ -30,16 +30,16 @@ enum PageCodec {
     /// page has no typed text (handwriting-only notebooks / drawing
     /// pages); our pull path treats that as "skip".
     ///
-    /// Block paragraphs join with `\n\n` (canonical CommonMark paragraph
-    /// break) so pandoc renders the file the same way the tablet shows
-    /// it. Adjacent items of the same list family stay tight (single
-    /// `\n`). Empty model paragraphs collapse into the block separator
-    /// rather than emitting extra blank lines — see ``renderPage`` for
-    /// the symmetric push-side normalization.
+    /// The common rmsync push path writes a single plain CRDT string. When
+    /// that shape is present, return it byte-for-byte so a pull does not
+    /// rewrite local Markdown spacing. Tablet-authored/styled pages still use
+    /// the paragraph renderer fallback.
     static func parsePage(_ rmBytes: Data) throws -> String {
         let decoder = RMSceneDecoder()
         let tree = try decoder.decodeTree(from: rmBytes)
         guard let rootText = tree.rootText else { return "" }
+        if let raw = plainTextPayload(rootText) { return raw }
+
         let doc = try TextDocument.fromSceneItem(rootText)
 
         let listStyles: Set<ParagraphStyle> = [.bullet, .bullet2, .checkbox, .checkboxChecked]
@@ -120,6 +120,22 @@ enum PageCodec {
     }
 
     // MARK: - private
+
+    private static func plainTextPayload(_ text: Text) -> String? {
+        let styles = text.styles.orderedPairs
+        guard styles.count == 1,
+              styles[0].0 == .zero,
+              styles[0].1.value == .plain else {
+            return nil
+        }
+        let items = text.items.sequenceItems()
+        guard items.count == 1,
+              items[0].deletedLength == 0,
+              case let .string(raw) = items[0].value else {
+            return nil
+        }
+        return raw
+    }
 
     /// Markdown prefix for each paragraph style the tablet produces.
     /// Mirrors the table in the original Python bridge.

@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 /// One tracked reMarkable document. Mirrors the ``documents`` table
-/// schema (current at v6 — see ``SchemaMigrator``).
+/// schema (current at v7 — see ``SchemaMigrator``).
 ///
 /// Invariants carried over from the Python port (see ``CHANGES_FROM_SPEC.md``):
 ///   - ``pageIDs`` is persisted JSON; it MUST be reused across pushes of
@@ -20,6 +20,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
     var remoteVersion: Int
     var remoteModified: String?
     var lastSyncedMDHash: String?
+    var lastSyncedTabletHash: String?
     var lastPullAt: String?
     var lastPushAt: String?
     var conflictState: String?     // nil | "unresolved"
@@ -46,6 +47,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         case remoteVersion = "remote_version"
         case remoteModified = "remote_modified"
         case lastSyncedMDHash = "last_synced_md_hash"
+        case lastSyncedTabletHash = "last_synced_tablet_hash"
         case lastPullAt = "last_pull_at"
         case lastPushAt = "last_push_at"
         case conflictState = "conflict_state"
@@ -66,6 +68,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         remoteVersion = row["remote_version"]
         remoteModified = row["remote_modified"]
         lastSyncedMDHash = row["last_synced_md_hash"]
+        lastSyncedTabletHash = row["last_synced_tablet_hash"]
         lastPullAt = row["last_pull_at"]
         lastPushAt = row["last_push_at"]
         conflictState = row["conflict_state"]
@@ -84,6 +87,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         container["remote_version"] = remoteVersion
         container["remote_modified"] = remoteModified
         container["last_synced_md_hash"] = lastSyncedMDHash
+        container["last_synced_tablet_hash"] = lastSyncedTabletHash
         container["last_pull_at"] = lastPullAt
         container["last_push_at"] = lastPushAt
         container["conflict_state"] = conflictState
@@ -105,6 +109,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         remoteVersion: Int = 0,
         remoteModified: String? = nil,
         lastSyncedMDHash: String? = nil,
+        lastSyncedTabletHash: String? = nil,
         lastPullAt: String? = nil,
         lastPushAt: String? = nil,
         conflictState: String? = nil,
@@ -120,6 +125,7 @@ struct Document: Codable, Sendable, FetchableRecord, PersistableRecord {
         self.remoteVersion = remoteVersion
         self.remoteModified = remoteModified
         self.lastSyncedMDHash = lastSyncedMDHash
+        self.lastSyncedTabletHash = lastSyncedTabletHash
         self.lastPullAt = lastPullAt
         self.lastPushAt = lastPushAt
         self.conflictState = conflictState

@@ -29,6 +29,7 @@ enum ExplicitSync {
         var remoteModified: String?
         var remoteVersion: Int
         var remoteHash: String?
+        var remoteTabletHash: String?
         var localHashAtPull: String?
         var baselineHash: String?
         var pageIDs: [String]
@@ -71,6 +72,7 @@ enum ExplicitSync {
         var remoteModified: String?
         var remoteVersion: Int?
         var remoteHash: String?
+        var remoteTabletHash: String?
         var localHash: String?
         var stagedPath: String?
         var pageIDs: [String]
@@ -175,13 +177,18 @@ enum ExplicitSync {
             do {
                 let archive = try await cloud.get(node.remotePath, dest: archiveDest)
                 let rmdoc = try await Archive.unpack(archive)
-                let md = try renderMarkdown(rmdoc)
-                try PathUtilities.atomicWriteText(md, to: stagedURL)
-
-                let remoteHash = PathUtilities.sha256(md)
-                let localHash = try? hashIfExists(localURL)
                 let stored = try await state.get(docID: node.id)
                 let byPath = try await state.byLocalPath(localURL.path)
+                let rendered = try renderSourceMarkdown(
+                    rmdoc,
+                    localURL: localURL,
+                    stored: stored ?? byPath
+                )
+                let md = rendered.source
+                try PathUtilities.atomicWriteText(md, to: stagedURL)
+
+                let remoteHash = rendered.sourceHash
+                let localHash = try? hashIfExists(localURL)
                 let baseline = stored?.lastSyncedMDHash ?? byPath?.lastSyncedMDHash
                 let kind = classify(
                     docID: node.id,
@@ -202,6 +209,7 @@ enum ExplicitSync {
                     remoteModified: node.modifiedClient.isEmpty ? nil : node.modifiedClient,
                     remoteVersion: node.version,
                     remoteHash: remoteHash,
+                    remoteTabletHash: rendered.tabletHash,
                     localHashAtPull: localHash,
                     baselineHash: baseline,
                     pageIDs: rmdoc.pages.map(\.pageID),
@@ -218,6 +226,7 @@ enum ExplicitSync {
                     remoteModified: node.modifiedClient.isEmpty ? nil : node.modifiedClient,
                     remoteVersion: node.version,
                     remoteHash: nil,
+                    remoteTabletHash: nil,
                     localHashAtPull: try? hashIfExists(localURL),
                     baselineHash: (try? await state.get(docID: node.id))?.lastSyncedMDHash,
                     pageIDs: [],
@@ -240,6 +249,7 @@ enum ExplicitSync {
                 remoteModified: doc.remoteModified,
                 remoteVersion: doc.remoteVersion,
                 remoteHash: nil,
+                remoteTabletHash: nil,
                 localHashAtPull: try? hashIfExists(URL(fileURLWithPath: doc.localPath)),
                 baselineHash: doc.lastSyncedMDHash,
                 pageIDs: doc.pageIDs,
@@ -483,6 +493,7 @@ enum ExplicitSync {
               let remoteHash = entry.remoteHash else {
             throw SyncError.pathNotStaged(entry.relativePath)
         }
+        let remoteTabletHash = entry.remoteTabletHash ?? remoteHash
         let stagedURL = appendRelative(stagedPath, to: root)
         let localURL = URL(fileURLWithPath: entry.localPath)
         if FileManager.default.fileExists(atPath: localURL.path),
@@ -519,6 +530,7 @@ enum ExplicitSync {
             remoteVersion: entry.remoteVersion,
             remoteModified: entry.remoteModified,
             lastSyncedMDHash: remoteHash,
+            lastSyncedTabletHash: remoteTabletHash,
             lastPullAt: ISO8601.now(),
             lastPushAt: existing?.lastPushAt,
             conflictState: nil,
@@ -531,7 +543,8 @@ enum ExplicitSync {
             docID: entry.docID,
             version: entry.remoteVersion,
             mdHash: remoteHash,
-            modified: entry.remoteModified
+            modified: entry.remoteModified,
+            tabletHash: remoteTabletHash
         )
     }
 
@@ -591,8 +604,10 @@ enum ExplicitSync {
             try await ensureCloudStillAtBaseline(stored, cloud: cloud)
         }
 
+        let tabletText = TabletText.normalizeForTablet(text)
+        let tabletHash = PathUtilities.sha256(tabletText)
         let authorUUID = try await state.getOrCreateAuthorUUID()
-        let pagesMd = PageSplitter.split(text)
+        let pagesMd = PageSplitter.split(tabletText)
         let targetDocID = remoteOverride?.docID ?? stored?.docID ?? UUID().uuidString.lowercased()
         let reuseIDs: [String]
         if stored?.docID == targetDocID {
@@ -663,6 +678,7 @@ enum ExplicitSync {
             remoteVersion: remoteVersion,
             remoteModified: remoteModified,
             lastSyncedMDHash: newHash,
+            lastSyncedTabletHash: tabletHash,
             lastPullAt: existing?.lastPullAt,
             lastPushAt: ISO8601.now(),
             conflictState: nil,
@@ -674,7 +690,8 @@ enum ExplicitSync {
             docID: targetDocID,
             version: remoteVersion,
             mdHash: newHash,
-            modified: remoteModified
+            modified: remoteModified,
+            tabletHash: tabletHash
         )
     }
 
@@ -715,6 +732,7 @@ enum ExplicitSync {
               let hash = item.remoteHash ?? item.localHash else {
             return
         }
+        let tabletHash = item.remoteTabletHash ?? hash
         let existing = try await state.get(docID: docID)
         try await state.upsert(Document(
             docID: docID,
@@ -725,6 +743,7 @@ enum ExplicitSync {
             remoteVersion: remoteVersion,
             remoteModified: item.remoteModified,
             lastSyncedMDHash: hash,
+            lastSyncedTabletHash: tabletHash,
             lastPullAt: existing?.lastPullAt,
             lastPushAt: existing?.lastPushAt,
             conflictState: nil,
@@ -866,6 +885,7 @@ enum ExplicitSync {
             remoteModified: remote?.remoteModified,
             remoteVersion: remote?.remoteVersion,
             remoteHash: remote?.remoteHash,
+            remoteTabletHash: remote?.remoteTabletHash,
             localHash: local?.hash,
             stagedPath: remote?.stagedPath,
             pageIDs: remote?.pageIDs ?? [],
@@ -873,13 +893,49 @@ enum ExplicitSync {
         )
     }
 
-    private static func renderMarkdown(_ rmdoc: Archive.RmDoc) throws -> String {
+    private static func renderTabletMarkdown(_ rmdoc: Archive.RmDoc) throws -> String {
         var pages: [String] = []
         for page in rmdoc.pages {
             let text = try PageCodec.parsePage(page.rmBytes)
             if !text.isEmpty { pages.append(text) }
         }
         return pages.isEmpty ? "" : PageSplitter.join(pages)
+    }
+
+    private static func renderSourceMarkdown(
+        _ rmdoc: Archive.RmDoc,
+        localURL: URL,
+        stored: Document?
+    ) throws -> (source: String, sourceHash: String, tabletHash: String) {
+        let tablet = try renderTabletMarkdown(rmdoc)
+        let tabletHash = PathUtilities.sha256(tablet)
+        guard let stored else { return (tablet, PathUtilities.sha256(tablet), tabletHash) }
+
+        let localText = try? String(contentsOf: localURL, encoding: .utf8)
+        if stored.lastSyncedTabletHash == tabletHash,
+           let localText {
+            return (
+                localText,
+                stored.lastSyncedMDHash ?? PathUtilities.sha256(localText),
+                tabletHash
+            )
+        }
+
+        if let localText,
+           stored.lastSyncedMDHash == PathUtilities.sha256(localText) {
+            let expectedTabletHash = PathUtilities.sha256(TabletText.normalizeForTablet(localText))
+            if stored.lastSyncedTabletHash == nil, expectedTabletHash == tabletHash {
+                return (localText, PathUtilities.sha256(localText), tabletHash)
+            }
+            if let translated = TabletText.sourceByApplyingTabletEdit(
+                baseSource: localText,
+                editedTablet: tablet
+            ) {
+                return (translated, PathUtilities.sha256(translated), tabletHash)
+            }
+        }
+
+        return (tablet, PathUtilities.sha256(tablet), tabletHash)
     }
 
     private static func localPushTargets(cfg: Config, paths: [String]) throws -> [URL] {

@@ -85,6 +85,7 @@ struct ForcePushPlanTests {
             remoteModified: "2026-06-03T00:00:00Z",
             remoteVersion: 7,
             remoteHash: hash,
+            remoteTabletHash: hash,
             localHashAtPull: nil,
             baselineHash: nil,
             pageIDs: ["page-\(rel)"],

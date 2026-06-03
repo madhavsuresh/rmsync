@@ -164,20 +164,18 @@ struct PageCodecRoundTripTests {
 
     // MARK: - paragraph fidelity (WYSIWYG with pandoc)
 
-    /// Round-trip contract: the local file is canonical CommonMark
-    /// (paragraphs separated by `\n\n`), the tablet model never holds
-    /// empty paragraphs (push collapses blank-line runs), and the two
-    /// renderings stay visually aligned. Asserts exact equality so
-    /// regressions back to single-`\n` joining surface immediately.
+    /// Round-trip contract: the native-plain codec preserves local source
+    /// bytes. Tablet display spacing is handled before encoding, not by
+    /// changing what ``parsePage`` returns for a simple text page.
 
     @Test("blank-line paragraph break round-trips as canonical \\n\\n")
     func blankLineRoundTrip() throws {
         #expect(try roundTrip("a\n\nb\n") == "a\n\nb\n")
     }
 
-    @Test("multiple blank lines collapse to a single paragraph break")
-    func multipleBlanksCollapse() throws {
-        #expect(try roundTrip("a\n\n\n\nb\n") == "a\n\nb\n")
+    @Test("multiple blank lines round-trip exactly")
+    func multipleBlanksPreserved() throws {
+        #expect(try roundTrip("a\n\n\n\nb\n") == "a\n\n\n\nb\n")
     }
 
     @Test("heading + body get a blank line between them")
@@ -185,19 +183,27 @@ struct PageCodecRoundTripTests {
         #expect(try roundTrip("# h\n\nbody\n") == "# h\n\nbody\n")
     }
 
-    @Test("single-newline paragraphs are promoted to \\n\\n")
-    func softBreakPromoted() throws {
-        // Pandoc would render the input "a\nb\n" as one joined paragraph
-        // ("a b"), but the tablet shows them as separate paragraphs. The
-        // round-trip stabilizes on the tablet's interpretation: each model
-        // paragraph becomes its own markdown paragraph.
-        #expect(try roundTrip("a\nb\n") == "a\n\nb\n")
+    @Test("single-newline plain source is preserved")
+    func softBreakPreserved() throws {
+        #expect(try roundTrip("a\nb\n") == "a\nb\n")
     }
 
-    @Test("leading and trailing blank lines are dropped")
+    @Test("plain source preserves trailing spaces and final-newline shape")
+    func plainSourceExactSpacing() throws {
+        #expect(try roundTrip("tail space \nnext") == "tail space \nnext")
+        #expect(try roundTrip("no final newline") == "no final newline")
+    }
+
+    @Test("markdown markers stay literal text")
+    func markdownMarkersStayLiteral() throws {
+        let input = "## Heading\n\n- item\n\nbody **bold**\n"
+        #expect(try roundTrip(input) == input)
+    }
+
+    @Test("leading and trailing blank lines round-trip exactly")
     func leadingAndTrailingBlanks() throws {
-        #expect(try roundTrip("\n\na\n") == "a\n")
-        #expect(try roundTrip("a\n\n\n") == "a\n")
+        #expect(try roundTrip("\n\na\n") == "\n\na\n")
+        #expect(try roundTrip("a\n\n\n") == "a\n\n\n")
     }
 
     // MARK: - paragraph styles + inline formatting (deferred)

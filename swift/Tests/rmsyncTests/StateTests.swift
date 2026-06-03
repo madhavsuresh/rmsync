@@ -27,6 +27,7 @@ struct StateTests {
             localPath: "/tmp/hello.md",
             remoteVersion: 1,
             lastSyncedMDHash: "deadbeef",
+            lastSyncedTabletHash: "feedface",
             pageIDs: ["p1", "p2"]
         )
         try await state.upsert(doc)
@@ -34,6 +35,7 @@ struct StateTests {
         let loaded = try await state.get(docID: "abc")
         #expect(loaded != nil)
         #expect(loaded?.remotePath == "/Writing/Hello")
+        #expect(loaded?.lastSyncedTabletHash == "feedface")
         #expect(loaded?.pageIDs == ["p1", "p2"])
     }
 
@@ -71,12 +73,17 @@ struct StateTests {
             errorState: "parse_failed"
         ))
         try await state.markPulled(
-            docID: "x", version: 2, mdHash: "abc", modified: "2026-04-18T00:00:00Z"
+            docID: "x",
+            version: 2,
+            mdHash: "abc",
+            modified: "2026-04-18T00:00:00Z",
+            tabletHash: "tablet"
         )
         let doc = try await state.get(docID: "x")
         #expect(doc?.errorState == nil)
         #expect(doc?.remoteVersion == 2)
         #expect(doc?.lastSyncedMDHash == "abc")
+        #expect(doc?.lastSyncedTabletHash == "tablet")
         #expect(doc?.remoteModified == "2026-04-18T00:00:00Z")
     }
 
