@@ -77,31 +77,39 @@ actor State {
     }
 
     func markPulled(
-        docID: String, version: Int, mdHash: String, modified: String?
+        docID: String,
+        version: Int,
+        mdHash: String,
+        modified: String?,
+        tabletHash: String? = nil
     ) throws {
         try writer.write { db in
             try db.execute(sql: """
                 UPDATE documents
                 SET remote_version = ?, remote_modified = ?, last_synced_md_hash = ?,
-                    last_pull_at = ?, error_state = NULL
+                    last_synced_tablet_hash = ?, last_pull_at = ?, error_state = NULL
                 WHERE doc_id = ?
                 """,
-                arguments: [version, modified, mdHash, ISO8601.now(), docID]
+                arguments: [version, modified, mdHash, tabletHash, ISO8601.now(), docID]
             )
         }
     }
 
     func markPushed(
-        docID: String, version: Int, mdHash: String, modified: String?
+        docID: String,
+        version: Int,
+        mdHash: String,
+        modified: String?,
+        tabletHash: String? = nil
     ) throws {
         try writer.write { db in
             try db.execute(sql: """
                 UPDATE documents
                 SET remote_version = ?, remote_modified = ?, last_synced_md_hash = ?,
-                    last_push_at = ?, error_state = NULL
+                    last_synced_tablet_hash = ?, last_push_at = ?, error_state = NULL
                 WHERE doc_id = ?
                 """,
-                arguments: [version, modified, mdHash, ISO8601.now(), docID]
+                arguments: [version, modified, mdHash, tabletHash, ISO8601.now(), docID]
             )
         }
     }

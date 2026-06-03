@@ -16,18 +16,14 @@ struct PullPathGuardsTests {
 
     /// This is the exact scenario that wiped ``attacks.md`` to 1 byte:
     /// a one-page cloud doc whose page parsed to ``""`` used to flow
-    /// through ``PageSplitter.join([""])`` and produce a lone newline,
-    /// which the pull then atomically wrote over the user's local file.
-    /// We document the underlying behaviour of ``join([""])`` here so
-    /// the fix (skip empty pages, bail when all pages empty) is
-    /// observable as a policy layered *on top of* an otherwise unchanged
-    /// splitter.
-    @Test("PageSplitter.join([\"\"]) still returns a single newline")
-    func joinSingleEmptyStillNewline() {
+    /// through ``PageSplitter.join([""])`` and produce a lone newline.
+    /// The splitter now preserves single-page payloads exactly, so an
+    /// empty page joins to ``""``. The pull path still has the stronger
+    /// all-empty refusal guard before any write reaches disk.
+    @Test("PageSplitter.join([\"\"]) returns empty string")
+    func joinSingleEmptyReturnsEmpty() {
         let out = PageSplitter.join([""])
-        // Length 1, a single '\n'. This is the data-loss payload that
-        // the fix must never hand to ``atomicWriteText``.
-        #expect(out == "\n")
+        #expect(out == "")
     }
 
     @Test("filtering empties then joining yields empty string when all pages empty")

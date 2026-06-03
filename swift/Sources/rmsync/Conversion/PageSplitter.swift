@@ -9,12 +9,14 @@ enum PageSplitter {
     static let pageBreak = "<!-- rmsync:page-break -->"
 
     static func join(_ pages: [String]) -> String {
+        if pages.count == 1 { return pages[0] }
         let cleaned = pages.map { $0.trimmingTrailingNewlines() + "\n" }
         return cleaned.joined(separator: "\n\(pageBreak)\n\n")
     }
 
     static func split(_ markdown: String) -> [String] {
         let pattern = /(?m)^[ \t]*<!--\s*rmsync:page-break\s*-->[ \t]*$/
+        if markdown.firstMatch(of: pattern) == nil { return [markdown] }
         let parts = markdown.split(separator: pattern, omittingEmptySubsequences: false)
         if parts.isEmpty { return [""] }
         return parts.map { piece -> String in

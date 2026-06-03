@@ -882,12 +882,66 @@ actor SyncWorker {
         // Drop empty pages (handwriting-only / drawing) before join so
         // they don't contribute a blank section to the rendered markdown.
         let nonEmpty = pagesMd.filter { !$0.isEmpty }
-        let newMD = nonEmpty.isEmpty ? "" : PageSplitter.join(nonEmpty)
+        let tabletMD = nonEmpty.isEmpty ? "" : PageSplitter.join(nonEmpty)
+        let tabletHash = PathUtilities.sha256(tabletMD)
+        let localText = (try? String(contentsOf: localPath, encoding: .utf8)) ?? ""
+        let currentLocalHash = FileManager.default.fileExists(atPath: localPath.path)
+            ? PathUtilities.sha256(localText)
+            : nil
+
+        if let stored,
+           stored.lastSyncedTabletHash == tabletHash {
+            if let currentLocalHash,
+               currentLocalHash == stored.lastSyncedMDHash {
+                try await state.markPulled(
+                    docID: docID,
+                    version: rmdoc.version,
+                    mdHash: stored.lastSyncedMDHash ?? currentLocalHash,
+                    modified: stored.remoteModified,
+                    tabletHash: tabletHash
+                )
+            }
+            Logger.shared.debug("pull no-op (tablet hash unchanged)", meta: ["doc_id": docID])
+            return
+        }
+
+        var newMD = tabletMD
+        if let stored,
+           let currentLocalHash,
+           currentLocalHash == stored.lastSyncedMDHash {
+            let expectedTabletHash = PathUtilities.sha256(TabletText.normalizeForTablet(localText))
+            if stored.lastSyncedTabletHash == nil, expectedTabletHash == tabletHash {
+                try await state.markPulled(
+                    docID: docID,
+                    version: rmdoc.version,
+                    mdHash: currentLocalHash,
+                    modified: stored.remoteModified,
+                    tabletHash: tabletHash
+                )
+                Logger.shared.debug("pull no-op (derived tablet hash unchanged)", meta: ["doc_id": docID])
+                return
+            }
+            if let translated = TabletText.sourceByApplyingTabletEdit(
+                baseSource: localText,
+                editedTablet: tabletMD
+            ) {
+                newMD = translated
+            }
+        }
         let newHash = PathUtilities.sha256(newMD)
 
         // Short-circuit: content hasn't changed since we last synced.
         if stored?.lastSyncedMDHash == newHash {
-            Logger.shared.debug("pull no-op (hash unchanged)", meta: ["doc_id": docID])
+            if let stored {
+                try await state.markPulled(
+                    docID: docID,
+                    version: rmdoc.version,
+                    mdHash: newHash,
+                    modified: stored.remoteModified,
+                    tabletHash: tabletHash
+                )
+            }
+            Logger.shared.debug("pull no-op (source hash unchanged)", meta: ["doc_id": docID])
             return
         }
 
@@ -896,7 +950,7 @@ actor SyncWorker {
         if FileManager.default.fileExists(atPath: localPath.path),
            let stored = stored,
            let lastHash = stored.lastSyncedMDHash,
-           let currentHash = try? PathUtilities.sha256File(localPath),
+           let currentHash = currentLocalHash,
            currentHash != lastHash {
             localChanged = true
         }
@@ -1011,6 +1065,7 @@ actor SyncWorker {
             remoteVersion: rmdoc.version,
             remoteModified: remoteModified,
             lastSyncedMDHash: newHash,
+            lastSyncedTabletHash: tabletHash,
             lastPullAt: nil,
             lastPushAt: stored?.lastPushAt,
             conflictState: nil,
@@ -1022,7 +1077,8 @@ actor SyncWorker {
             docID: docID,
             version: rmdoc.version,
             mdHash: newHash,
-            modified: remoteModified
+            modified: remoteModified,
+            tabletHash: tabletHash
         )
         Logger.shared.info(
             "pulled", meta: ["doc_id": docID, "path": localPath.path]
@@ -1337,7 +1393,9 @@ actor SyncWorker {
         // character-by-character merge.
         let authorUUID = try await state.getOrCreateAuthorUUID()
 
-        let pagesMd = PageSplitter.split(text)
+        let tabletText = TabletText.normalizeForTablet(text)
+        let tabletHash = PathUtilities.sha256(tabletText)
+        let pagesMd = PageSplitter.split(tabletText)
         var pageBytes: [Data] = []
         pageBytes.reserveCapacity(pagesMd.count)
         switch cfg.pushStrategy {
@@ -1505,6 +1563,7 @@ actor SyncWorker {
                     localPath: localPath.path,
                     remoteVersion: 0,                 // never reached cloud
                     lastSyncedMDHash: newHash,
+                    lastSyncedTabletHash: tabletHash,
                     errorState: "push_failed",
                     pageIDs: pageIDs
                 )
@@ -1531,6 +1590,7 @@ actor SyncWorker {
                 remoteVersion: nextVersion,
                 remoteModified: newModified,
                 lastSyncedMDHash: newHash,
+                lastSyncedTabletHash: tabletHash,
                 pageIDs: pageIDs
             )
             try await state.upsert(fresh)
@@ -1541,7 +1601,8 @@ actor SyncWorker {
             docID: docID,
             version: nextVersion,
             mdHash: newHash,
-            modified: newModified
+            modified: newModified,
+            tabletHash: tabletHash
         )
         // A successful push contradicts any prior "rmapi cloud
         // is broken" classification on the bus. Clear it so the

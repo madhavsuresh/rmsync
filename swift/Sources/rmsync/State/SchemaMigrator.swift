@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Keeps the ``schema_version`` row honest. Fresh databases open at v6.
+/// Keeps the ``schema_version`` row honest. Fresh databases open at v7.
 /// Older DBs from the Python implementation migrate in place: each step
 /// is idempotent and safe to re-run.
 ///
@@ -114,6 +114,18 @@ enum SchemaMigrator {
             }
         }
 
+        // v7 — track the text actually written to the tablet separately
+        // from the source Markdown hash. This lets pulls preserve the exact
+        // local source bytes when the tablet-side spacing-normalized text has
+        // not changed.
+        migrator.registerMigration("v7_tablet_hash") { db in
+            if try !columnExists(db, table: "documents", column: "last_synced_tablet_hash") {
+                try db.execute(
+                    sql: "ALTER TABLE documents ADD COLUMN last_synced_tablet_hash TEXT"
+                )
+            }
+        }
+
         try migrator.migrate(writer)
 
         // Keep the legacy ``schema_version`` row in sync for the CLI
@@ -126,7 +138,7 @@ enum SchemaMigrator {
         }
     }
 
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 7
 
     private static func columnExists(
         _ db: Database, table: String, column: String

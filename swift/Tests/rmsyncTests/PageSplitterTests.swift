@@ -16,8 +16,11 @@ struct PageSplitterTests {
 
     @Test("split returns a single page when no separator present")
     func splitNoSeparator() {
-        let parts = PageSplitter.split("just one page\n")
+        let source = "just one page\n\nwith source spacing"
+        let parts = PageSplitter.split(source)
         #expect(parts.count == 1)
+        #expect(parts[0] == source)
+        #expect(PageSplitter.join(parts) == source)
     }
 
     /// The reason we use the HTML-comment sentinel: ``---`` alone must
