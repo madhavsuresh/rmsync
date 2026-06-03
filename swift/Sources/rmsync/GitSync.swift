@@ -310,7 +310,17 @@ enum GitSync {
 
     struct SnapshotFile: Sendable {
         var relativePath: String
-        var file: URL
+        var source: Git.TreeSource
+
+        init(relativePath: String, file: URL) {
+            self.relativePath = relativePath
+            self.source = .file(file)
+        }
+
+        init(relativePath: String, blob: String) {
+            self.relativePath = relativePath
+            self.source = .blob(blob)
+        }
     }
 
     static func createSnapshotCommit(
@@ -320,18 +330,32 @@ enum GitSync {
         stage: ExplicitSync.StageResult,
         message: String
     ) async throws -> String {
-        let files = try stage.entries.compactMap { entry -> SnapshotFile? in
+        var files: [SnapshotFile] = []
+        for entry in stage.entries {
             if entry.kind == .error {
                 throw Error.cloudSnapshotFailed(["\(entry.relativePath): \(entry.error ?? "unknown error")"])
             }
-            guard entry.kind != .deleted,
-                  let stagedPath = entry.stagedPath else {
-                return nil
+            if entry.kind == .deleted {
+                continue
             }
-            return SnapshotFile(
+            if let stagedPath = entry.stagedPath {
+                files.append(SnapshotFile(
+                    relativePath: entry.relativePath,
+                    file: appendRelative(stagedPath, to: stage.root)
+                ))
+                continue
+            }
+
+            guard entry.kind == .unchanged || entry.kind == .localModified else {
+                throw Error.cloudSnapshotFailed([
+                    "\(entry.relativePath): staged source missing for \(entry.kind.rawValue)"
+                ])
+            }
+            let path = repoPath(syncRoot: cfg.syncRoot, relativePath: entry.relativePath)
+            files.append(SnapshotFile(
                 relativePath: entry.relativePath,
-                file: appendRelative(stagedPath, to: stage.root)
-            )
+                blob: try await git.blobID(baseCommit, path: path)
+            ))
         }
         let tree = try await createSnapshotTree(
             git: git,
@@ -350,7 +374,10 @@ enum GitSync {
     ) async throws -> String {
         let removed = try await syncedMarkdownPaths(git: git, commit: baseCommit, cfg: cfg)
         let added = files.map { file in
-            (path: repoPath(syncRoot: cfg.syncRoot, relativePath: file.relativePath), file: file.file)
+            Git.TreeAddition(
+                path: repoPath(syncRoot: cfg.syncRoot, relativePath: file.relativePath),
+                source: file.source
+            )
         }
         return try await git.writeTree(baseCommit: baseCommit, removing: removed, adding: added)
     }

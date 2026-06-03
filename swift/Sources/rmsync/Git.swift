@@ -5,6 +5,16 @@ struct Git: Sendable {
         var tree: String
     }
 
+    enum TreeSource: Sendable {
+        case file(URL)
+        case blob(String)
+    }
+
+    struct TreeAddition: Sendable {
+        var path: String
+        var source: TreeSource
+    }
+
     enum GitError: Error, CustomStringConvertible {
         case notRepository(String)
         case commandFailed(args: [String], exitCode: Int32, stdout: String, stderr: String)
@@ -148,10 +158,25 @@ struct Git: Sendable {
         try await run(["hash-object", "-w", file.path])
     }
 
+    func blobID(_ commit: String, path: String) async throws -> String {
+        try await run(["rev-parse", "\(commit):\(path)"])
+    }
+
     func writeTree(
         baseCommit: String,
         removing removedPaths: [String],
         adding addedFiles: [(path: String, file: URL)]
+    ) async throws -> String {
+        let additions = addedFiles.map { file in
+            Git.TreeAddition(path: file.path, source: .file(file.file))
+        }
+        return try await writeTree(baseCommit: baseCommit, removing: removedPaths, adding: additions)
+    }
+
+    func writeTree(
+        baseCommit: String,
+        removing removedPaths: [String],
+        adding additions: [TreeAddition]
     ) async throws -> String {
         let common = try await commonDir()
         let index = common
@@ -171,10 +196,16 @@ struct Git: Sendable {
             _ = try await run(["update-index", "--force-remove", "--", path], env: env)
         }
 
-        for file in addedFiles.sorted(by: { $0.path < $1.path }) {
-            let blob = try await hashObject(file.file)
+        for addition in additions.sorted(by: { $0.path < $1.path }) {
+            let blob: String
+            switch addition.source {
+            case .file(let file):
+                blob = try await hashObject(file)
+            case .blob(let existing):
+                blob = existing
+            }
             _ = try await run(
-                ["update-index", "--add", "--cacheinfo", "100644,\(blob),\(file.path)"],
+                ["update-index", "--add", "--cacheinfo", "100644,\(blob),\(addition.path)"],
                 env: env
             )
         }

@@ -62,6 +62,40 @@ struct GitSyncSyntheticTests {
         #expect(try await pathExists(git: git, tree: tree, path: "docs/nested/old.md") == false)
     }
 
+    @Test("cloud snapshot commit preserves unchanged entries without staged files")
+    func cloudSnapshotCommitPreservesUnstagedUnchangedEntries() async throws {
+        let repo = try await makeRepo("snapshot-commit")
+        try write("base a\n", to: repo.appendingPathComponent("a.md"))
+        try write("base b\n", to: repo.appendingPathComponent("b.md"))
+        try await commitAll(repo, "base")
+
+        let git = try await Git.open(at: repo)
+        let base = try await git.headCommit()
+        let stageRoot = try scratchRoot()
+            .appendingPathComponent("rmsync-git-stage-\(UUID().uuidString)", isDirectory: true)
+        try write("cloud b\n", to: stageRoot.appendingPathComponent("files/b.md"))
+        let stage = ExplicitSync.StageResult(
+            id: "stage",
+            root: stageRoot,
+            entries: [
+                stageEntry(kind: .unchanged, relativePath: "a.md", stagedPath: nil, repo: repo),
+                stageEntry(kind: .modified, relativePath: "b.md", stagedPath: "files/b.md", repo: repo),
+            ]
+        )
+        let cfg = GitSync.RepoConfig(name: "snapshot-commit", syncRoot: ".", remoteRoot: "sync")
+
+        let commit = try await GitSync.createSnapshotCommit(
+            git: git,
+            baseCommit: base,
+            cfg: cfg,
+            stage: stage,
+            message: "snapshot\n"
+        )
+
+        #expect(try await git.show(commit, path: "a.md") == "base a\n")
+        #expect(try await git.show(commit, path: "b.md") == "cloud b\n")
+    }
+
     private func cleanIndependentEdits() async throws {
         let repo = try await makeRepo("clean-independent")
         try write("base a\n", to: repo.appendingPathComponent("a.md"))
@@ -224,6 +258,30 @@ struct GitSyncSyntheticTests {
     private func pathExists(git: Git, tree: String, path: String) async throws -> Bool {
         let result = try await git.runResult(["cat-file", "-e", "\(tree):\(path)"])
         return result.exitCode == 0
+    }
+
+    private func stageEntry(
+        kind: ExplicitSync.ChangeKind,
+        relativePath: String,
+        stagedPath: String?,
+        repo: URL
+    ) -> ExplicitSync.Entry {
+        ExplicitSync.Entry(
+            kind: kind,
+            docID: relativePath,
+            remotePath: "/sync/snapshot-commit/\(relativePath)",
+            localPath: repo.appendingPathComponent(relativePath).path,
+            relativePath: relativePath,
+            stagedPath: stagedPath,
+            remoteModified: nil,
+            remoteVersion: 1,
+            remoteHash: nil,
+            remoteTabletHash: nil,
+            localHashAtPull: nil,
+            baselineHash: nil,
+            pageIDs: [],
+            error: nil
+        )
     }
 
     private func runGit(_ args: [String], cwd: URL) async throws {
