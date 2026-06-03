@@ -24,6 +24,8 @@ rmsync accept <path>                 # apply one staged cloud change locally
 rmsync accept --all                  # apply all staged non-delete changes
 rmsync push [path ...]               # push local Markdown changes to cloud
 rmsync push --include-deletes        # also propagate tracked local deletes
+rmsync force-push                    # preview replacing cloud with local tree
+rmsync force-push --apply            # overwrite/delete remote-only cloud docs
 rmsync doctor                        # full self-check (10 items)
 rmsync logs -f                       # follow the daemon log
 rmsync conflicts                     # list any unresolved .md.conflict files
@@ -76,6 +78,10 @@ Safety gates that protect against accidents:
 - **Explicit delete flags.** Cloud-side staged deletes require
   `rmsync accept --include-deletes`; local deletions require
   `rmsync push --include-deletes`.
+- **Previewed force-push.** `rmsync force-push` first downloads the
+  current cloud state into staging and prints what local state would
+  create, overwrite, or delete remotely. Only
+  `rmsync force-push --apply` mutates the cloud.
 
 The old automatic delete-propagation knob remains in config for older
 state and worker code paths, but the status-only daemon no longer acts
@@ -131,6 +137,21 @@ trash before overwriting, so a mistaken restore is itself
 recoverable via `rmsync trash restore`. It does not push
 automatically; run `rmsync push <path>` after you inspect the restored
 file.
+
+**Server-wins recovery.** If the local Markdown tree is definitely the
+source of truth and the tablet/cloud copy should be replaced wholesale,
+run:
+
+```sh
+rmsync force-push
+# inspect the staged remote snapshot and plan
+rmsync force-push --apply
+```
+
+The preview stage downloads the current remote docs under the staging
+directory, so remote-only docs and overwritten remote content are still
+inspectable before you apply. Applying replaces same-path remote docs,
+uploads local-only files, and moves remote-only docs to cloud trash.
 
 ---
 
@@ -445,6 +466,8 @@ rmsync diff               # review staged cloud changes
 rmsync accept <path>      # apply one staged cloud change locally
 rmsync accept --all       # apply all staged non-delete changes
 rmsync push [path ...]    # push local Markdown changes to cloud
+rmsync force-push         # preview server-wins overwrite of cloud state
+rmsync force-push --apply # apply the server-wins overwrite
 rmsync logs -f            # tail the structured JSON log
 rmsync pause              # suspend syncing (persists across restarts)
 rmsync resume             # clear the pause flag

@@ -342,6 +342,60 @@ struct PushCmd: AsyncParsableCommand {
     }
 }
 
+struct ForcePushCmd: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "force-push",
+        abstract: "Overwrite the remote cloud folder with the local Markdown tree."
+    )
+
+    @Flag(name: .long, help: "Apply the force push. Without this flag, only stage and preview.")
+    var apply: Bool = false
+
+    func run() async throws {
+        do {
+            let cfg = try Config.load()
+            let state = try State(path: Paths.stateDBPath)
+            let plan = try await ExplicitSync.planForcePush(cfg: cfg, state: state)
+
+            print("staged remote snapshot: \(plan.stage.id)")
+            print("stage dir:              \(plan.stage.root.path)")
+            ExplicitSync.printForcePushPlan(plan.items)
+
+            let destructive = plan.items.filter {
+                $0.action == .overwriteRemote || $0.action == .deleteRemote
+            }.count
+            if !apply {
+                print("")
+                print("preview only; no cloud changes made")
+                print("rerun with: rmsync force-push --apply")
+                if destructive > 0 {
+                    print("warning: --apply will overwrite/delete \(destructive) remote doc(s)")
+                }
+                return
+            }
+
+            print("")
+            print("applying server-wins force push...")
+            let result = try await ExplicitSync.applyForcePush(
+                plan,
+                cfg: cfg,
+                state: state
+            )
+            for refusal in result.refused {
+                print("refused: \(refusal)")
+            }
+            print("created:     \(result.created)")
+            print("overwritten: \(result.overwritten)")
+            print("deleted:     \(result.deleted)")
+            print("unchanged:   \(result.unchanged)")
+            if !result.refused.isEmpty { throw ExitCode(1) }
+        } catch let error as ExplicitSync.SyncError {
+            print(error.description)
+            throw ExitCode(1)
+        }
+    }
+}
+
 private func printSummary(_ entries: [ExplicitSync.Entry]) {
     let grouped = Dictionary(grouping: entries, by: \.kind)
     for kind in [

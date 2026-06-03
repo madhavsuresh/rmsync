@@ -66,7 +66,7 @@ Without this, the daemon will run but `rmsync doctor` fails on the
 
 ## Daily commands
 
-All 10 subcommands. Run any of them from anywhere.
+Core subcommands. Run any of them from anywhere.
 
 | Command | What it does | Mechanism |
 |---|---|---|
@@ -78,6 +78,8 @@ All 10 subcommands. Run any of them from anywhere.
 | `rmsync accept --include-deletes <path>` | Accept staged cloud deletes, moving local files to trash | Staging → `.rmsync-trash` |
 | `rmsync push [path ...]` | Push local Markdown changes to the cloud | Direct rmapi |
 | `rmsync push --include-deletes` | Also propagate tracked local files missing on disk | Direct rmapi |
+| `rmsync force-push` | Stage current cloud state and preview replacing it with the local tree | rmapi + staging dir |
+| `rmsync force-push --apply` | Replace same-path cloud docs, upload local-only docs, and trash remote-only docs | Direct rmapi |
 | `rmsync pause` | Set the paused status flag | IPC → state DB |
 | `rmsync resume` | Clear the paused status flag | IPC → state DB |
 | `rmsync sync-now` | Deprecated; automatic polling is disabled | IPC |
@@ -136,6 +138,32 @@ rmsync accept path/from/diff.md
 content into the staging area, classifies each path as added, modified,
 deleted, conflict, or local_modified, and leaves local state untouched
 until you accept a staged entry.
+
+### …make my Mac copy overwrite the tablet/cloud copy
+
+Use `force-push` when the local Markdown tree is the authority and the
+current reMarkable cloud state should be replaced wholesale.
+
+```sh
+rmsync force-push
+# review the printed create_remote / overwrite_remote / delete_remote plan
+# inspect the staged remote snapshot if needed
+rmsync force-push --apply
+```
+
+The preview command always downloads the current cloud state into the
+staging directory before printing the plan. Applying the plan:
+
+1. replaces remote docs whose paths also exist locally,
+2. uploads local-only Markdown files,
+3. moves remote-only docs to the reMarkable cloud trash,
+4. refuses any remote doc that failed to stage, because deleting or
+   overwriting content that was not downloaded would defeat the recovery
+   point.
+
+`force-push` bypasses cloud-baseline conflict checks, but it does not
+bypass local data-loss guards: dataless File Provider placeholders and
+suspicious empty local reads are still refused.
 
 ### …move the sync dir to Dropbox (or anywhere else)
 
@@ -517,6 +545,34 @@ You'll see `rmsync.doc_id`, `rmsync.remote_path`,
 `rmsync.remote_modified`, `rmsync.page_ids`, plus the Finder
 `kMDItemWhereFroms` / `kMDItemKind` / `_kMDItemUserTags` entries that
 surface in Finder's Get Info panel.
+
+### How versioning works
+
+rmsync is not Git and does not keep a commit graph. It also does not
+merge local Markdown edits with tablet edits using a CRDT.
+
+The durable sync baseline is the `documents` table in
+`state.db`. Each row stores:
+
+- the reMarkable document UUID (`doc_id`),
+- the local and remote paths,
+- the cloud `ModifiedClient` timestamp from `rmapi stat`,
+- the last synced Markdown SHA-256 hash,
+- the page IDs reused on future pushes,
+- pull/push timestamps and conflict/error markers.
+
+The push path is optimistic: before a normal push, it stats the cloud
+doc and refuses the push if the cloud `ModifiedClient` no longer
+matches the stored baseline. The pull path compares local hash, remote
+hash, and baseline hash, then stages conflicts instead of merging them.
+`remote_version` is kept as a local counter for packed archives, but on
+modern sync15 cloud metadata the server-side `Version` field is not a
+reliable change signal; `ModifiedClient` is.
+
+The `.rm` page payloads that rmsync writes do use reMarkable's
+CRDT-shaped scene format internally so the tablet accepts typed text and
+page IDs remain stable. That CRDT is inside the document payload; it is
+not a cross-device merge engine in rmsync.
 
 ---
 
