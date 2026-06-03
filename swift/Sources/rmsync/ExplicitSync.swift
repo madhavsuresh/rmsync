@@ -55,6 +55,11 @@ enum ExplicitSync {
         var refused: [String] = []
     }
 
+    private enum PushFileOutcome {
+        case uploaded
+        case skipped
+    }
+
     enum ForcePushAction: String, Codable, Sendable {
         case createRemote = "create_remote"
         case overwriteRemote = "overwrite_remote"
@@ -365,8 +370,12 @@ enum ExplicitSync {
             guard seen.insert(path).inserted else { continue }
             do {
                 if FileManager.default.fileExists(atPath: path) {
-                    try await pushFile(target, cfg: cfg, state: state, cloud: cloud, force: force)
-                    result.pushed += 1
+                    switch try await pushFile(target, cfg: cfg, state: state, cloud: cloud, force: force) {
+                    case .uploaded:
+                        result.pushed += 1
+                    case .skipped:
+                        result.skipped += 1
+                    }
                 } else if includeDeletes {
                     try await pushDelete(target, state: state, cloud: cloud, force: force)
                     result.pushed += 1
@@ -568,6 +577,7 @@ enum ExplicitSync {
 
     // MARK: - push helpers
 
+    @discardableResult
     private static func pushFile(
         _ localURL: URL,
         cfg: Config,
@@ -575,12 +585,12 @@ enum ExplicitSync {
         cloud: Cloud,
         force: Bool,
         remoteOverride: ForcePushPlanItem? = nil
-    ) async throws {
+    ) async throws -> PushFileOutcome {
         guard PathUtilities.resolvedRelativePath(from: cfg.syncDir, to: localURL) != nil else {
             throw SyncError.invalidPath(localURL.path)
         }
         if WatcherFilter.shouldIgnore(localURL.path, root: cfg.syncDir, mode: .markdown) {
-            return
+            return .skipped
         }
 
         let stored = try await state.byLocalPath(localURL.path)
@@ -598,6 +608,10 @@ enum ExplicitSync {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            previouslyNonEmpty {
             throw SyncError.localEmptyWouldOverwrite(displayPath(localURL, syncDir: cfg.syncDir))
+        }
+
+        if !force, let stored, stored.lastSyncedMDHash == newHash {
+            return .skipped
         }
 
         if !force, let stored {
@@ -693,6 +707,7 @@ enum ExplicitSync {
             modified: remoteModified,
             tabletHash: tabletHash
         )
+        return .uploaded
     }
 
     private static func pushDelete(
