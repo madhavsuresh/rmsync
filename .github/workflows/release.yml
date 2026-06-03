@@ -338,12 +338,37 @@ jobs:
           # this step even though the PRs eventually merged via a
           # separate path (or by hand).
           #
-          # ``gh pr checks --watch`` polls every 10s until all
-          # checks reach a terminal status; exits non-zero if any
-          # required check failed. With ``set -e`` (default for
-          # ``run: |``), a red CI fails this step — preserving the
-          # "never merge a red bump silently" property the old
-          # ``--auto`` flag was meant to provide. On green, fall
-          # through to a direct squash-merge.
+          # GitHub often needs a few seconds to attach the tap CI run
+          # to the freshly-opened PR. ``gh pr checks --watch`` exits 1
+          # immediately if it sees "no checks reported", so wait until
+          # at least one check exists before entering watch mode.
+          CHECK_WAIT_ATTEMPTS=60
+          for (( attempt=1; attempt<=CHECK_WAIT_ATTEMPTS; attempt++ )); do
+            set +e
+            CHECK_COUNT=$(gh pr checks "$PR_URL" --json name --jq 'length' 2>/dev/null)
+            set -e
+
+            case "$CHECK_COUNT" in
+              ''|*[!0-9]*) CHECK_COUNT=0 ;;
+            esac
+
+            if [ "$CHECK_COUNT" -gt 0 ]; then
+              break
+            fi
+
+            if [ "$attempt" -eq "$CHECK_WAIT_ATTEMPTS" ]; then
+              echo "Timed out waiting for tap CI checks to appear on $PR_URL" >&2
+              exit 1
+            fi
+
+            echo "Waiting for tap CI checks to appear ($attempt/$CHECK_WAIT_ATTEMPTS)..."
+            sleep 5
+          done
+
+          # ``gh pr checks --watch`` polls every 10s until all checks
+          # reach a terminal status; exits non-zero if any required
+          # check failed. With ``set -e`` (default for ``run: |``), a
+          # red CI fails this step. On green, fall through to a direct
+          # squash-merge.
           gh pr checks "$PR_URL" --watch
           gh pr merge "$PR_URL" --squash --delete-branch
