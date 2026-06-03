@@ -29,6 +29,7 @@ Everything else the daemon needs:
 ```
 ~/.config/rmsync/config.toml                           # config
 ~/Library/Application Support/rmsync/state.db          # SQLite state
+~/Library/Application Support/rmsync/remote-cache/     # rendered pull snapshot cache
 ~/Library/Application Support/rmsync/ipc.sock          # live IPC socket
 ~/Library/Application Support/rmsync/status.json       # slow-cadence snapshot
 ~/Library/Logs/rmsync/stderr.log                       # structured daemon log
@@ -38,6 +39,7 @@ Everything else the daemon needs:
 ```
 
 The agents start automatically at login and restart on crash.
+Set `RM_SYNC_CACHE_DIR` to move the pull snapshot cache somewhere else.
 
 ### One prerequisite: rmapi must be authenticated
 
@@ -73,7 +75,8 @@ Core subcommands. Run any of them from anywhere.
 | Command | What it does | Mechanism |
 |---|---|---|
 | `rmsync status` | Current state, tracked docs, last pull/push, conflicts, errors | Live IPC |
-| `rmsync pull` | Fetch cloud changes into a staging area without touching local files | rmapi + staging dir |
+| `rmsync pull` | Fetch cloud changes into a staging area without touching local files | rmapi + remote cache + staging dir |
+| `rmsync pull --full` | Bypass the remote cache and re-download every cloud document | rmapi + staging dir |
 | `rmsync diff [path]` | Show currently staged cloud changes, or a unified diff for one path | Staging manifest |
 | `rmsync accept <path>` | Apply selected staged cloud changes locally | Staging → sync dir |
 | `rmsync accept --all` | Apply every staged non-delete cloud change | Staging → sync dir |
@@ -137,10 +140,12 @@ rmsync diff path/from/diff.md
 rmsync accept path/from/diff.md
 ```
 
-`rmsync pull` never overwrites local files directly. It downloads cloud
-content into the staging area, classifies each path as added, modified,
-deleted, conflict, or local_modified, and leaves local state untouched
-until you accept a staged entry.
+`rmsync pull` never overwrites local files directly. It stages cloud
+content, classifies each path as added, modified, deleted, conflict, or
+local_modified, and leaves local state untouched until you accept a
+staged entry. Repeated pulls reuse a verified remote snapshot cache when
+the cloud metadata fingerprint is unchanged; pass `--full` to bypass the
+cache and re-download every cloud document.
 
 ### …make my Mac copy overwrite the tablet/cloud copy
 

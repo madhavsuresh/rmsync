@@ -71,4 +71,11 @@ enum Paths {
         }
         return stateDir.appendingPathComponent("tmp", isDirectory: true)
     }
+
+    static var remoteCacheDir: URL {
+        if let override = ProcessInfo.processInfo.environment["RM_SYNC_CACHE_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return stateDir.appendingPathComponent("remote-cache", isDirectory: true)
+    }
 }

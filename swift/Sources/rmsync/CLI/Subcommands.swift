@@ -224,11 +224,14 @@ struct PullCmd: AsyncParsableCommand {
         abstract: "Fetch cloud changes into a staging area without touching local files."
     )
 
+    @Flag(name: .long, help: "Bypass the remote snapshot cache and download every cloud document.")
+    var full: Bool = false
+
     func run() async throws {
         do {
             let cfg = try Config.load()
             let state = try State(path: Paths.stateDBPath)
-            let result = try await ExplicitSync.stagePull(cfg: cfg, state: state)
+            let result = try await ExplicitSync.stagePull(cfg: cfg, state: state, full: full)
             print("staged pull:    \(result.id)")
             print("stage dir:      \(result.root.path)")
             printSummary(result.entries)

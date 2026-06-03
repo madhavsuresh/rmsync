@@ -18,7 +18,8 @@ Once installed (see [Quick start](#quick-start) below):
 
 ```sh
 rmsync status                        # is the daemon healthy? what's queued?
-rmsync pull                          # fetch cloud changes into staging
+rmsync pull                          # fetch cloud changes into staging (uses cache)
+rmsync pull --full                   # bypass cache and re-download every cloud doc
 rmsync diff [path]                   # review staged changes, or one file diff
 rmsync accept <path>                 # apply one staged cloud change locally
 rmsync accept --all                  # apply all staged non-delete changes
@@ -148,8 +149,9 @@ rmsync force-push
 rmsync force-push --apply
 ```
 
-The preview stage downloads the current remote docs under the staging
-directory, so remote-only docs and overwritten remote content are still
+The preview stage uses the same verified remote snapshot cache as
+`rmsync pull`, falling back to downloads when the cache is missing or
+stale. Remote-only docs and overwritten remote content are still
 inspectable before you apply. Applying replaces same-path remote docs,
 uploads local-only files, and moves remote-only docs to cloud trash.
 
@@ -462,7 +464,8 @@ rmsync start              # start the launchd agent
 rmsync stop               # stop it
 rmsync restart            # kick the agent (use after config edits or rebuilds)
 rmsync status             # current state, tracked docs, last pull/push
-rmsync pull               # fetch cloud changes into staging
+rmsync pull               # fetch cloud changes into staging (uses cache)
+rmsync pull --full        # bypass cache and re-download every cloud doc
 rmsync diff [path]        # review staged cloud changes, or one file diff
 rmsync accept <path>      # apply one staged cloud change locally
 rmsync accept --all       # apply all staged non-delete changes
