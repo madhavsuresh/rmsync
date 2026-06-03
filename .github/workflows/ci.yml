@@ -81,7 +81,9 @@ jobs:
         # 10-minute hard timeout so a regression fails fast instead
         # of burning an hour of CI minutes.
         timeout-minutes: 10
-        run: swift test --no-parallel 2>&1 | cat
+        run: |
+          mock_bin="$(swift build --show-bin-path)/rmapi-mock"
+          RMAPI_MOCK_BIN="$mock_bin" swift test --no-parallel 2>&1 | cat
 
       - name: Verify release build
         working-directory: swift
@@ -145,7 +147,9 @@ jobs:
         # ``FileProviderDetectionTests``) are gated by ``#if
         # os(macOS)`` so they compile to nothing here and don't count.
         timeout-minutes: 10
-        run: swift test --no-parallel --disable-sandbox 2>&1 | cat
+        run: |
+          mock_bin="$(swift build --disable-sandbox --show-bin-path)/rmapi-mock"
+          RMAPI_MOCK_BIN="$mock_bin" swift test --no-parallel --disable-sandbox 2>&1 | cat
 
       - name: Verify release build + --help output
         working-directory: swift

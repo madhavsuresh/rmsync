@@ -8,6 +8,7 @@ protocol CloudClient: Sendable {
 protocol CloudWriteClient: CloudClient {
     func stat(_ remotePath: String) async throws -> StatResult?
     func put(local: URL, remoteParent: String, update: Bool) async throws
+    func putRaw(localPath: URL, remoteFolder: String) async throws
     func mkdir(_ remotePath: String) async throws
     func mv(from src: String, to dst: String) async throws
     func rm(_ remotePath: String) async throws
@@ -46,8 +47,8 @@ actor Cloud: CloudWriteClient {
     private let rmapiPath: String
     private let concurrentOverride: Int?
 
-    init(rmapiPath: String = "rmapi", concurrentOverride: Int? = nil) {
-        self.rmapiPath = rmapiPath
+    init(rmapiPath: String? = nil, concurrentOverride: Int? = nil) {
+        self.rmapiPath = rmapiPath ?? Self.defaultRmapiPath()
         self.concurrentOverride = concurrentOverride
     }
 
@@ -317,6 +318,10 @@ actor Cloud: CloudWriteClient {
     private func extraEnv() -> [String: String] {
         guard let n = concurrentOverride else { return [:] }
         return ["RMAPI_CONCURRENT": String(n)]
+    }
+
+    static func defaultRmapiPath() -> String {
+        ProcessInfo.processInfo.environment["RMSYNC_RMAPI_PATH"] ?? "rmapi"
     }
 
     // MARK: - static helpers

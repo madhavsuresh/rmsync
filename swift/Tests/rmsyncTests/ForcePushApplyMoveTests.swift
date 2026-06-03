@@ -188,6 +188,10 @@ private actor RecordingForcePushCloud: CloudWriteClient {
         log.append("put:\(remoteParent):update=\(update)")
     }
 
+    func putRaw(localPath: URL, remoteFolder: String) async throws {
+        log.append("putRaw:\(remoteFolder)")
+    }
+
     func mkdir(_ remotePath: String) async throws {
         log.append("mkdir:\(remotePath)")
     }

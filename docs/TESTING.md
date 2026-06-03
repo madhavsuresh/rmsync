@@ -4,7 +4,7 @@ Five layers, in increasing cost:
 
 | Layer | Catches | Effort |
 |---|---|---|
-| Unit + offline integration tests (`swift test`) on macOS | Logic errors, regression of fixed bugs | Free, runs on every CI push |
+| Unit + offline integration tests (`swift test`) on macOS | Logic errors, regression of fixed bugs, local rmapi subprocess paths via `rmapi-mock` | Free, runs on every CI push |
 | Same suite on Linux (`swift:6.1-jammy` container) | Linux-specific compile errors, Glibc / Darwin divergences, explicit-sync regressions | Free, runs on every CI push |
 | Live-cloud smoke test against a real rmapi account | Push/pull roundtrip breaks, rmapi compat issues | One-time secret setup; runs on every push to main |
 | **`scripts/fresh-install-test.sh`** on dev's own Mac | Missing seeded state, install-helper gaps | 90s per run |
@@ -21,17 +21,39 @@ shipping.
 ## Layer 1: offline tests
 
 ```sh
-cd swift && swift test --no-parallel
+cd swift
+swift build --product rmapi-mock
+RMAPI_MOCK_BIN="$(swift build --show-bin-path)/rmapi-mock" \
+  swift test --no-parallel
+```
+
+On a local Mac, prefer external scratch paths so build products, mock
+state, and test workspaces stay off the internal disk:
+
+```sh
+mkdir -p /Volumes/GameDrive/codex-tmp/rmsync-tests /Volumes/GameDrive/codex-tmp/rmsync-swift-build
+RM_SYNC_TMP_DIR=/Volumes/GameDrive/codex-tmp/rmsync-tests \
+RMSYNC_TEST_TMPDIR=/Volumes/GameDrive/codex-tmp/rmsync-tests \
+RMSYNC_TEST_TMP=/Volumes/GameDrive/codex-tmp/rmsync-tests \
+RMAPI_MOCK_BIN=/Volumes/GameDrive/codex-tmp/rmsync-swift-build/arm64-apple-macosx/debug/rmapi-mock \
+swift test --package-path swift \
+  --scratch-path /Volumes/GameDrive/codex-tmp/rmsync-swift-build \
+  --no-parallel
 ```
 
 Runs on every PR + every push to main via `.github/workflows/ci.yml`.
-105+ tests covering archive packing, conflict marker generation, file
-provider detection, IPC, page codec roundtrip, path utilities,
-relocate, state DB schema migration, explicit pull/push guards, and
-legacy watcher ignore rules.
+The default CI job builds `rmapi-mock` and passes `RMAPI_MOCK_BIN` so
+the suite exercises the same subprocess boundary as real rmapi without
+touching the reMarkable cloud. The mock-backed tests cover version /
+account checks, shell `find` / `ls` / `stat` parsing, push / pull /
+accept, include-deletes, force-push, git sync, legacy worker rename /
+delete / inbox paths, partial listings, throttling, auth failures, and
+missing archive output.
 
-What this DOESN'T cover: anything that actually shells out to `rmapi`.
-For that, you need…
+If `RMAPI_MOCK_BIN` is absent, mock-backed tests skip so a plain
+`swift test --no-parallel` still works for quick local loops. What the
+mock cannot cover is upstream compatibility between ddvk/rmapi and the
+real reMarkable cloud schema. For that, you need…
 
 ---
 

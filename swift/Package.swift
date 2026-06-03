@@ -31,7 +31,9 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "rmsync", targets: ["rmsync"]),
+        .executable(name: "rmapi-mock", targets: ["rmapi-mock"]),
         .library(name: "RMScene", targets: ["RMScene"]),
+        .library(name: "RMApiMockCore", targets: ["RMApiMockCore"]),
     ] + menubarProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.4.0"),
@@ -65,6 +67,15 @@ let package = Package(
             name: "RMScene",
             exclude: ["LICENSE"]
         ),
+        .target(
+            name: "RMApiMockCore",
+            path: "Sources/RMApiMockCore"
+        ),
+        .executableTarget(
+            name: "rmapi-mock",
+            dependencies: ["RMApiMockCore"],
+            path: "Sources/rmapi-mock"
+        ),
         .executableTarget(
             name: "rmsync",
             dependencies: [
@@ -86,7 +97,7 @@ let package = Package(
         ),
         .testTarget(
             name: "rmsyncTests",
-            dependencies: ["rmsync"],
+            dependencies: ["rmsync", "RMApiMockCore"],
             path: "Tests/rmsyncTests",
             resources: [.copy("Fixtures")]
         ),

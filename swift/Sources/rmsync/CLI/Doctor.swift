@@ -62,7 +62,22 @@ struct DoctorRun {
     // MARK: - individual checks
 
     private static func rmapiPresent() async -> CheckResult {
-        if let path = which("rmapi") {
+        let selected = Cloud.defaultRmapiPath()
+        if selected != "rmapi" {
+            if selected.hasPrefix("/") {
+                let ok = FileManager.default.isExecutableFile(atPath: selected)
+                return CheckResult(
+                    name: "rmapi binary",
+                    status: ok ? .ok : .fail,
+                    message: ok ? selected : "\(selected) not executable"
+                )
+            }
+            if let path = which(selected) {
+                return CheckResult(name: "rmapi binary", status: .ok, message: path)
+            }
+            return CheckResult(name: "rmapi binary", status: .fail, message: "\(selected) not found")
+        }
+        if let path = which(selected) {
             return CheckResult(name: "rmapi on PATH", status: .ok, message: path)
         }
         return CheckResult(name: "rmapi on PATH", status: .fail, message: "rmapi not found")

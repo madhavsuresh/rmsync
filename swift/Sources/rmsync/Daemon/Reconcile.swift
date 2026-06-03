@@ -174,7 +174,7 @@ enum Reconcile {
     }
 
     static func initialPull(
-        cloud: Cloud, cfg: Config, queue: JobQueue
+        cloud: any CloudClient, cfg: Config, queue: JobQueue
     ) async throws {
         Logger.shared.info("initial reconcile: walking remote tree")
         let nodes = try await cloud.tree(PathUtilities.remoteFolderPath(cfg.remoteFolder))

@@ -17,7 +17,7 @@ import Foundation
 /// ``requestCycle()`` fires an immediate sync on demand; wired to the
 /// IPC ``sync_now`` handler.
 actor CloudPoller {
-    private let cloud: Cloud
+    private let cloud: any CloudClient
     private let state: State
     private let cfg: Config
     private let queue: JobQueue
@@ -65,7 +65,7 @@ actor CloudPoller {
         return seenCount >= floor
     }
 
-    init(cloud: Cloud, state: State, cfg: Config, queue: JobQueue) {
+    init(cloud: any CloudClient, state: State, cfg: Config, queue: JobQueue) {
         self.cloud = cloud
         self.state = state
         self.cfg = cfg

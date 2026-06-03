@@ -19,7 +19,7 @@ import Foundation
 actor SyncWorker {
     private let id: Int
     private let queue: JobQueue
-    private let cloud: Cloud
+    private let cloud: any CloudWriteClient
     private let state: State
     private let cfg: Config
     private let locks: LockRegistry
@@ -50,7 +50,7 @@ actor SyncWorker {
     init(
         id: Int,
         queue: JobQueue,
-        cloud: Cloud,
+        cloud: any CloudWriteClient,
         state: State,
         cfg: Config,
         locks: LockRegistry,
