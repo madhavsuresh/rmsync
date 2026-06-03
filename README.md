@@ -46,29 +46,135 @@ rmsync resume
 rmsync relocate ~/path/to/new/dir
 ```
 
-**Sync is manual by design.** Edit Markdown files under your sync dir
-(`~/rmsync-notes` by default), then run `rmsync push` when you want
-those changes to reach the tablet. To inspect tablet/cloud changes,
-run `rmsync pull`, review with `rmsync diff`, then accept selected
-files with `rmsync accept`.
+## Sync modes and auto-sync
 
-**Git-backed sync is optional.** The normal `rmsync pull` / `diff` /
-`accept` / `push` workflow above remains the default. If your notes live
-inside a git repository and you want every cloud exchange to pass through
-git, use `rmsync git ...` (or the `rmsync-git` wrapper). That mode uses a
-separate reMarkable cloud folder under `/sync/git/<name>` and stores
-its repo-local state under `.git/rmsync-git/`. The ordinary sync
-folder is `/sync/notes`, so both modes share one top-level tablet
-folder without sharing a namespace.
+rmsync has three sync modes. The default is explicit staged sync; the
+only background sync mode is opt-in safe auto-push. The daemon may run
+a read-only pull availability probe, but there is no cloud-to-local
+background sync: tablet/cloud edits always come in through
+`rmsync pull`, `rmsync diff`, and `rmsync accept`.
 
-**Optional safe auto-push.** If you want local edits to reach the
-tablet without a manual command, enable `[auto_push]` in config. It is
-local-to-cloud only: it waits for stable `.md` files, refuses stale
-cloud baselines, refuses dataless/empty-placeholder reads, never uses
-`--force`, and never propagates deletes. Tablet/cloud edits still come
-in through `rmsync pull`, `rmsync diff`, and `rmsync accept`. If a
-directory is initialized for `rmsync git`, auto-push pauses there; that
-workflow must upload committed state with `rmsync git push`.
+### Sync modes
+
+**Explicit staged sync (default).** Local and cloud changes move only
+when you run a command. Push local Markdown with `rmsync push`; fetch
+tablet/cloud changes into staging with `rmsync pull`, review them with
+`rmsync diff`, then apply selected files with `rmsync accept`. This is
+the safest mode and is what new installs use immediately after
+`rmsync init`.
+
+**Safe auto-push (opt-in).** The daemon watches and periodically scans
+`sync_dir` for stable local `.md` creates/edits, then uploads them
+through the same guarded path as `rmsync push` with `force = false` and
+`includeDeletes = false`. It is local-to-cloud only. It never accepts
+cloud changes, never propagates deletes, and pauses rather than
+guessing when the cloud baseline is stale or unsafe.
+
+**Git-backed sync (optional).** If your notes live inside a git
+repository and you want git to be the merge/conflict boundary, use
+`rmsync git ...` or the `rmsync-git` wrapper. This mode syncs a
+separate cloud folder under `/sync/git/<name>` and stores repo-local
+metadata under `.git/rmsync-git/`. Auto-push is disabled inside
+initialized rmsync-git repositories; upload committed state with
+`rmsync git push`.
+
+### Enable a mode
+
+Explicit staged sync needs no extra mode flag:
+
+```sh
+rmsync init
+rmsync pull
+rmsync diff
+rmsync accept <path>
+rmsync push [path ...]
+```
+
+Enable safe auto-push by editing `~/.config/rmsync/config.toml`,
+adding or updating `[auto_push]`, then restarting the daemon:
+
+```toml
+[auto_push]
+enabled               = true
+new_files             = true
+debounce_seconds      = 2.0
+stable_sample_count   = 2
+scan_interval_seconds = 30
+max_pushes_per_minute = 30
+```
+
+```sh
+rmsync restart
+rmsync auto-push status
+```
+
+Enable git-backed sync from inside the git repository you want to
+materialize on the tablet:
+
+```sh
+cd ~/notes
+rmsync git init --name notes
+rmsync git push
+```
+
+After that, use `rmsync git pull` to import cloud state as a branch,
+merge or rebase it with normal git tools, and use `rmsync git push` to
+upload the verified `HEAD` tree.
+
+### Config model
+
+`~/.config/rmsync/config.toml` is read once at daemon startup. Edit it,
+then run `rmsync restart`; the daemon does not watch config changes.
+
+The core sync keys are:
+
+```toml
+sync_dir      = "/Users/you/rmsync-notes"
+remote_folder = "sync/notes"
+```
+
+`sync_dir` is the local Markdown root. Do not edit it by hand; use
+`rmsync relocate <path>` so files, `state.db`, config, and the running
+agent stay consistent. `remote_folder` is the reMarkable cloud folder
+that explicit sync uses. The supported ordinary namespace is
+`sync/notes`; older `/Writing` configs require a fresh reinstall.
+
+The `[auto_push]` block is optional and defaults to disabled:
+
+| Key | Default | Effect |
+|---|---:|---|
+| `enabled` | `false` | Starts the local watcher/scanner when true. |
+| `new_files` | `true` | Allows local-only `.md` files to create cloud docs. |
+| `debounce_seconds` | `2.0` | Delay between stability samples. |
+| `stable_sample_count` | `2` | Identical size/mtime/hash samples required before upload. |
+| `scan_interval_seconds` | `30` | Full-tree scan cadence for edits missed while the daemon was off. |
+| `max_pushes_per_minute` | `30` | Rate limit for automatic uploads. |
+
+Older polling, worker, rename, deletion-propagation, and inbox config
+keys are rejected at load time. Remove stale legacy keys and rerun
+`rmsync init` or reinstall with a fresh config before restarting the
+daemon.
+
+### Expected behavior
+
+- Local `.md` creates/edits auto-push only after the file is stable for
+  the configured number of samples.
+- Tablet/cloud edits never auto-apply locally. Run `rmsync pull`,
+  inspect with `rmsync diff`, then accept deliberately.
+- Deletes never auto-push. Local deletes require
+  `rmsync push --include-deletes`; cloud deletes require
+  `rmsync accept --include-deletes`.
+- Auto-push refuses stale remote baselines, missing accepted remote
+  snapshots, path collisions, dataless File Provider placeholders,
+  suspicious empty reads over previously non-empty content, invalid
+  UTF-8, and unreadable or non-regular files.
+- Refused, failed, skipped, queued, uploading, and succeeded attempts
+  are recorded in `state.db` and shown by `rmsync auto-push status`.
+- If the daemon restarts during an auto-push, it verifies the
+  interrupted operation by downloading and rendering the remote
+  document before repairing local state.
+- `rmsync pause` suppresses auto-push processing until `rmsync resume`.
+  Remote inspection and manual commands remain explicit user actions.
 
 **Rename / move / delete propagation is explicit.** Deleting a local
 file no longer deletes the cloud copy unless you run
@@ -462,8 +568,8 @@ without being subject to File Provider eviction.
   on amd64 + arm64.
 - **rmapi** is bundled into the image — no host-side install.
 - Legacy inotify watcher settings are still present in config for
-  compatibility, but current explicit-sync releases do not start a
-  background watcher.
+  compatibility. Explicit sync does not start a background watcher;
+  opt-in `[auto_push]` starts a Markdown-only local watcher/scanner.
 
 ### Both paths
 
