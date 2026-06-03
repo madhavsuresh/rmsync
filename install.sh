@@ -184,8 +184,8 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
 # rmsync configuration. Restart the daemon after edits:
 #   rmsync restart
 
-sync_dir      = "$HOME/rmsync-writing"
-remote_folder = "Writing"
+sync_dir      = "$HOME/rmsync-notes"
+remote_folder = "sync/notes"
 
 # Explicit pushes are incremental: unchanged tracked Markdown files
 # are counted as skipped and do not call rmapi. Use rmsync push --force
@@ -207,7 +207,7 @@ trash_retention_days = 30 # 0 keeps local .rmsync-trash entries forever
 # port       = 7878
 # auth_token = ""          # leave empty → auto-generated
 EOF
-    yellow "  Edit this file if you want sync_dir somewhere other than ~/rmsync-writing."
+    yellow "  Edit this file if you want sync_dir somewhere other than ~/rmsync-notes."
 fi
 
 # ── 6. bootstrap launchd agents ──────────────────────────────────────

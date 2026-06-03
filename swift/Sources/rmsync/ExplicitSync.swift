@@ -195,7 +195,7 @@ enum ExplicitSync {
         try fm.createDirectory(at: filesRoot, withIntermediateDirectories: true)
         try fm.createDirectory(at: archivesRoot, withIntermediateDirectories: true)
 
-        let nodes = try await cloud.tree("/\(cfg.remoteFolder)")
+        let nodes = try await cloud.tree(PathUtilities.remoteFolderPath(cfg.remoteFolder))
         let remoteDocs = nodes
             .filter { $0.type == .document }
             .sorted { $0.remotePath < $1.remotePath }
@@ -1566,7 +1566,7 @@ enum ExplicitSync {
     static func forcePushPlanItems(
         remoteEntries: [Entry],
         localFiles: [LocalFile],
-        remoteFolder: String = "Writing",
+        remoteFolder: String = Config.defaultRemoteFolder,
         renames: [ForcePushRename] = []
     ) -> [ForcePushPlanItem] {
         let remoteDocs = remoteEntries.filter { $0.kind != .deleted }
@@ -1682,7 +1682,9 @@ enum ExplicitSync {
     private static func remotePath(relativePath: String, remoteFolder: String) -> String {
         var rel = normalizeSelectionPath(relativePath)
         if rel.hasSuffix(".md") { rel.removeLast(3) }
-        return "/" + ([remoteFolder] + rel.split(separator: "/").map(String.init)).joined(separator: "/")
+        let parts = PathUtilities.remoteFolderSegments(remoteFolder)
+            + rel.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        return "/" + parts.joined(separator: "/")
     }
 
     private static func renderTabletMarkdown(_ rmdoc: Archive.RmDoc) throws -> String {

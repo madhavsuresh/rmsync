@@ -85,7 +85,8 @@ Core subcommands. Run any of them from anywhere.
 | `rmsync push --include-deletes` | Also propagate tracked local files missing on disk | Direct rmapi |
 | `rmsync force-push` | Stage current cloud state and preview replacing it with the local tree | rmapi + staging dir |
 | `rmsync force-push --apply` | Replace same-path cloud docs, upload local-only docs, and trash remote-only docs | Direct rmapi |
-| `rmsync git init` | Initialize `/sync/<repo>` for a git-backed workflow | git refs + rmapi |
+| `rmsync init` | Create the local sync dir and configured cloud folder | filesystem + rmapi |
+| `rmsync git init` | Initialize `/sync/git/<repo>` for a git-backed workflow | git refs + rmapi |
 | `rmsync git pull` / `rmsync-git pull` | Render cloud state into a new git branch | rmapi + git branch |
 | `rmsync git push` / `rmsync-git push` | Merge cloud with `HEAD`, then upload the verified git tree | git merge-tree + rmapi |
 | `rmsync auto-push status` | Show optional safe auto-push attempts and refusal reasons | State DB |
@@ -101,8 +102,9 @@ Core subcommands. Run any of them from anywhere.
 | `rmsync relocate <path>` | Move sync dir + rewrite state + update config + restart agent | Composite |
 | `rmsync uninstall` | Remove the launchd agent (leaves state + config) | Delegates to script |
 
-`daemon` and `init` also exist but you don't run them by hand — `daemon`
-is what launchd invokes; `init` just prints a pointer to `install.sh`.
+`daemon` exists but you don't run it by hand — it is what launchd
+invokes. `init` is safe to re-run after config edits; it creates the
+local sync dir and the configured cloud folder chain.
 
 `pull`, `accept`, and `push` are the default sync-mutating commands in
 the explicit model. `rmsync git ...` is an optional git-backed workflow
@@ -192,7 +194,7 @@ rmsync-git init --name attack
 rmsync-git push
 ```
 
-This creates `/sync/attack` on the reMarkable cloud and stores
+This creates `/sync/git/attack` on the reMarkable cloud and stores
 repo-local metadata under `.git/rmsync-git/`. The hidden ref
 `refs/rmsync-git/attack/cloud` records the last git commit whose
 Markdown tree was verified to match the cloud.
@@ -235,7 +237,7 @@ You're currently on Dropbox's CloudStorage-mounted folder:
 local:
 
 ```sh
-rmsync relocate ~/rmsync-writing
+rmsync relocate ~/rmsync-notes
 ```
 
 #### `relocate` vs editing `sync_dir` in config.toml
@@ -354,8 +356,8 @@ Modern config keys and defaults (all paths relative to your home):
 
 | Key | Default | Effect |
 |---|---|---|
-| `sync_dir` | `~/rmsync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
-| `remote_folder` | `Writing` | Which cloud folder to mirror |
+| `sync_dir` | `~/rmsync-notes` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
+| `remote_folder` | `sync/notes` | Which cloud folder to mirror. `/Writing` is supported for existing configs; new installs use `/sync/notes`. |
 | `[auto_push].enabled` | `false` | Opt into safe local-to-cloud auto-push for stable `.md` creates/edits |
 | `[auto_push].new_files` | `true` | Allow local-only `.md` files to auto-create cloud docs |
 | `[auto_push].debounce_seconds` | `2.0` | Delay between file stability samples |
@@ -418,6 +420,29 @@ scan_interval_seconds = 30
 max_pushes_per_minute = 30
 ```
 
+### Migrating an existing `/Writing` setup to `/sync/notes`
+
+Existing configs with `remote_folder = "Writing"` keep working. To move
+to the single top-level `/sync` layout, first make sure your local
+`sync_dir` is the source of truth. Then edit `config.toml`:
+
+```toml
+remote_folder = "sync/notes"
+```
+
+Run:
+
+```sh
+rmsync init
+rmsync force-push
+rmsync force-push --apply
+```
+
+`rmsync init` creates `/sync` and `/sync/notes` if needed. The
+force-push preview shows exactly what will be uploaded before applying.
+This does not delete `/Writing`; remove or archive that folder manually
+only after you have verified `/sync/notes` on the tablet.
+
 ### …recover a file I deleted by mistake
 
 Explicit delete acceptance parks local files under
@@ -454,7 +479,7 @@ The status-only daemon does not prune automatically; run
 
 `mkdir <sync_dir>/papers/2026/` creates local structure. When you push
 `<sync_dir>/papers/2026/foo.md`, the doc lands at
-`/Writing/papers/2026/foo` on the cloud rather than flat at the top.
+`/sync/notes/papers/2026/foo` on the cloud rather than flat at the top.
 Cloud folder structure appears in the staged tree after `rmsync pull`;
 accepting selected files creates the corresponding local directories.
 
@@ -476,19 +501,19 @@ tracked docs. To browse / diff / revert:
 
 ```sh
 # all snapshots for this draft, newest first
-rmsync history list ~/rmsync-writing/Chapter-3.md
+rmsync history list ~/rmsync-notes/Chapter-3.md
 
 # unified diff vs the most recent snapshot
-rmsync history diff ~/rmsync-writing/Chapter-3.md
+rmsync history diff ~/rmsync-notes/Chapter-3.md
 
 # unified diff vs a specific snapshot (paste timestamp from list)
-rmsync history diff ~/rmsync-writing/Chapter-3.md \
+rmsync history diff ~/rmsync-notes/Chapter-3.md \
     --against 2026-04-29T22:14:08Z
 
 # revert. parks the current local file in .rmsync-trash/ first
 # (recoverable via `rmsync trash restore`). Push explicitly after
 # inspecting the restored content.
-rmsync history restore ~/rmsync-writing/Chapter-3.md \
+rmsync history restore ~/rmsync-notes/Chapter-3.md \
     --to 2026-04-29T22:14:08Z
 ```
 
@@ -511,7 +536,7 @@ Add to `~/.config/rmsync/config.toml`:
 
 ```toml
 [inbox]
-local_dir         = "~/rmsync-writing/_inbox"
+local_dir         = "~/rmsync-notes/_inbox"
 remote_folder     = "Inbox"
 delete_after_push = true
 ```
@@ -610,7 +635,7 @@ tail -f ~/Library/Logs/rmsync/stderr.log | grep '"event"'
 
 Runs 10 health checks, prints ✓ / ! / ✗ per check, exits 1 if anything
 is ✗. Checks: rmapi on PATH, rmapi version, rmapi authenticated, remote
-Writing folder reachable, local sync_dir writable, state DB openable,
+cloud folder reachable, local sync_dir writable, state DB openable,
 launchd plist loaded, disk space, log dir writable, clock sanity.
 
 Run it when anything seems off.

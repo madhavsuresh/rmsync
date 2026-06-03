@@ -177,7 +177,7 @@ enum Reconcile {
         cloud: Cloud, cfg: Config, queue: JobQueue
     ) async throws {
         Logger.shared.info("initial reconcile: walking remote tree")
-        let nodes = try await cloud.tree("/\(cfg.remoteFolder)")
+        let nodes = try await cloud.tree(PathUtilities.remoteFolderPath(cfg.remoteFolder))
         var enqueued = 0
         for node in nodes where node.type == .document {
             await queue.enqueue(Job(

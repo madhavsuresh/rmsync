@@ -115,6 +115,74 @@ struct GitSyncSyntheticTests {
         #expect(try await git.show(commit, path: "b.md") == "cloud b\n")
     }
 
+    @Test("git init defaults to sync git namespace")
+    func gitInitDefaultsToSyncGitNamespace() async throws {
+        let repo = try await makeRepo("default-remote")
+        try write("base\n", to: repo.appendingPathComponent("base.md"))
+        try await commitAll(repo, "base")
+        let cloud = RecordingGitInitCloud()
+
+        let result = try await GitSync.initialize(
+            cwd: repo,
+            name: nil,
+            syncRoot: ".",
+            remoteRoot: GitSync.defaultRemoteRoot,
+            ordinaryRemoteFolder: Config.defaultRemoteFolder,
+            cloud: cloud
+        )
+
+        #expect(result.name == "default-remote")
+        #expect(result.remotePath == "/sync/git/default-remote")
+        #expect(await cloud.createdPaths() == [
+            "/sync", "/sync/git", "/sync/git/default-remote",
+        ])
+    }
+
+    @Test("git init refuses target nested below ordinary sync namespace")
+    func gitInitRefusesOrdinarySyncRootOverlap() async throws {
+        let repo = try await makeRepo("overlap")
+        try write("base\n", to: repo.appendingPathComponent("base.md"))
+        try await commitAll(repo, "base")
+
+        do {
+            _ = try await GitSync.initialize(
+                cwd: repo,
+                name: "draft",
+                syncRoot: ".",
+                remoteRoot: GitSync.defaultRemoteRoot,
+                ordinaryRemoteFolder: "sync",
+                cloud: RecordingGitInitCloud()
+            )
+            Issue.record("git init succeeded even though ordinary sync owns /sync")
+        } catch let error as GitSync.Error {
+            switch error {
+            case .remoteNamespaceConflict(let target, let ordinary):
+                #expect(target == "sync/git/draft")
+                #expect(ordinary == "sync")
+            default:
+                Issue.record("unexpected GitSync error: \(error)")
+            }
+        }
+    }
+
+    @Test("git init allows sync notes and sync git sibling namespaces")
+    func gitInitAllowsSiblingNamespaces() async throws {
+        let repo = try await makeRepo("sibling")
+        try write("base\n", to: repo.appendingPathComponent("base.md"))
+        try await commitAll(repo, "base")
+
+        let result = try await GitSync.initialize(
+            cwd: repo,
+            name: "draft",
+            syncRoot: ".",
+            remoteRoot: GitSync.defaultRemoteRoot,
+            ordinaryRemoteFolder: Config.defaultRemoteFolder,
+            cloud: RecordingGitInitCloud()
+        )
+
+        #expect(result.remotePath == "/sync/git/draft")
+    }
+
     private func cleanIndependentEdits() async throws {
         let repo = try await makeRepo("clean-independent")
         try write("base a\n", to: repo.appendingPathComponent("a.md"))
@@ -330,4 +398,51 @@ struct GitSyncSyntheticTests {
     enum TestGitError: Error {
         case commandFailed([String], String)
     }
+}
+
+private actor RecordingGitInitCloud: CloudWriteClient {
+    private var existing: Set<String> = []
+    private var created: [String] = []
+
+    func createdPaths() -> [String] { created }
+
+    func tree(_ root: String) async throws -> [Node] { [] }
+
+    func get(_ remotePath: String, dest: URL) async throws -> URL {
+        throw RecordingGitInitCloudError.unsupported
+    }
+
+    func stat(_ remotePath: String) async throws -> StatResult? {
+        guard existing.contains(remotePath) else { return nil }
+        return StatResult(
+            id: remotePath,
+            name: URL(fileURLWithPath: remotePath).lastPathComponent,
+            version: 1,
+            modifiedClient: "2026-06-03T00:00:00Z",
+            type: "CollectionType",
+            currentPage: 0,
+            parent: ""
+        )
+    }
+
+    func put(local: URL, remoteParent: String, update: Bool) async throws {
+        throw RecordingGitInitCloudError.unsupported
+    }
+
+    func mkdir(_ remotePath: String) async throws {
+        existing.insert(remotePath)
+        created.append(remotePath)
+    }
+
+    func mv(from src: String, to dst: String) async throws {
+        throw RecordingGitInitCloudError.unsupported
+    }
+
+    func rm(_ remotePath: String) async throws {
+        throw RecordingGitInitCloudError.unsupported
+    }
+}
+
+private enum RecordingGitInitCloudError: Error {
+    case unsupported
 }

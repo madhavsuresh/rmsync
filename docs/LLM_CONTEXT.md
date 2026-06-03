@@ -15,9 +15,10 @@ section when a deep issue surfaces (e.g. ghost pages on the tablet).
 
 ## What rmsync is
 
-An explicit sync tool between a reMarkable tablet's `Writing/` cloud
-folder and a local Markdown tree. Runs on macOS (via launchd, with a
-menubar app) and on Linux (via Docker, headless).
+An explicit sync tool between one configured reMarkable cloud folder
+and a local Markdown tree. New installs use `/sync/notes`; existing
+`/Writing` configs remain supported. Runs on macOS (via launchd, with
+a menubar app) and on Linux (via Docker, headless).
 
 - **Local to tablet:** edit a `.md` file, then run `rmsync push
   [path ...]`. The CLI packs Markdown into a reMarkable v6 `.rmdoc`
@@ -93,8 +94,8 @@ Use these exact paths when helping the user. macOS first; Linux
 ~/.config/rmapi/rmapi.conf                          # cloud auth
 
 # default sync dir (user may have moved it)
-~/rmsync-writing/
-~/rmsync-writing/.rmsync-trash/                     # soft-delete buffer (v0.2.19+)
+~/rmsync-notes/
+~/rmsync-notes/.rmsync-trash/                       # soft-delete buffer (v0.2.19+)
 ```
 
 ### Linux (Docker container layout)
@@ -140,7 +141,7 @@ rmsync doctor                    # all ✓
 The brew formula declares `madhavsuresh/rmsync/rmapi` as a dependency,
 so rmapi is installed transitively. The post-install helper
 `rmsync-install-agents` writes a default `~/.config/rmsync/config.toml`,
-mkdir's `~/rmsync-writing`, renders both launchd plists with
+mkdir's `~/rmsync-notes`, renders both launchd plists with
 brew-relative paths, and bootstraps both agents.
 
 Updates: `brew upgrade rmsync`. The formula's `post_install` kicks
@@ -224,7 +225,8 @@ push, accept, delete, restore, or force-push.
 | `rmsync push --include-deletes` | rmapi + state DB | Also propagate tracked local files missing on disk. | ✓ |
 | `rmsync force-push` | rmapi + staging | Preview replacing the cloud folder with the local tree. | ✓ |
 | `rmsync force-push --apply` | rmapi + state DB | Apply the local-tree overwrite/delete plan. | ✓ |
-| `rmsync git init` | git + rmapi | Initialize `/sync/<name>` for an optional git-backed workflow. | requires git |
+| `rmsync init` | filesystem + rmapi | Create the local sync dir and configured cloud folder. | ✓ |
+| `rmsync git init` | git + rmapi | Initialize `/sync/git/<name>` for an optional git-backed workflow. | requires git |
 | `rmsync git pull` / `rmsync-git pull` | git + rmapi | Render cloud state into a new git branch. | requires git |
 | `rmsync git push` / `rmsync-git push` | git + rmapi | Merge cloud with `HEAD`, then upload the verified git tree. | requires git |
 | `rmsync sync-now` | IPC | Deprecated; automatic polling is disabled. | ✓ |
@@ -281,7 +283,7 @@ are moved to cloud trash after the baseline check.
 ### Cloud to local (`rmsync pull`, `diff`, `accept`)
 
 1. User runs `rmsync pull`.
-2. The CLI lists `/Writing`, downloads current cloud docs into a
+2. The CLI lists the configured cloud folder, downloads current cloud docs into a
    staging directory under the rmsync state dir, decodes `.rmdoc`
    pages into Markdown, and writes a manifest.
 3. The manifest classifies each entry as `added`, `modified`,
@@ -310,12 +312,12 @@ to stage, because the staged snapshot is the recovery point.
 
 This mode is optional and only makes sense inside an existing git
 repository. It uses a separate reMarkable cloud folder under
-`/sync/<name>` and stores repo-local metadata under `.git/rmsync-git/`.
+`/sync/git/<name>` and stores repo-local metadata under `.git/rmsync-git/`.
 The old explicit sync flow remains available and continues to use the
 configured `remote_folder`.
 
 1. User runs `rmsync git init --name <name>`.
-   - Fails if `/sync/<name>` already exists.
+   - Fails if `/sync/git/<name>` already exists or overlaps the ordinary sync folder.
    - Creates `.git/rmsync-git/config.json`.
    - Records the empty initial cloud snapshot in
      `refs/rmsync-git/<name>/cloud`.
@@ -356,8 +358,8 @@ daemon does not watch the file.
 
 | Key | Default | Effect |
 |---|---|---|
-| `sync_dir` | `~/rmsync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not by hand.** |
-| `remote_folder` | `Writing` | Cloud folder to mirror |
+| `sync_dir` | `~/rmsync-notes` | Where local `.md` files live. **Change with `rmsync relocate`, not by hand.** |
+| `remote_folder` | `sync/notes` | Cloud folder to mirror. `/Writing` is legacy-compatible for existing configs. |
 | `worker_pool_size` | `3` | Legacy daemon worker setting; explicit CLI sync does not use background workers |
 | `poll_interval_seconds` | `30` | Legacy poll cadence; automatic polling is disabled |
 | `poll_active_interval_seconds` | `15` | Legacy active poll cadence |
@@ -466,8 +468,8 @@ Current explicit-sync releases do not automatically act on that flag.
 
 Subdirectories under `sync_dir` are reflected by explicit commands:
 
-- Pushing `<sync_dir>/foo/note.md` creates or uses `/Writing/foo/`
-  on the cloud and stores the doc at `/Writing/foo/note`.
+- Pushing `<sync_dir>/foo/note.md` creates or uses `/sync/notes/foo/`
+  on the cloud and stores the doc at `/sync/notes/foo/note`.
 - Cloud folder structure appears in the staged tree after
   `rmsync pull`; accepting selected staged files creates matching
   local directories.
@@ -484,13 +486,13 @@ accepted pull overwrites park snapshots under
 Retention via `backup_snapshots_to_keep` (default 30).
 
 ```sh
-rmsync history list ~/rmsync-writing/Chapter-3.md
+rmsync history list ~/rmsync-notes/Chapter-3.md
 # Newest first; columns: ts | cause (push|pull_overwrite) | words | delta | bytes
 
-rmsync history diff ~/rmsync-writing/Chapter-3.md
+rmsync history diff ~/rmsync-notes/Chapter-3.md
 # Unified diff vs most recent snapshot. --against <ts> to pick another.
 
-rmsync history restore ~/rmsync-writing/Chapter-3.md \
+rmsync history restore ~/rmsync-notes/Chapter-3.md \
     --to 2026-04-29T22:14:08Z
 # Current -> trash; snapshot bytes written to local.
 # Run `rmsync push <path>` after inspecting the restored content.
@@ -595,7 +597,7 @@ rmsync doctor
 1. rmapi on PATH
 2. rmapi version (warn if old)
 3. rmapi authenticated
-4. remote `Writing/` folder reachable
+4. configured cloud folder reachable
 5. local `sync_dir` writable
 6. state DB openable
 7. launchd plist loaded
@@ -620,7 +622,7 @@ rmsync resume
 ### 5. Do explicit sync commands work?
 
 ```sh
-echo "content" > ~/rmsync-writing/test.md
+echo "content" > ~/rmsync-notes/test.md
 rmsync push test.md
 rmsync status
 ```
@@ -701,9 +703,9 @@ WHERE pending_op IS NOT NULL;
 Every accepted pulled `.md` gets xattrs:
 
 ```sh
-xattr -l ~/rmsync-writing/foo.md
+xattr -l ~/rmsync-notes/foo.md
 # rmsync.doc_id               UUID of the cloud doc
-# rmsync.remote_path          /Writing/foo
+# rmsync.remote_path          /sync/notes/foo
 # rmsync.remote_modified      ISO8601 timestamp
 # rmsync.page_ids             JSON array
 # com.apple.metadata:kMDItemWhereFroms   Finder "Where from"

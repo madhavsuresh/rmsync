@@ -79,7 +79,7 @@ choice for most users:
   https://my.remarkable.com/list/desktop and re-authing.
 
 Tests intentionally only touch `/rmsync-test/` (well-isolated from
-your real `/Writing/` tree) and clean up after themselves.
+your real configured cloud folder) and clean up after themselves.
 
 **The one-line setup:**
 
@@ -135,7 +135,7 @@ What it does:
 4. Runs `rmsync-install-agents` on the empty machine state.
 5. Runs `rmsync doctor` — fails out if anything is ✗.
 6. Pushes a probe `.md` file and waits up to 60s for it to appear on
-   the cloud via `rmapi find /Writing`.
+   the cloud via `rmapi find /sync/notes`.
 7. Cleans up the probe doc.
 8. Restores your original state from the backup.
 
@@ -211,10 +211,10 @@ first time.
    ```
 
 5. **Roundtrip test**:
-   - Touch `~/rmsync-writing/probe.md`, write content, save.
-   - Run `rmsync push ~/rmsync-writing/probe.md`.
+   - Touch `~/rmsync-notes/probe.md`, write content, save.
+   - Run `rmsync push ~/rmsync-notes/probe.md`.
    - On your tablet, swipe down on the home screen to force sync.
-   - Verify the doc appears in the Writing folder.
+   - Verify the doc appears in `/sync/notes`.
    - Edit the doc on the tablet.
    - Swipe down again so the tablet sends the edit to the cloud.
    - Run `rmsync pull`, `rmsync diff`, and `rmsync accept <path>`.

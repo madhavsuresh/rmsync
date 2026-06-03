@@ -126,8 +126,11 @@ struct HTTPDashboardTests {
         }
         guard rc == 0 else { return nil }
         let readEnd = fds[0]
-        let writeEnd = fds[1]
-        defer { close(readEnd); close(writeEnd) }
+        var writeEnd = fds[1]
+        defer {
+            close(readEnd)
+            if writeEnd >= 0 { close(writeEnd) }
+        }
         let bytes = Array(raw.utf8)
         _ = bytes.withUnsafeBufferPointer { bp in
             write(writeEnd, bp.baseAddress, bp.count)
@@ -136,6 +139,7 @@ struct HTTPDashboardTests {
         // the bytes are drained, preventing the parser from
         // blocking past the head.
         close(writeEnd)
+        writeEnd = -1
         return HTTPRequest.parse(from: readEnd)
     }
 

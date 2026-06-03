@@ -91,6 +91,17 @@ struct PathUtilitiesTests {
         #expect(result.mkdirChain == ["/Writing"])
     }
 
+    @Test("top-level file under multi-segment remote folder creates each namespace prefix")
+    func parentChainTopLevelMultiSegmentRemoteFolder() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let local = sync.appendingPathComponent("foo.md")
+        let result = PathUtilities.localToRemoteParentChain(
+            localPath: local, syncDir: sync, remoteFolder: "sync/notes"
+        )
+        #expect(result.parentPath == "/sync/notes")
+        #expect(result.mkdirChain == ["/sync", "/sync/notes"])
+    }
+
     @Test("single-subdir file derives matching cloud parent")
     func parentChainSingleSubdir() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
@@ -112,6 +123,26 @@ struct PathUtilitiesTests {
         #expect(result.parentPath == "/Writing/papers/2026")
         #expect(result.mkdirChain == [
             "/Writing", "/Writing/papers", "/Writing/papers/2026",
+        ])
+    }
+
+    @Test("nested file under multi-segment remote folder appends after namespace")
+    func parentChainNestedMultiSegmentRemoteFolder() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let local = sync.appendingPathComponent("papers/2026/foo.md")
+        let result = PathUtilities.localToRemoteParentChain(
+            localPath: local, syncDir: sync, remoteFolder: "sync/notes"
+        )
+        #expect(result.parentPath == "/sync/notes/papers/2026")
+        #expect(result.mkdirChain == [
+            "/sync", "/sync/notes", "/sync/notes/papers", "/sync/notes/papers/2026",
+        ])
+    }
+
+    @Test("git namespace root creates sync git and repo prefixes")
+    func gitNamespaceMkdirChain() {
+        #expect(PathUtilities.remoteFolderMkdirChain("sync/git/draft") == [
+            "/sync", "/sync/git", "/sync/git/draft",
         ])
     }
 

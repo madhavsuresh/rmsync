@@ -4,7 +4,7 @@
 # /sync is the convention used by docker-compose.yml and docs/DOCKER.md.
 # Bind-mount your host directory into /sync to make it the synced tree.
 sync_dir      = "/sync"
-remote_folder = "Writing"
+remote_folder = "sync/notes"
 
 # Explicit pushes are incremental: unchanged tracked Markdown files
 # are counted as skipped and do not call rmapi. Use `rmsync push --force`

@@ -32,7 +32,7 @@ struct DoctorRun {
         results.append(await rmapiVersion())
         results.append(await rmapiAuthed())
         results.append(staleIO41Tap())
-        results.append(await writingFolder(cfg: cfg, configError: configError))
+        results.append(await cloudFolder(cfg: cfg, configError: configError))
         results.append(syncDir(cfg: cfg, configError: configError))
         results.append(cloudProviderSyncDir(cfg: cfg))
         results.append(await stateDB())
@@ -173,27 +173,36 @@ struct DoctorRun {
         #endif
     }
 
-    private static func writingFolder(cfg: Config?, configError: String?) async -> CheckResult {
+    private static func cloudFolder(cfg: Config?, configError: String?) async -> CheckResult {
         guard let cfg else {
             return CheckResult(
-                name: "Writing folder",
+                name: "cloud folder",
                 status: .fail,
                 message: "config load failed: \(configError ?? "unknown")"
             )
         }
+        let normalized = PathUtilities.normalizedRemoteFolder(cfg.remoteFolder)
+        let remotePath = PathUtilities.remoteFolderPath(normalized)
         let cloud = Cloud()
         do {
-            _ = try await cloud.find("/\(cfg.remoteFolder)")
+            _ = try await cloud.find(remotePath)
+            if normalized == "sync" {
+                return CheckResult(
+                    name: "cloud folder",
+                    status: .warn,
+                    message: "\(remotePath) owns the namespace root; use /sync/notes so /sync/git can stay isolated"
+                )
+            }
             return CheckResult(
-                name: "Writing folder",
+                name: "cloud folder",
                 status: .ok,
-                message: cfg.remoteFolder
+                message: remotePath
             )
         } catch {
             return CheckResult(
-                name: "Writing folder",
+                name: "cloud folder",
                 status: .fail,
-                message: "`rmapi find /\(cfg.remoteFolder)` failed: \(error)"
+                message: "`rmapi find \(remotePath)` failed: \(error)"
             )
         }
     }

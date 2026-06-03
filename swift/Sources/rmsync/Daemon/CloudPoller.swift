@@ -2,7 +2,7 @@ import Foundation
 
 /// Adaptive cloud poller. Port of ``src/rm_sync/poller.py``.
 ///
-/// Walks the remote Writing tree at an interval that adapts to recent
+/// Walks the configured remote tree at an interval that adapts to recent
 /// activity:
 ///
 ///   - **active** when something changed in the last 5 minutes
@@ -100,7 +100,7 @@ actor CloudPoller {
     // MARK: - cycle
 
     private func cycle() async throws {
-        let nodes = try await cloud.tree("/\(cfg.remoteFolder)")
+        let nodes = try await cloud.tree(PathUtilities.remoteFolderPath(cfg.remoteFolder))
         var seenIDs: Set<String> = []
         var seenCloudFolders: Set<String> = []
         var anyChange = false

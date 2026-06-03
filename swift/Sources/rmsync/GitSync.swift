@@ -1,12 +1,16 @@
 import Foundation
 
 enum GitSync {
+    static let defaultRemoteRoot = "sync/git"
+
     struct RepoConfig: Codable, Sendable {
         var name: String
         var syncRoot: String
         var remoteRoot: String
 
-        var remoteFolder: String { "\(remoteRoot)/\(name)" }
+        var remoteFolder: String {
+            remoteRoot.isEmpty ? name : "\(remoteRoot)/\(name)"
+        }
         var cloudRef: String { "refs/rmsync-git/\(name)/cloud" }
         var lastRemoteSnapshotRef: String { "refs/rmsync-git/\(name)/last-remote-snapshot" }
     }
@@ -56,6 +60,7 @@ enum GitSync {
         case notInitialized(URL)
         case invalidName(String)
         case invalidSyncRoot(String)
+        case remoteNamespaceConflict(target: String, ordinary: String)
         case remoteFolderExists(String)
         case cloudSnapshotFailed([String])
         case pushConflict(branch: String, detail: String)
@@ -71,6 +76,11 @@ enum GitSync {
                 return "invalid rmsync-git name '\(name)'; use one remote folder segment without slashes"
             case .invalidSyncRoot(let path):
                 return "sync root must be inside the git repository: \(path)"
+            case .remoteNamespaceConflict(let target, let ordinary):
+                return """
+                rmsync-git remote /\(target) overlaps the configured ordinary sync folder /\(ordinary).
+                Use an ordinary remote folder like /sync/notes, or pass --remote-root outside that namespace.
+                """
             case .remoteFolderExists(let path):
                 return "\(path) already exists on the reMarkable cloud"
             case .cloudSnapshotFailed(let errors):
@@ -98,6 +108,7 @@ enum GitSync {
         name rawName: String?,
         syncRoot rawSyncRoot: String,
         remoteRoot: String,
+        ordinaryRemoteFolder: String? = nil,
         cloud: any CloudWriteClient = Cloud()
     ) async throws -> InitResult {
         let git = try await Git.open(at: cwd)
@@ -112,7 +123,14 @@ enum GitSync {
         try validateName(name)
         let syncRoot = try normalizedSyncRoot(rawSyncRoot, git: git)
         let cfg = RepoConfig(name: name, syncRoot: syncRoot, remoteRoot: normalizeRemoteRoot(remoteRoot))
-        let remotePath = "/\(cfg.remoteFolder)"
+        if let ordinaryRemoteFolder,
+           remoteFoldersOverlap(cfg.remoteFolder, ordinaryRemoteFolder) {
+            throw Error.remoteNamespaceConflict(
+                target: cfg.remoteFolder,
+                ordinary: PathUtilities.normalizedRemoteFolder(ordinaryRemoteFolder)
+            )
+        }
+        let remotePath = PathUtilities.remoteFolderPath(cfg.remoteFolder)
 
         try await ensureRemoteFolderIsNew(cfg: cfg, cloud: cloud)
 
@@ -462,15 +480,18 @@ enum GitSync {
     }
 
     private static func ensureRemoteFolderIsNew(cfg: RepoConfig, cloud: any CloudWriteClient) async throws {
-        do {
-            try await cloud.mkdir("/\(cfg.remoteRoot)")
-        } catch {
-            // rmapi mkdir is not idempotent; an existing remote root is fine.
+        for path in PathUtilities.remoteFolderMkdirChain(cfg.remoteRoot) {
+            do {
+                try await cloud.mkdir(path)
+            } catch {
+                // rmapi mkdir is not idempotent; an existing folder is fine.
+            }
         }
-        if try await cloud.stat("/\(cfg.remoteFolder)") != nil {
-            throw Error.remoteFolderExists("/\(cfg.remoteFolder)")
+        let remoteFolderPath = PathUtilities.remoteFolderPath(cfg.remoteFolder)
+        if try await cloud.stat(remoteFolderPath) != nil {
+            throw Error.remoteFolderExists(remoteFolderPath)
         }
-        try await cloud.mkdir("/\(cfg.remoteFolder)")
+        try await cloud.mkdir(remoteFolderPath)
     }
 
     // MARK: - config and paths
@@ -580,7 +601,18 @@ enum GitSync {
     }
 
     static func normalizeRemoteRoot(_ raw: String) -> String {
-        raw.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+        PathUtilities.normalizedRemoteFolder(raw)
+    }
+
+    static func remoteFoldersOverlap(_ lhs: String, _ rhs: String) -> Bool {
+        let left = PathUtilities.remoteFolderSegments(lhs)
+        let right = PathUtilities.remoteFolderSegments(rhs)
+        guard !left.isEmpty, !right.isEmpty else { return false }
+        return startsWith(left, right) || startsWith(right, left)
+    }
+
+    private static func startsWith(_ path: [String], _ prefix: [String]) -> Bool {
+        path.count >= prefix.count && Array(path.prefix(prefix.count)) == prefix
     }
 
     static func repoPath(syncRoot: String, relativePath: String) -> String {
