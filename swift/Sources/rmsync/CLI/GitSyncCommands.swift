@@ -7,8 +7,8 @@ struct GitSyncCmd: AsyncParsableCommand {
         abstract: "Git-native reMarkable cloud sync.",
         discussion: """
         Treats /sync/git/<name> on the reMarkable cloud as a materialized git tree.
-        Pulls create git branches; pushes merge with git and upload only verified
-        resolved Markdown states.
+        Pulls create git branches when cloud changes still need a local merge;
+        pushes merge with git and upload only verified resolved Markdown states.
         """,
         subcommands: [
             GitSyncInitCmd.self,
@@ -55,7 +55,7 @@ struct GitSyncInitCmd: AsyncParsableCommand {
 struct GitSyncPullCmd: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "pull",
-        abstract: "Render cloud state into a new git branch."
+        abstract: "Render cloud state and create a git branch when needed."
     )
 
     func run() async throws {
@@ -63,13 +63,24 @@ struct GitSyncPullCmd: AsyncParsableCommand {
             let result = try await GitSync.pull(
                 cwd: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             )
-            print("cloud branch: \(result.branch)")
             print("snapshot:     \(result.snapshot)")
             print("stage:        \(result.stageID)")
             print("changes:      \(result.changed)")
-            print("")
-            print("merge with:   git merge \(result.branch)")
-            print("or rebase:    git rebase \(result.branch)")
+            switch result.status {
+            case .noCloudChanges:
+                print("status:       cloud already matches the acknowledged baseline")
+            case .alreadyMerged:
+                print("status:       cloud changes already merged into HEAD; baseline updated")
+            case .branchCreated:
+                guard let branch = result.branch else {
+                    print("ERROR: pull created no merge branch")
+                    throw ExitCode(1)
+                }
+                print("")
+                print("cloud branch: \(branch)")
+                print("merge with:   git merge \(branch)")
+                print("or rebase:    git rebase \(branch)")
+            }
         } catch {
             print("ERROR: \(error)")
             throw ExitCode(1)

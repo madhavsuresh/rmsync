@@ -14,6 +14,86 @@ struct GitSyncSyntheticTests {
         try await ambiguousAlreadyMatchesHead()
     }
 
+    @Test("pull returns no branch when cloud has no changes")
+    func pullSkipsBranchWhenCloudUnchanged() async throws {
+        let repo = try await makeRepo("pull-unchanged")
+        try write("base\n", to: repo.appendingPathComponent("base.md"))
+        try await commitAll(repo, "base")
+
+        let cloud = RecordingGitInitCloud()
+        _ = try await GitSync.initialize(
+            cwd: repo,
+            name: "pull-unchanged",
+            syncRoot: ".",
+            ordinaryRemoteFolder: Config.defaultRemoteFolder,
+            cloud: cloud
+        )
+
+        let result = try await GitSync.pull(cwd: repo, cloud: cloud)
+        #expect(result.branch == nil)
+        #expect(result.changed == 0)
+        #expect(result.status == .noCloudChanges)
+    }
+
+    @Test("pull does not need another branch after cloud snapshot is merged")
+    func pullSkipsBranchWhenSnapshotAlreadyMerged() async throws {
+        let repo = try await makeRepo("pull-already-merged")
+        try write("base a\n", to: repo.appendingPathComponent("a.md"))
+        try write("base b\n", to: repo.appendingPathComponent("b.md"))
+        try await commitAll(repo, "base")
+        let git = try await Git.open(at: repo)
+        let base = try await git.headCommit()
+        _ = try await git.run(["branch", "cloud-current", base])
+
+        try write("local b\n", to: repo.appendingPathComponent("b.md"))
+        try await commitAll(repo, "local-b")
+
+        _ = try await git.run(["switch", "-q", "cloud-current"])
+        try write("cloud a\n", to: repo.appendingPathComponent("a.md"))
+        try await commitAll(repo, "cloud-a")
+        let remote = try await git.headCommit()
+
+        _ = try await git.run(["switch", "-q", "main"])
+        _ = try await git.run(["merge", "--no-edit", "cloud-current"])
+        let local = try await git.headCommit()
+
+        let needsBranch = try await GitSync.pullNeedsBranch(
+            git: git,
+            base: base,
+            local: local,
+            remoteSnapshot: remote
+        )
+        #expect(needsBranch == false)
+    }
+
+    @Test("pull needs a branch when cloud changes are not in HEAD")
+    func pullNeedsBranchForUnmergedSnapshot() async throws {
+        let repo = try await makeRepo("pull-needs-branch")
+        try write("base a\n", to: repo.appendingPathComponent("a.md"))
+        try write("base b\n", to: repo.appendingPathComponent("b.md"))
+        try await commitAll(repo, "base")
+        let git = try await Git.open(at: repo)
+        let base = try await git.headCommit()
+        _ = try await git.run(["branch", "cloud-current", base])
+
+        try write("local b\n", to: repo.appendingPathComponent("b.md"))
+        try await commitAll(repo, "local-b")
+        let local = try await git.headCommit()
+
+        _ = try await git.run(["switch", "-q", "cloud-current"])
+        try write("cloud a\n", to: repo.appendingPathComponent("a.md"))
+        try await commitAll(repo, "cloud-a")
+        let remote = try await git.headCommit()
+
+        let needsBranch = try await GitSync.pullNeedsBranch(
+            git: git,
+            base: base,
+            local: local,
+            remoteSnapshot: remote
+        )
+        #expect(needsBranch == true)
+    }
+
     @Test("materializing a git tree preserves source bytes")
     func materializePreservesSourceBytes() async throws {
         let repo = try await makeRepo("source-preserve")
