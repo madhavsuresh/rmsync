@@ -22,9 +22,10 @@ enum TabletText {
     ) -> String? {
         let normalized = normalizeWithBoundaries(baseSource)
         let baseTablet = normalized.text
-        if editedTablet == baseTablet { return baseSource }
+        let editedNormalized = normalizeForTablet(editedTablet)
+        if editedNormalized == baseTablet { return baseSource }
 
-        let patch = singleRangePatch(base: baseTablet, edited: editedTablet)
+        let patch = singleRangePatch(base: baseTablet, edited: editedNormalized)
         guard patch.start <= patch.end,
               patch.end < normalized.sourceBoundaries.count else {
             return nil
