@@ -162,6 +162,35 @@ docker exec rmsync curl -s http://localhost:7878/api/status \
     -H "Authorization: Bearer $(docker exec rmsync cat /state/web-token)"
 ```
 
+## Safe auto-push
+
+Optional auto-push can watch `/sync` for stable local Markdown edits and
+push them to the cloud. It is local-to-cloud only: it never propagates
+deletes, never uses `--force`, and refuses when the cloud baseline has
+changed. Tracked docs need an accepted remote snapshot baseline; restart
+recovery only repairs state after downloading the remote document and
+matching the rendered Markdown hash. Repositories initialized for
+`rmsync git` are excluded because that workflow uploads committed state
+with `rmsync git push`.
+
+Enable in `data/config/config.toml`, then restart:
+
+```toml
+[auto_push]
+enabled               = true
+new_files             = true
+debounce_seconds      = 2.0
+stable_sample_count   = 2
+scan_interval_seconds = 30
+max_pushes_per_minute = 30
+```
+
+Inspect attempts and refusal reasons with:
+
+```sh
+docker exec rmsync rmsync auto-push status
+```
+
 ## Send PDFs / EPUBs to the tablet (inbox)
 
 The `[inbox]` config block is legacy. Current explicit-sync releases
@@ -245,6 +274,7 @@ docker exec rmsync rmsync pull               # stage cloud changes
 docker exec rmsync rmsync diff [path]        # review staged changes, or one file diff
 docker exec rmsync rmsync accept <path>      # apply selected staged change
 docker exec rmsync rmsync push [path ...]    # push local Markdown changes
+docker exec rmsync rmsync auto-push status   # inspect optional auto-push attempts
 docker exec rmsync rmsync sync-now           # deprecated; auto polling disabled
 docker exec rmsync rmsync conflicts          # list unresolved
 docker exec rmsync rmsync conflicts --resolve-stale

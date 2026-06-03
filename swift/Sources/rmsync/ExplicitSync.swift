@@ -60,6 +60,11 @@ enum ExplicitSync {
         case skipped
     }
 
+    enum PushMode: Sendable {
+        case manual
+        case auto
+    }
+
     enum ForcePushAction: String, Codable, Sendable {
         case createRemote = "create_remote"
         case overwriteRemote = "overwrite_remote"
@@ -123,6 +128,7 @@ enum ExplicitSync {
         case cloudChanged(String)
         case cloudMissing(String)
         case cloudAlreadyHasPath(String)
+        case missingRemoteBaseline(String)
         case localDatalessPlaceholder(String)
         case localEmptyWouldOverwrite(String)
         case invalidPath(String)
@@ -149,6 +155,8 @@ enum ExplicitSync {
                 return "cloud document missing at tracked path: \(path)"
             case .cloudAlreadyHasPath(let path):
                 return "cloud already has a document at \(path); refusing new push without --force"
+            case .missingRemoteBaseline(let path):
+                return "missing remote baseline for \(path); run `rmsync push` manually"
             case .localDatalessPlaceholder(let path):
                 return "refusing to push dataless cloud-storage placeholder: \(path)"
             case .localEmptyWouldOverwrite(let path):
@@ -529,7 +537,8 @@ enum ExplicitSync {
         paths: [String],
         includeDeletes: Bool,
         force: Bool,
-        initiator: String = "manual"
+        initiator: String = "manual",
+        mode: PushMode = .manual
     ) async throws -> PushResult {
         Logger.shared.audit("explicit push started", meta: [
             "initiator": initiator,
@@ -558,7 +567,7 @@ enum ExplicitSync {
             guard seen.insert(path).inserted else { continue }
             do {
                 if FileManager.default.fileExists(atPath: path) {
-                    switch try await pushFile(target, cfg: cfg, state: state, cloud: cloud, force: force) {
+                    switch try await pushFile(target, cfg: cfg, state: state, cloud: cloud, force: force, mode: mode) {
                     case .uploaded:
                         result.pushed += 1
                     case .skipped:
@@ -599,6 +608,24 @@ enum ExplicitSync {
             ], level: "error")
             throw error
         }
+    }
+
+    static func autoPush(
+        cfg: Config,
+        state: State,
+        cloud: any CloudWriteClient = Cloud(),
+        path: String
+    ) async throws -> PushResult {
+        try await push(
+            cfg: cfg,
+            state: state,
+            cloud: cloud,
+            paths: [path],
+            includeDeletes: false,
+            force: false,
+            initiator: "auto-push",
+            mode: .auto
+        )
     }
 
     static func planForcePush(
@@ -987,6 +1014,7 @@ enum ExplicitSync {
         state: State,
         cloud: any CloudWriteClient,
         force: Bool,
+        mode: PushMode = .manual,
         remoteOverride: ForcePushPlanItem? = nil
     ) async throws -> PushFileOutcome {
         guard PathUtilities.resolvedRelativePath(from: cfg.syncDir, to: localURL) != nil else {
@@ -1018,7 +1046,12 @@ enum ExplicitSync {
         }
 
         if !force, let stored {
-            try await ensureCloudStillAtBaseline(stored, cloud: cloud)
+            try await ensureCloudStillAtBaseline(
+                stored,
+                state: state,
+                cloud: cloud,
+                requireBaseline: mode == .auto
+            )
         }
 
         let tabletText = TabletText.normalizeForTablet(text)
@@ -1079,7 +1112,15 @@ enum ExplicitSync {
             update: stored != nil || remoteOverride != nil
         )
 
-        let stat = try? await cloud.stat(remoteDocPath)
+        let stat: StatResult?
+        if mode == .auto {
+            guard let verified = try await cloud.stat(remoteDocPath) else {
+                throw SyncError.cloudMissing(remoteDocPath)
+            }
+            stat = verified
+        } else {
+            stat = try? await cloud.stat(remoteDocPath)
+        }
         let remoteModified = stat?.modifiedClient ?? ""
         let remoteVersion = (remoteOverride?.remoteVersion ?? stored?.remoteVersion ?? 0) + 1
         if let stored, stored.docID != targetDocID, force {
@@ -1110,6 +1151,19 @@ enum ExplicitSync {
             modified: remoteModified,
             tabletHash: tabletHash
         )
+        if let stat {
+            await storeVerifiedRemoteSnapshot(
+                docID: targetDocID,
+                remotePath: remoteDocPath,
+                stat: stat,
+                source: text,
+                sourceHash: newHash,
+                tabletHash: tabletHash,
+                pageIDs: pageIDs,
+                archive: archive,
+                state: state
+            )
+        }
         return .uploaded
     }
 
@@ -1213,13 +1267,31 @@ enum ExplicitSync {
         ))
     }
 
-    private static func ensureCloudStillAtBaseline(_ doc: Document, cloud: any CloudWriteClient) async throws {
-        guard let baseline = doc.remoteModified, !baseline.isEmpty else { return }
+    private static func ensureCloudStillAtBaseline(
+        _ doc: Document,
+        state: State? = nil,
+        cloud: any CloudWriteClient,
+        requireBaseline: Bool = false
+    ) async throws {
+        guard let baseline = doc.remoteModified, !baseline.isEmpty else {
+            if requireBaseline { throw SyncError.missingRemoteBaseline(doc.localPath) }
+            return
+        }
         guard let stat = try await cloud.stat(doc.remotePath) else {
             throw SyncError.cloudMissing(doc.remotePath)
         }
         if stat.modifiedClient != baseline {
             throw SyncError.cloudChanged(doc.remotePath)
+        }
+        if requireBaseline {
+            guard let snapshot = try await state?.remoteSnapshot(docID: doc.docID),
+                  snapshot.remotePath == doc.remotePath,
+                  snapshot.remoteModified == baseline,
+                  snapshot.remoteFingerprint == remoteFingerprint(stat, remotePath: doc.remotePath),
+                  snapshot.sourceHash == doc.lastSyncedMDHash
+            else {
+                throw SyncError.missingRemoteBaseline(doc.localPath)
+            }
         }
     }
 
@@ -1266,6 +1338,51 @@ enum ExplicitSync {
         }
     }
 
+    static func storeVerifiedRemoteSnapshot(
+        docID: String,
+        remotePath: String,
+        stat: StatResult,
+        source: String,
+        sourceHash: String,
+        tabletHash: String?,
+        pageIDs: [String],
+        archive: URL?,
+        state: State
+    ) async {
+        let fingerprint = remoteFingerprint(stat, remotePath: remotePath)
+        let cacheURL = remoteCacheURL(docID: docID, fingerprint: fingerprint)
+        do {
+            try PathUtilities.atomicWriteText(source, to: cacheURL)
+            let writtenHash = try PathUtilities.sha256File(cacheURL)
+            guard writtenHash == sourceHash else {
+                try? FileManager.default.removeItem(at: cacheURL)
+                Logger.shared.warn(
+                    "verified remote snapshot cache hash mismatch",
+                    meta: ["doc_id": docID, "path": remotePath]
+                )
+                return
+            }
+
+            try await state.upsertRemoteSnapshot(RemoteSnapshot(
+                docID: docID,
+                remotePath: remotePath,
+                remoteModified: stat.modifiedClient.isEmpty ? nil : stat.modifiedClient,
+                remoteVersion: stat.version,
+                remoteFingerprint: fingerprint,
+                sourceHash: sourceHash,
+                tabletHash: tabletHash,
+                pageIDs: pageIDs,
+                cachedSourcePath: cacheURL.path,
+                archiveHash: archive.flatMap { try? PathUtilities.sha256File($0) }
+            ))
+        } catch {
+            Logger.shared.warn(
+                "verified remote snapshot cache write failed",
+                meta: ["doc_id": docID, "path": remotePath, "error": "\(error)"]
+            )
+        }
+    }
+
     private static func cachedSourceText(_ snapshot: RemoteSnapshot) -> String? {
         let url = URL(fileURLWithPath: snapshot.cachedSourcePath)
         guard FileManager.default.fileExists(atPath: url.path),
@@ -1289,15 +1406,50 @@ enum ExplicitSync {
     }
 
     static func remoteFingerprint(_ node: Node) -> String {
+        remoteFingerprint(
+            docID: node.id,
+            remotePath: node.remotePath,
+            name: node.name,
+            parent: node.parent,
+            type: node.type.rawValue,
+            modifiedClient: node.modifiedClient,
+            version: node.version,
+            currentPage: node.currentPage
+        )
+    }
+
+    static func remoteFingerprint(_ stat: StatResult, remotePath: String) -> String {
+        remoteFingerprint(
+            docID: stat.id,
+            remotePath: remotePath,
+            name: stat.name,
+            parent: stat.parent,
+            type: stat.type,
+            modifiedClient: stat.modifiedClient,
+            version: stat.version,
+            currentPage: stat.currentPage
+        )
+    }
+
+    private static func remoteFingerprint(
+        docID: String,
+        remotePath: String,
+        name: String,
+        parent: String,
+        type: String,
+        modifiedClient: String,
+        version: Int,
+        currentPage: Int
+    ) -> String {
         let fields = [
-            "doc_id=\(node.id)",
-            "remote_path=\(node.remotePath)",
-            "name=\(node.name)",
-            "parent=\(node.parent)",
-            "type=\(node.type.rawValue)",
-            "modified_client=\(node.modifiedClient)",
-            "version=\(node.version)",
-            "current_page=\(node.currentPage)",
+            "doc_id=\(docID)",
+            "remote_path=\(remotePath)",
+            "name=\(name)",
+            "parent=\(parent)",
+            "type=\(type)",
+            "modified_client=\(modifiedClient)",
+            "version=\(version)",
+            "current_page=\(currentPage)",
         ]
         return PathUtilities.sha256(fields.joined(separator: "\n"))
     }
@@ -1542,7 +1694,7 @@ enum ExplicitSync {
         return pages.isEmpty ? "" : PageSplitter.join(pages)
     }
 
-    private static func renderSourceMarkdown(
+    static func renderSourceMarkdown(
         _ rmdoc: Archive.RmDoc,
         localURL: URL,
         stored: Document?

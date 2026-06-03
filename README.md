@@ -30,6 +30,7 @@ rmsync force-push --apply            # overwrite/delete remote-only cloud docs
 rmsync git init --name my-notes      # optional: initialize git-backed sync
 rmsync git pull                      # optional: import cloud state as a branch
 rmsync git push                      # optional: merge HEAD with cloud and upload
+rmsync auto-push status              # inspect optional safe auto-push attempts
 rmsync doctor                        # full self-check (10 items)
 rmsync logs -f                       # follow the shared event log
 rmsync conflicts                     # list any unresolved .md.conflict files
@@ -54,6 +55,15 @@ inside a git repository and you want every cloud exchange to pass through
 git, use `rmsync git ...` (or the `rmsync-git` wrapper). That mode uses a
 separate reMarkable cloud folder under `/sync/<name>` and stores its
 repo-local state under `.git/rmsync-git/`.
+
+**Optional safe auto-push.** If you want local edits to reach the
+tablet without a manual command, enable `[auto_push]` in config. It is
+local-to-cloud only: it waits for stable `.md` files, refuses stale
+cloud baselines, refuses dataless/empty-placeholder reads, never uses
+`--force`, and never propagates deletes. Tablet/cloud edits still come
+in through `rmsync pull`, `rmsync diff`, and `rmsync accept`. If a
+directory is initialized for `rmsync git`, auto-push pauses there; that
+workflow must upload committed state with `rmsync git push`.
 
 **Rename / move / delete propagation is explicit.** Deleting a local
 file no longer deletes the cloud copy unless you run
@@ -503,6 +513,7 @@ rmsync git init           # optional git-backed sync setup, run in a git repo
 rmsync git pull           # optional: import cloud state as a git branch
 rmsync git push           # optional: merge HEAD with cloud and upload
 rmsync-git push           # same as `rmsync git push`
+rmsync auto-push status   # inspect optional safe auto-push attempts
 rmsync logs -f            # tail the structured JSON event log
 rmsync pause              # set the paused status flag
 rmsync resume             # clear the pause flag

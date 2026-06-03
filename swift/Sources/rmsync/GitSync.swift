@@ -537,6 +537,18 @@ enum GitSync {
         stateRoot(common: common).appendingPathComponent("config.json")
     }
 
+    static func configuredRepository(containing url: URL) async -> (root: URL, configURL: URL)? {
+        do {
+            let git = try await Git.open(at: url)
+            let common = try await git.commonDir()
+            let config = configURL(common: common)
+            guard FileManager.default.fileExists(atPath: config.path) else { return nil }
+            return (git.root, config)
+        } catch {
+            return nil
+        }
+    }
+
     static func stateDBURL(common: URL) -> URL {
         stateRoot(common: common)
             .appendingPathComponent("state", isDirectory: true)

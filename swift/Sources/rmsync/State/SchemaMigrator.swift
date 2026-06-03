@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Keeps the ``schema_version`` row honest. Fresh databases open at v7.
+/// Keeps the ``schema_version`` row honest. Fresh databases open at v9.
 /// Older DBs from the Python implementation migrate in place: each step
 /// is idempotent and safe to re-run.
 ///
@@ -153,6 +153,32 @@ enum SchemaMigrator {
                 """)
         }
 
+        // v9 — durable auto-push operation ledger. Auto-push records an
+        // operation before upload, then updates it after verification. On
+        // restart, interrupted rows are surfaced for manual verification
+        // instead of being blindly replayed.
+        migrator.registerMigration("v9_auto_push_ops") { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS auto_push_ops (
+                    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at               TEXT NOT NULL,
+                    updated_at               TEXT NOT NULL,
+                    state                    TEXT NOT NULL,
+                    path                     TEXT NOT NULL,
+                    doc_id                   TEXT,
+                    local_hash               TEXT,
+                    baseline_remote_modified TEXT,
+                    attempt_count            INTEGER NOT NULL DEFAULT 0,
+                    reason                   TEXT,
+                    remote_modified          TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_auto_push_ops_state
+                    ON auto_push_ops(state);
+                CREATE INDEX IF NOT EXISTS idx_auto_push_ops_path
+                    ON auto_push_ops(path);
+                """)
+        }
+
         try migrator.migrate(writer)
 
         // Keep the legacy ``schema_version`` row in sync for the CLI
@@ -166,7 +192,7 @@ enum SchemaMigrator {
         }
     }
 
-    static let currentSchemaVersion = 8
+    static let currentSchemaVersion = 9
 
     private static func columnExists(
         _ db: Database, table: String, column: String

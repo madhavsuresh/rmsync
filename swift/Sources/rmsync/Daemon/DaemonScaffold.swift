@@ -107,6 +107,8 @@ enum DaemonScaffold {
         Logger.shared.info(
             "explicit sync mode: daemon is status-only; use rmsync pull/push"
         )
+        let autoPush = AutoPushService(cfg: cfg, state: state)
+        autoPush.start()
 
         // Periodic bus refresh so the menu bar sees live counts even
         // during quiet stretches. Light touch — 5s tick.
@@ -124,6 +126,7 @@ enum DaemonScaffold {
         // Orderly shutdown (unreached in practice — launchd SIGTERMs the
         // process, but kept for completeness).
         busTask.cancel()
+        autoPush.stop()
         if let httpServer { await httpServer.stop() }
         await server.stop()
     }
