@@ -33,7 +33,14 @@ struct Status: AsyncParsableCommand {
     )
     func run() async throws {
         let cfg: Config?
-        do { cfg = try Config.load() } catch { cfg = nil }
+        let cfgError: Error?
+        do {
+            cfg = try Config.load()
+            cfgError = nil
+        } catch {
+            cfg = nil
+            cfgError = error
+        }
 
         if let live = IPCClientSync.getStatus() {
             print("sync dir:       \(live.syncDir)")
@@ -67,6 +74,7 @@ struct Status: AsyncParsableCommand {
                     print("                \(detail)")
                 }
             }
+            await Self.printSyncTopology(cfg: cfg, cfgError: cfgError, live: live)
             // Version line shows BOTH the running daemon's version
             // (from IPC) and this CLI binary's version. Divergence
             // means the on-disk binary was upgraded but the daemon
@@ -100,6 +108,117 @@ struct Status: AsyncParsableCommand {
             print("tracked docs:   \(dtCount)")
             print("conflicts:      \(conflicts)")
             print("parked errors:  \(errors)")
+        }
+        await Self.printSyncTopology(cfg: cfg, cfgError: cfgError, live: nil)
+    }
+
+    static func ordinarySyncTopologyLines(
+        cfg: Config?,
+        cfgError: Error?,
+        live: IPC.Status?
+    ) -> [String] {
+        let syncDir = nonEmpty(live?.syncDir) ?? cfg?.syncDir.path
+        let remoteFolder = nonEmpty(live?.remoteFolder) ?? cfg?.remoteFolder
+            ?? Config.defaultRemoteFolder
+
+        var lines = ["ordinary sync:"]
+        lines.append("  local files:   \(syncDir ?? "(config unavailable)")")
+        lines.append("  cloud folder:  \(PathUtilities.remoteFolderPath(remoteFolder))")
+        lines.append("  method:        rmsync pull / rmsync diff / rmsync accept / rmsync push")
+        lines.append("  daemon role:   status, menu bar, dashboard; no background pull/reconcile")
+
+        if let live {
+            lines.append("  push mode:     \(autoPushLine(live)); rmsync-git uses manual push")
+        } else if let cfg {
+            let mode = cfg.autoPush.enabled
+                ? "auto-push configured for ordinary sync"
+                : "manual push mode"
+            lines.append("  push mode:     \(mode); rmsync-git uses manual push")
+        } else {
+            lines.append("  push mode:     unknown; config could not be read")
+        }
+
+        if let cfgError {
+            lines.append("  config file:   \(Paths.configPath.path) (unreadable: \(oneLine(cfgError)))")
+        } else {
+            lines.append("  config file:   \(Paths.configPath.path)")
+        }
+        lines.append("  state db:      \(Paths.stateDBPath.path)")
+        lines.append("  staging dir:   \(Paths.stagingDir.path)")
+        lines.append("  scratch dir:   \(Paths.scratchDir.path)")
+        return lines
+    }
+
+    static func gitSyncTopologyLines(
+        containing cwd: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    ) async -> [String] {
+        var lines = ["rmsync-git:"]
+        lines.append("  current dir:   \(cwd.path)")
+
+        let git: Git
+        do {
+            git = try await Git.open(at: cwd)
+        } catch Git.GitError.notRepository {
+            lines.append("  status:        not inside a git repository")
+            lines.append("  cloud root:    /sync/git/<name> per initialized repo")
+            lines.append("  method:        run rmsync git init inside a git repo, then pull/push")
+            return lines
+        } catch {
+            lines.append("  status:        unavailable: \(oneLine(error))")
+            return lines
+        }
+
+        do {
+            let common = try await git.commonDir()
+            let configURL = GitSync.configURL(common: common)
+            lines.append("  current repo:  \(git.root.path)")
+
+            guard FileManager.default.fileExists(atPath: configURL.path) else {
+                lines.append("  status:        not initialized for this repo")
+                lines.append("  config file:   \(configURL.path)")
+                lines.append("  cloud root:    /sync/git/<name> per initialized repo")
+                lines.append("  method:        run rmsync git init, then rmsync git pull / push")
+                return lines
+            }
+
+            let data = try Data(contentsOf: configURL)
+            if let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               raw["remoteRoot"] != nil {
+                lines.append("  status:        unsupported old config")
+                lines.append("  config file:   \(configURL.path)")
+                lines.append("  detail:        contains remoteRoot; rerun rmsync git init")
+                return lines
+            }
+
+            let cfg = try JSONDecoder().decode(GitSync.RepoConfig.self, from: data)
+            lines.append("  status:        initialized")
+            lines.append("  local files:   \(repoPath(cfg.syncRoot, in: git.root).path)")
+            lines.append("  cloud folder:  \(PathUtilities.remoteFolderPath(cfg.remoteFolder))")
+            lines.append("  metadata:      \(GitSync.stateRoot(common: common).path)")
+            lines.append("  state db:      \(GitSync.stateDBURL(common: common).path)")
+            lines.append("  cloud ref:     \(cfg.cloudRef) @ \(await shortRef(cfg.cloudRef, git: git))")
+            lines.append("  last snapshot: \(cfg.lastRemoteSnapshotRef) @ \(await shortRef(cfg.lastRemoteSnapshotRef, git: git))")
+            lines.append("  method:        rmsync git pull, normal git merge/rebase, rmsync git push")
+            lines.append("  separation:    independent from ordinary \(PathUtilities.remoteFolderPath(Config.defaultRemoteFolder))")
+            return lines
+        } catch {
+            lines.append("  status:        unavailable: \(oneLine(error))")
+            return lines
+        }
+    }
+
+    private static func printSyncTopology(
+        cfg: Config?,
+        cfgError: Error?,
+        live: IPC.Status?
+    ) async {
+        print("")
+        print("sync topology:")
+        for line in ordinarySyncTopologyLines(cfg: cfg, cfgError: cfgError, live: live) {
+            print(line)
+        }
+        for line in await gitSyncTopologyLines() {
+            print(line)
         }
     }
 
@@ -136,6 +255,40 @@ struct Status: AsyncParsableCommand {
 
     private static func checkedSuffix(_ checkedAt: String?) -> String {
         checkedAt.map { " (checked \($0))" } ?? ""
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return value
+    }
+
+    private static func oneLine(_ value: Any) -> String {
+        "\(value)"
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func repoPath(_ relativePath: String, in root: URL) -> URL {
+        guard relativePath != "." else { return root }
+        var url = root
+        for segment in relativePath.split(separator: "/", omittingEmptySubsequences: true) {
+            url.appendPathComponent(String(segment), isDirectory: true)
+        }
+        return url
+    }
+
+    private static func shortRef(_ ref: String, git: Git) async -> String {
+        do {
+            let result = try await git.runResult([
+                "rev-parse", "--verify", "--short=12", ref,
+            ])
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return result.exitCode == 0 && !value.isEmpty ? value : "missing"
+        } catch {
+            return "unknown: \(oneLine(error))"
+        }
     }
 }
 
