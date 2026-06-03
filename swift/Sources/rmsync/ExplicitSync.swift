@@ -1,0 +1,709 @@
+import Foundation
+
+enum ExplicitSync {
+    enum ChangeKind: String, Codable, Sendable {
+        case added
+        case modified
+        case deleted
+        case conflict
+        case localModified = "local_modified"
+        case unchanged
+        case error
+    }
+
+    struct Manifest: Codable, Sendable {
+        var id: String
+        var createdAt: String
+        var remoteFolder: String
+        var syncDir: String
+        var entries: [Entry]
+    }
+
+    struct Entry: Codable, Sendable {
+        var kind: ChangeKind
+        var docID: String
+        var remotePath: String
+        var localPath: String
+        var relativePath: String
+        var stagedPath: String?
+        var remoteModified: String?
+        var remoteVersion: Int
+        var remoteHash: String?
+        var localHashAtPull: String?
+        var baselineHash: String?
+        var pageIDs: [String]
+        var error: String?
+    }
+
+    struct StageResult {
+        var id: String
+        var root: URL
+        var entries: [Entry]
+    }
+
+    struct AcceptResult {
+        var applied: Int = 0
+        var deleted: Int = 0
+        var skipped: Int = 0
+        var refused: [String] = []
+    }
+
+    struct PushResult {
+        var pushed: Int = 0
+        var skipped: Int = 0
+        var refused: [String] = []
+    }
+
+    enum SyncError: Error, CustomStringConvertible {
+        case noStagedPull
+        case noSelection
+        case pathNotStaged(String)
+        case destructiveDeleteRequiresFlag(String)
+        case conflictRequiresForce(String)
+        case staleLocal(String)
+        case cloudChanged(String)
+        case cloudMissing(String)
+        case cloudAlreadyHasPath(String)
+        case localDatalessPlaceholder(String)
+        case localEmptyWouldOverwrite(String)
+        case invalidPath(String)
+
+        var description: String {
+            switch self {
+            case .noStagedPull:
+                return "no staged pull found; run `rmsync pull` first"
+            case .noSelection:
+                return "nothing selected; pass paths or --all"
+            case .pathNotStaged(let path):
+                return "path not found in staged pull: \(path)"
+            case .destructiveDeleteRequiresFlag(let path):
+                return "refusing staged delete for \(path); rerun with --include-deletes"
+            case .conflictRequiresForce(let path):
+                return "refusing conflict overwrite for \(path); rerun with --force"
+            case .staleLocal(let path):
+                return "local file changed since pull was staged: \(path)"
+            case .cloudChanged(let path):
+                return "cloud changed since last accepted baseline: \(path)"
+            case .cloudMissing(let path):
+                return "cloud document missing at tracked path: \(path)"
+            case .cloudAlreadyHasPath(let path):
+                return "cloud already has a document at \(path); refusing new push without --force"
+            case .localDatalessPlaceholder(let path):
+                return "refusing to push dataless cloud-storage placeholder: \(path)"
+            case .localEmptyWouldOverwrite(let path):
+                return "refusing to push empty local read over previously non-empty cloud content: \(path)"
+            case .invalidPath(let path):
+                return "path is outside sync_dir: \(path)"
+            }
+        }
+    }
+
+    static func stagePull(cfg: Config, state: State, cloud: Cloud = Cloud()) async throws -> StageResult {
+        let fm = FileManager.default
+        let id = stageID()
+        let root = Paths.stagingDir.appendingPathComponent(id, isDirectory: true)
+        let filesRoot = root.appendingPathComponent("files", isDirectory: true)
+        let archivesRoot = root.appendingPathComponent("archives", isDirectory: true)
+        try fm.createDirectory(at: filesRoot, withIntermediateDirectories: true)
+        try fm.createDirectory(at: archivesRoot, withIntermediateDirectories: true)
+
+        let nodes = try await cloud.tree("/\(cfg.remoteFolder)")
+        let remoteDocs = nodes
+            .filter { $0.type == .document }
+            .sorted { $0.remotePath < $1.remotePath }
+
+        var entries: [Entry] = []
+        var seenIDs: Set<String> = []
+
+        for node in remoteDocs {
+            seenIDs.insert(node.id)
+            let localURL = PathUtilities.remoteToLocal(
+                remotePath: node.remotePath,
+                syncDir: cfg.syncDir,
+                remoteFolder: cfg.remoteFolder
+            )
+            let rel = relativeMarkdownPath(
+                remotePath: node.remotePath,
+                remoteFolder: cfg.remoteFolder
+            )
+            let stagedURL = appendRelative(rel, to: filesRoot)
+            let stagedRel = "files/" + rel
+            let archiveDest = archivesRoot.appendingPathComponent(node.id, isDirectory: true)
+
+            do {
+                let archive = try await cloud.get(node.remotePath, dest: archiveDest)
+                let rmdoc = try await Archive.unpack(archive)
+                let md = try renderMarkdown(rmdoc)
+                try PathUtilities.atomicWriteText(md, to: stagedURL)
+
+                let remoteHash = PathUtilities.sha256(md)
+                let localHash = try? hashIfExists(localURL)
+                let stored = try await state.get(docID: node.id)
+                let byPath = try await state.byLocalPath(localURL.path)
+                let baseline = stored?.lastSyncedMDHash ?? byPath?.lastSyncedMDHash
+                let kind = classify(
+                    docID: node.id,
+                    stored: stored,
+                    byPath: byPath,
+                    localHash: localHash,
+                    remoteHash: remoteHash,
+                    baseline: baseline
+                )
+
+                entries.append(Entry(
+                    kind: kind,
+                    docID: node.id,
+                    remotePath: node.remotePath,
+                    localPath: localURL.path,
+                    relativePath: rel,
+                    stagedPath: stagedRel,
+                    remoteModified: node.modifiedClient.isEmpty ? nil : node.modifiedClient,
+                    remoteVersion: node.version,
+                    remoteHash: remoteHash,
+                    localHashAtPull: localHash,
+                    baselineHash: baseline,
+                    pageIDs: rmdoc.pages.map(\.pageID),
+                    error: nil
+                ))
+            } catch {
+                entries.append(Entry(
+                    kind: .error,
+                    docID: node.id,
+                    remotePath: node.remotePath,
+                    localPath: localURL.path,
+                    relativePath: rel,
+                    stagedPath: nil,
+                    remoteModified: node.modifiedClient.isEmpty ? nil : node.modifiedClient,
+                    remoteVersion: node.version,
+                    remoteHash: nil,
+                    localHashAtPull: try? hashIfExists(localURL),
+                    baselineHash: (try? await state.get(docID: node.id))?.lastSyncedMDHash,
+                    pageIDs: [],
+                    error: "\(error)"
+                ))
+            }
+        }
+
+        let tracked = try await state.allDocuments()
+        for doc in tracked where doc.docType == "DocumentType" && !seenIDs.contains(doc.docID) {
+            let rel = relativePathForLocal(doc.localPath, syncDir: cfg.syncDir)
+                ?? relativeMarkdownPath(remotePath: doc.remotePath, remoteFolder: cfg.remoteFolder)
+            entries.append(Entry(
+                kind: .deleted,
+                docID: doc.docID,
+                remotePath: doc.remotePath,
+                localPath: doc.localPath,
+                relativePath: rel,
+                stagedPath: nil,
+                remoteModified: doc.remoteModified,
+                remoteVersion: doc.remoteVersion,
+                remoteHash: nil,
+                localHashAtPull: try? hashIfExists(URL(fileURLWithPath: doc.localPath)),
+                baselineHash: doc.lastSyncedMDHash,
+                pageIDs: doc.pageIDs,
+                error: nil
+            ))
+        }
+
+        entries.sort { lhs, rhs in
+            if lhs.kind.rawValue == rhs.kind.rawValue { return lhs.relativePath < rhs.relativePath }
+            return lhs.relativePath < rhs.relativePath
+        }
+
+        let manifest = Manifest(
+            id: id,
+            createdAt: ISO8601.now(),
+            remoteFolder: cfg.remoteFolder,
+            syncDir: cfg.syncDir.path,
+            entries: entries
+        )
+        try writeManifest(manifest, root: root)
+        try PathUtilities.atomicWriteText(id + "\n", to: Paths.stagingDir.appendingPathComponent("current"))
+        return StageResult(id: id, root: root, entries: entries)
+    }
+
+    static func loadCurrentStage() throws -> (root: URL, manifest: Manifest) {
+        let fm = FileManager.default
+        let current = Paths.stagingDir.appendingPathComponent("current")
+        if let id = try? String(contentsOf: current, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !id.isEmpty {
+            let root = Paths.stagingDir.appendingPathComponent(id, isDirectory: true)
+            return (root, try readManifest(root: root))
+        }
+
+        guard let children = try? fm.contentsOfDirectory(
+            at: Paths.stagingDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { throw SyncError.noStagedPull }
+
+        let candidates = children
+            .filter { url in
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+                return values?.isDirectory == true
+                    && fm.fileExists(atPath: url.appendingPathComponent("manifest.json").path)
+            }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard let latest = candidates.last else { throw SyncError.noStagedPull }
+        return (latest, try readManifest(root: latest))
+    }
+
+    static func accept(
+        cfg: Config,
+        state: State,
+        paths: [String],
+        all: Bool,
+        includeDeletes: Bool,
+        force: Bool
+    ) async throws -> AcceptResult {
+        let (root, manifest) = try loadCurrentStage()
+        let selected = try selectEntries(manifest.entries, paths: paths, all: all)
+        var result = AcceptResult()
+
+        for entry in selected {
+            do {
+                switch entry.kind {
+                case .unchanged, .localModified:
+                    result.skipped += 1
+                case .error:
+                    result.refused.append("\(entry.relativePath): staged pull had error: \(entry.error ?? "unknown")")
+                case .conflict where !force:
+                    throw SyncError.conflictRequiresForce(entry.relativePath)
+                case .deleted:
+                    guard includeDeletes else {
+                        throw SyncError.destructiveDeleteRequiresFlag(entry.relativePath)
+                    }
+                    try await acceptDelete(entry, cfg: cfg, state: state, force: force)
+                    result.deleted += 1
+                case .added, .modified, .conflict:
+                    try await acceptFile(entry, root: root, cfg: cfg, state: state, force: force)
+                    result.applied += 1
+                }
+            } catch {
+                result.refused.append("\(entry.relativePath): \(error)")
+            }
+        }
+
+        return result
+    }
+
+    static func push(
+        cfg: Config,
+        state: State,
+        cloud: Cloud = Cloud(),
+        paths: [String],
+        includeDeletes: Bool,
+        force: Bool
+    ) async throws -> PushResult {
+        var result = PushResult()
+        var targets = try localPushTargets(cfg: cfg, paths: paths)
+
+        if includeDeletes {
+            for doc in try await state.allDocuments() where doc.docType == "DocumentType" {
+                if !FileManager.default.fileExists(atPath: doc.localPath) {
+                    targets.append(URL(fileURLWithPath: doc.localPath))
+                }
+            }
+        }
+
+        var seen: Set<String> = []
+        for target in targets {
+            let path = target.standardizedFileURL.path
+            guard seen.insert(path).inserted else { continue }
+            do {
+                if FileManager.default.fileExists(atPath: path) {
+                    try await pushFile(target, cfg: cfg, state: state, cloud: cloud, force: force)
+                    result.pushed += 1
+                } else if includeDeletes {
+                    try await pushDelete(target, state: state, cloud: cloud, force: force)
+                    result.pushed += 1
+                } else {
+                    result.skipped += 1
+                }
+            } catch {
+                result.refused.append("\(displayPath(target, syncDir: cfg.syncDir)): \(error)")
+            }
+        }
+
+        return result
+    }
+
+    static func printDiff(_ manifest: Manifest) {
+        let visible = manifest.entries.filter { $0.kind != .unchanged }
+        if visible.isEmpty {
+            print("no staged cloud changes")
+            return
+        }
+        for entry in visible {
+            let label = entry.kind.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0)
+            if let error = entry.error, entry.kind == .error {
+                print("\(label) \(entry.relativePath)  (\(error))")
+            } else {
+                print("\(label) \(entry.relativePath)")
+            }
+        }
+    }
+
+    // MARK: - accept helpers
+
+    private static func acceptFile(
+        _ entry: Entry,
+        root: URL,
+        cfg: Config,
+        state: State,
+        force: Bool
+    ) async throws {
+        guard let stagedPath = entry.stagedPath,
+              let remoteHash = entry.remoteHash else {
+            throw SyncError.pathNotStaged(entry.relativePath)
+        }
+        let stagedURL = appendRelative(stagedPath, to: root)
+        let localURL = URL(fileURLWithPath: entry.localPath)
+        if FileManager.default.fileExists(atPath: localURL.path),
+           !force,
+           (try? hashIfExists(localURL)) != entry.localHashAtPull {
+            throw SyncError.staleLocal(entry.relativePath)
+        }
+
+        let text = try String(contentsOf: stagedURL, encoding: .utf8)
+        try PathUtilities.atomicWriteText(text, to: localURL)
+        Xattrs.apply(
+            Xattrs.FileMetadata(
+                docID: entry.docID,
+                remotePath: entry.remotePath,
+                remoteModified: entry.remoteModified,
+                pageIDs: entry.pageIDs
+            ),
+            to: localURL
+        )
+
+        if let byPath = try await state.byLocalPath(localURL.path),
+           byPath.docID != entry.docID,
+           force {
+            try await state.delete(docID: byPath.docID)
+        }
+
+        let existing = try await state.get(docID: entry.docID)
+        let doc = Document(
+            docID: entry.docID,
+            parentID: existing?.parentID ?? "",
+            docType: "DocumentType",
+            remotePath: entry.remotePath,
+            localPath: localURL.path,
+            remoteVersion: entry.remoteVersion,
+            remoteModified: entry.remoteModified,
+            lastSyncedMDHash: remoteHash,
+            lastPullAt: ISO8601.now(),
+            lastPushAt: existing?.lastPushAt,
+            conflictState: nil,
+            errorState: nil,
+            pageIDs: entry.pageIDs,
+            pendingOp: nil
+        )
+        try await state.upsert(doc)
+        try await state.markPulled(
+            docID: entry.docID,
+            version: entry.remoteVersion,
+            mdHash: remoteHash,
+            modified: entry.remoteModified
+        )
+    }
+
+    private static func acceptDelete(
+        _ entry: Entry,
+        cfg: Config,
+        state: State,
+        force: Bool
+    ) async throws {
+        let localURL = URL(fileURLWithPath: entry.localPath)
+        if FileManager.default.fileExists(atPath: localURL.path),
+           !force,
+           (try? hashIfExists(localURL)) != entry.localHashAtPull {
+            throw SyncError.staleLocal(entry.relativePath)
+        }
+        if FileManager.default.fileExists(atPath: localURL.path) {
+            _ = try Trash.moveIn(localURL, syncDir: cfg.syncDir)
+        }
+        try await state.delete(docID: entry.docID)
+    }
+
+    // MARK: - push helpers
+
+    private static func pushFile(
+        _ localURL: URL,
+        cfg: Config,
+        state: State,
+        cloud: Cloud,
+        force: Bool
+    ) async throws {
+        guard PathUtilities.resolvedRelativePath(from: cfg.syncDir, to: localURL) != nil else {
+            throw SyncError.invalidPath(localURL.path)
+        }
+        if WatcherFilter.shouldIgnore(localURL.path, root: cfg.syncDir, mode: .markdown) {
+            return
+        }
+
+        let stored = try await state.byLocalPath(localURL.path)
+        let providerStatus = FileProvider.status(of: localURL)
+        if providerStatus.isDataless {
+            throw SyncError.localDatalessPlaceholder(displayPath(localURL, syncDir: cfg.syncDir))
+        }
+
+        let text = try String(contentsOf: localURL, encoding: .utf8)
+        let newHash = PathUtilities.sha256(text)
+        let previouslyNonEmpty = stored?.lastSyncedMDHash.map {
+            !$0.isEmpty && $0 != PathUtilities.sha256("")
+        } ?? false
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           previouslyNonEmpty {
+            throw SyncError.localEmptyWouldOverwrite(displayPath(localURL, syncDir: cfg.syncDir))
+        }
+
+        if !force, let stored {
+            try await ensureCloudStillAtBaseline(stored, cloud: cloud)
+        }
+
+        let authorUUID = try await state.getOrCreateAuthorUUID()
+        let pagesMd = PageSplitter.split(text)
+        let reuseIDs = stored?.pageIDs ?? []
+        var pageIDs: [String] = []
+        var pageBytes: [Data] = []
+        for (idx, pageText) in pagesMd.enumerated() {
+            pageIDs.append(idx < reuseIDs.count ? reuseIDs[idx] : Archive.newPageID())
+            pageBytes.append(try PageCodec.renderPage(text: pageText, authorUUID: authorUUID))
+        }
+
+        let docID = stored?.docID ?? UUID().uuidString.lowercased()
+        let visible = localURL.deletingPathExtension().lastPathComponent
+        let derivation = PathUtilities.localToRemoteParentChain(
+            localPath: localURL,
+            syncDir: cfg.syncDir,
+            remoteFolder: cfg.remoteFolder
+        )
+        let remoteDocPath = stored?.remotePath ?? "\(derivation.parentPath)/\(visible)"
+        if stored == nil, !force, (try await cloud.stat(remoteDocPath)) != nil {
+            throw SyncError.cloudAlreadyHasPath(remoteDocPath)
+        }
+
+        for prefix in derivation.mkdirChain { try? await cloud.mkdir(prefix) }
+
+        let tmpDir = Paths.scratchDir
+            .appendingPathComponent("rmsync-explicit-push-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let archive = tmpDir.appendingPathComponent("\(visible).rmdoc")
+        _ = try await Archive.pack(
+            Archive.RmDoc(
+                docID: docID,
+                visibleName: visible,
+                parent: "",
+                pages: zip(pageIDs, pageBytes).map {
+                    Archive.RmDocPage(pageID: $0.0, rmBytes: $0.1)
+                },
+                version: (stored?.remoteVersion ?? 0) + 1,
+                lastModified: Int64(Date().timeIntervalSince1970 * 1000)
+            ),
+            to: archive
+        )
+
+        try await cloud.put(
+            local: archive,
+            remoteParent: derivation.parentPath,
+            update: stored != nil
+        )
+
+        let stat = try? await cloud.stat(remoteDocPath)
+        let remoteModified = stat?.modifiedClient ?? ""
+        let remoteVersion = (stored?.remoteVersion ?? 0) + 1
+        if stored == nil {
+            try await state.upsert(Document(
+                docID: docID,
+                parentID: "",
+                docType: "DocumentType",
+                remotePath: remoteDocPath,
+                localPath: localURL.path,
+                remoteVersion: remoteVersion,
+                remoteModified: remoteModified,
+                lastSyncedMDHash: newHash,
+                lastPushAt: ISO8601.now(),
+                pageIDs: pageIDs
+            ))
+        } else {
+            try await state.setPageIDs(docID: docID, pageIDs: pageIDs)
+        }
+        try await state.markPushed(
+            docID: docID,
+            version: remoteVersion,
+            mdHash: newHash,
+            modified: remoteModified
+        )
+    }
+
+    private static func pushDelete(
+        _ localURL: URL,
+        state: State,
+        cloud: Cloud,
+        force: Bool
+    ) async throws {
+        guard let stored = try await state.byLocalPath(localURL.path) else { return }
+        if !force {
+            try await ensureCloudStillAtBaseline(stored, cloud: cloud)
+        }
+        try await cloud.rm(stored.remotePath)
+        try await state.delete(docID: stored.docID)
+    }
+
+    private static func ensureCloudStillAtBaseline(_ doc: Document, cloud: Cloud) async throws {
+        guard let baseline = doc.remoteModified, !baseline.isEmpty else { return }
+        guard let stat = try await cloud.stat(doc.remotePath) else {
+            throw SyncError.cloudMissing(doc.remotePath)
+        }
+        if stat.modifiedClient != baseline {
+            throw SyncError.cloudChanged(doc.remotePath)
+        }
+    }
+
+    // MARK: - manifest helpers
+
+    private static func writeManifest(_ manifest: Manifest, root: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(manifest)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try data.write(to: root.appendingPathComponent("manifest.json"))
+    }
+
+    private static func readManifest(root: URL) throws -> Manifest {
+        let data = try Data(contentsOf: root.appendingPathComponent("manifest.json"))
+        return try JSONDecoder().decode(Manifest.self, from: data)
+    }
+
+    private static func selectEntries(
+        _ entries: [Entry],
+        paths: [String],
+        all: Bool
+    ) throws -> [Entry] {
+        if all {
+            return entries.filter { $0.kind != .unchanged && $0.kind != .localModified }
+        }
+        guard !paths.isEmpty else { throw SyncError.noSelection }
+        let wanted = Set(paths.map(normalizeSelectionPath))
+        var selected: [Entry] = []
+        for path in wanted {
+            guard let entry = entries.first(where: {
+                normalizeSelectionPath($0.relativePath) == path
+                    || normalizeSelectionPath($0.localPath) == path
+            }) else {
+                throw SyncError.pathNotStaged(path)
+            }
+            selected.append(entry)
+        }
+        return selected
+    }
+
+    // MARK: - classification and paths
+
+    private static func classify(
+        docID: String,
+        stored: Document?,
+        byPath: Document?,
+        localHash: String?,
+        remoteHash: String,
+        baseline: String?
+    ) -> ChangeKind {
+        if let byPath, byPath.docID != docID { return .conflict }
+        guard let localHash else { return .added }
+        guard let baseline, !baseline.isEmpty else {
+            return localHash == remoteHash ? .unchanged : .conflict
+        }
+        if remoteHash == baseline {
+            return localHash == baseline ? .unchanged : .localModified
+        }
+        if localHash == baseline { return .modified }
+        if localHash == remoteHash { return .unchanged }
+        return .conflict
+    }
+
+    private static func renderMarkdown(_ rmdoc: Archive.RmDoc) throws -> String {
+        var pages: [String] = []
+        for page in rmdoc.pages {
+            let text = try PageCodec.parsePage(page.rmBytes)
+            if !text.isEmpty { pages.append(text) }
+        }
+        return pages.isEmpty ? "" : PageSplitter.join(pages)
+    }
+
+    private static func localPushTargets(cfg: Config, paths: [String]) throws -> [URL] {
+        if !paths.isEmpty {
+            return paths.map { raw in
+                raw.hasPrefix("/")
+                    ? URL(fileURLWithPath: raw)
+                    : appendRelative(raw, to: cfg.syncDir)
+            }
+        }
+
+        var urls: [URL] = []
+        guard let enumerator = FileManager.default.enumerator(
+            at: cfg.syncDir,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else { return urls }
+        for case let url as URL in enumerator {
+            if WatcherFilter.shouldIgnore(url.path, root: cfg.syncDir, mode: .markdown) {
+                continue
+            }
+            urls.append(url)
+        }
+        return urls
+    }
+
+    private static func hashIfExists(_ url: URL) throws -> String? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try PathUtilities.sha256File(url)
+    }
+
+    private static func stageID(_ date: Date = Date()) -> String {
+        let f = DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return f.string(from: date) + "-" + UUID().uuidString.prefix(8).lowercased()
+    }
+
+    private static func relativeMarkdownPath(remotePath: String, remoteFolder: String) -> String {
+        let url = PathUtilities.remoteToLocal(
+            remotePath: remotePath,
+            syncDir: URL(fileURLWithPath: "/", isDirectory: true),
+            remoteFolder: remoteFolder
+        )
+        return url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private static func relativePathForLocal(_ localPath: String, syncDir: URL) -> String? {
+        guard let rel = PathUtilities.resolvedRelativePath(
+            from: syncDir,
+            to: URL(fileURLWithPath: localPath)
+        ) else { return nil }
+        return rel.joined(separator: "/")
+    }
+
+    private static func appendRelative(_ rel: String, to root: URL) -> URL {
+        var url = root
+        for part in rel.split(separator: "/", omittingEmptySubsequences: true) {
+            url.appendPathComponent(String(part))
+        }
+        return url
+    }
+
+    private static func normalizeSelectionPath(_ path: String) -> String {
+        var p = path
+        if p.hasPrefix("./") { p.removeFirst(2) }
+        while p.hasPrefix("/") { p.removeFirst() }
+        return p
+    }
+
+    private static func displayPath(_ url: URL, syncDir: URL) -> String {
+        relativePathForLocal(url.path, syncDir: syncDir) ?? url.path
+    }
+}

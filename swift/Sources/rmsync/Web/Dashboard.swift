@@ -217,7 +217,7 @@ enum WebDashboard {
       </div>
 
       <div class="actions">
-        <button onclick="window.rmAction('sync-now')">sync now</button>
+        <button disabled title="Use rmsync pull / diff / accept / push in the CLI">manual sync mode</button>
         <button onclick="window.rmAction(${s.paused ? "'resume'" : "'pause'"})">
           ${s.paused ? "resume" : "pause"}
         </button>

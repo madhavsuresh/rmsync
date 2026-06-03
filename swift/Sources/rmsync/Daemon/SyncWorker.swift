@@ -780,7 +780,7 @@ actor SyncWorker {
         }
 
         // rmapi get into a tempdir. Parse pages in-process via RMScene.
-        let tmpDir = FileManager.default.temporaryDirectory
+        let tmpDir = Paths.scratchDir
             .appendingPathComponent("rmsync-pull-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmpDir) }
@@ -1408,7 +1408,7 @@ actor SyncWorker {
         // the new name — no cached field to drift.
         let visible = localPath.deletingPathExtension().lastPathComponent
 
-        let tmpDir = FileManager.default.temporaryDirectory
+        let tmpDir = Paths.scratchDir
             .appendingPathComponent("rmsync-push-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmpDir) }
