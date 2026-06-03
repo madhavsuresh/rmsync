@@ -221,6 +221,157 @@ actor State {
         try setSetting("last_seen_daemon_version", version)
     }
 
+    // MARK: - auto-push operations
+
+    struct AutoPushOperation: Sendable {
+        var id: Int64
+        var createdAt: String
+        var updatedAt: String
+        var state: String
+        var path: String
+        var docID: String?
+        var localHash: String?
+        var baselineRemoteModified: String?
+        var attemptCount: Int
+        var reason: String?
+        var remoteModified: String?
+    }
+
+    struct AutoPushSummary: Sendable {
+        var queued: Int
+        var uploading: Int
+        var succeeded: Int
+        var skipped: Int
+        var refused: Int
+        var failed: Int
+        var lastSucceededAt: String?
+    }
+
+    func createAutoPushOperation(
+        path: String,
+        docID: String?,
+        localHash: String?,
+        baselineRemoteModified: String?,
+        state opState: String,
+        reason: String? = nil
+    ) throws -> Int64 {
+        let now = ISO8601.now()
+        return try writer.write { db in
+            try db.execute(sql: """
+                INSERT INTO auto_push_ops(
+                    created_at, updated_at, state, path, doc_id, local_hash,
+                    baseline_remote_modified, attempt_count, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    now, now, opState, path, docID, localHash,
+                    baselineRemoteModified, 1, reason,
+                ]
+            )
+            return db.lastInsertedRowID
+        }
+    }
+
+    func updateAutoPushOperation(
+        id: Int64,
+        state opState: String,
+        reason: String? = nil,
+        remoteModified: String? = nil
+    ) throws {
+        try writer.write { db in
+            try db.execute(sql: """
+                UPDATE auto_push_ops
+                SET state = ?, updated_at = ?, reason = ?, remote_modified = ?
+                WHERE id = ?
+                """,
+                arguments: [opState, ISO8601.now(), reason, remoteModified, id]
+            )
+        }
+    }
+
+    func markInterruptedAutoPushOperations(reason: String) throws -> Int {
+        try writer.write { db in
+            try db.execute(sql: """
+                UPDATE auto_push_ops
+                SET state = 'failed', updated_at = ?, reason = ?
+                WHERE state IN ('queued', 'uploading')
+                """,
+                arguments: [ISO8601.now(), reason]
+            )
+            return db.changesCount
+        }
+    }
+
+    func interruptedAutoPushOperations() throws -> [AutoPushOperation] {
+        try writer.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT *
+                FROM auto_push_ops
+                WHERE state IN ('queued', 'uploading')
+                ORDER BY id ASC
+                """)
+            return rows.map(Self.autoPushOperation)
+        }
+    }
+
+    func recentAutoPushOperations(limit: Int = 20) throws -> [AutoPushOperation] {
+        try writer.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT *
+                FROM auto_push_ops
+                ORDER BY id DESC
+                LIMIT ?
+                """, arguments: [limit])
+            return rows.map(Self.autoPushOperation)
+        }
+    }
+
+    func autoPushSummary() throws -> AutoPushSummary {
+        try writer.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT state, COUNT(*) AS count
+                FROM auto_push_ops
+                GROUP BY state
+                """)
+            var counts: [String: Int] = [:]
+            for row in rows {
+                counts[row["state"] as String] = row["count"] as Int
+            }
+            let last = try String.fetchOne(db, sql: """
+                SELECT updated_at
+                FROM auto_push_ops
+                WHERE state = 'succeeded'
+                ORDER BY id DESC
+                LIMIT 1
+                """)
+            return AutoPushSummary(
+                queued: counts["queued"] ?? 0,
+                uploading: counts["uploading"] ?? 0,
+                succeeded: counts["succeeded"] ?? 0,
+                skipped: counts["skipped"] ?? 0,
+                refused: counts["refused"] ?? 0,
+                failed: counts["failed"] ?? 0,
+                lastSucceededAt: last
+            )
+        }
+    }
+
+    private static func autoPushOperation(_ row: Row) -> AutoPushOperation {
+        AutoPushOperation(
+            id: row["id"],
+            createdAt: row["created_at"],
+            updatedAt: row["updated_at"],
+            state: row["state"],
+            path: row["path"],
+            docID: row["doc_id"],
+            localHash: row["local_hash"],
+            baselineRemoteModified: row["baseline_remote_modified"],
+            attemptCount: row["attempt_count"],
+            reason: row["reason"],
+            remoteModified: row["remote_modified"]
+        )
+    }
+
     // MARK: - log
 
     func log(level: String, message: String, docID: String? = nil) throws {

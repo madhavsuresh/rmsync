@@ -407,6 +407,66 @@ struct ForcePushCmd: AsyncParsableCommand {
     }
 }
 
+// MARK: - auto-push
+
+struct AutoPushCmd: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "auto-push",
+        abstract: "Inspect opt-in safe auto-push state.",
+        subcommands: [Status.self],
+        defaultSubcommand: Status.self
+    )
+
+    struct Status: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "status",
+            abstract: "Show auto-push configuration and recent operations."
+        )
+
+        @Option(name: .long, help: "Number of recent operations to print.")
+        var limit: Int = 10
+
+        func run() async throws {
+            let cfg = try Config.load()
+            let state = try State(path: Paths.stateDBPath)
+            let summary = try await state.autoPushSummary()
+            let recent = try await state.recentAutoPushOperations(limit: max(1, limit))
+
+            print("enabled:        \(cfg.autoPush.enabled)")
+            print("new files:      \(cfg.autoPush.newFiles)")
+            print("debounce:       \(cfg.autoPush.debounceSeconds)s")
+            print("stable samples: \(cfg.autoPush.stableSampleCount)")
+            print("scan interval:  \(cfg.autoPush.scanIntervalSeconds)s")
+            print("rate limit:     \(cfg.autoPush.maxPushesPerMinute)/min")
+            print("")
+            print("queued:         \(summary.queued)")
+            print("uploading:      \(summary.uploading)")
+            print("succeeded:      \(summary.succeeded)")
+            print("skipped:        \(summary.skipped)")
+            print("refused:        \(summary.refused)")
+            print("failed:         \(summary.failed)")
+            print("last success:   \(summary.lastSucceededAt ?? "(never)")")
+
+            guard !recent.isEmpty else { return }
+            print("")
+            print("recent:")
+            for op in recent {
+                let rel = relativeDisplay(op.path, syncDir: cfg.syncDir)
+                let reason = op.reason.map { "  \($0)" } ?? ""
+                print("#\(op.id) \(op.state.padding(toLength: 9, withPad: " ", startingAt: 0)) \(rel)\(reason)")
+            }
+        }
+
+        private func relativeDisplay(_ path: String, syncDir: URL) -> String {
+            guard let rel = PathUtilities.resolvedRelativePath(
+                from: syncDir,
+                to: URL(fileURLWithPath: path)
+            ) else { return path }
+            return rel.joined(separator: "/")
+        }
+    }
+}
+
 private func printSummary(_ entries: [ExplicitSync.Entry]) {
     let grouped = Dictionary(grouping: entries, by: \.kind)
     for kind in [

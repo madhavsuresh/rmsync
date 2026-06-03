@@ -88,6 +88,7 @@ Core subcommands. Run any of them from anywhere.
 | `rmsync git init` | Initialize `/sync/<repo>` for a git-backed workflow | git refs + rmapi |
 | `rmsync git pull` / `rmsync-git pull` | Render cloud state into a new git branch | rmapi + git branch |
 | `rmsync git push` / `rmsync-git push` | Merge cloud with `HEAD`, then upload the verified git tree | git merge-tree + rmapi |
+| `rmsync auto-push status` | Show optional safe auto-push attempts and refusal reasons | State DB |
 | `rmsync pause` | Set the paused status flag | IPC → state DB |
 | `rmsync resume` | Clear the paused status flag | IPC → state DB |
 | `rmsync sync-now` | Deprecated; automatic polling is disabled | IPC |
@@ -355,6 +356,12 @@ Modern config keys and defaults (all paths relative to your home):
 |---|---|---|
 | `sync_dir` | `~/rmsync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
 | `remote_folder` | `Writing` | Which cloud folder to mirror |
+| `[auto_push].enabled` | `false` | Opt into safe local-to-cloud auto-push for stable `.md` creates/edits |
+| `[auto_push].new_files` | `true` | Allow local-only `.md` files to auto-create cloud docs |
+| `[auto_push].debounce_seconds` | `2.0` | Delay between file stability samples |
+| `[auto_push].stable_sample_count` | `2` | Number of identical size/mtime/hash samples required before upload |
+| `[auto_push].scan_interval_seconds` | `30` | Periodic scan cadence for edits made while the daemon was off |
+| `[auto_push].max_pushes_per_minute` | `30` | Rate limit for automatic uploads |
 | `[deletion].trash_retention_days` | `30` | Retention used by `rmsync trash prune` (`0` = keep forever). |
 | `[web].enabled` | `false` | Enable the optional HTTP dashboard. |
 | `[web].bind_addr` | `127.0.0.1` | Dashboard bind address; use `0.0.0.0` only on trusted networks. |
@@ -367,6 +374,49 @@ intentionally want to re-upload selected files. Older config keys from
 the watcher/poller daemon are still accepted for existing installs, but
 new configs omit them because explicit sync does not use background
 watching, polling, or automatic delete propagation.
+
+### Optional safe auto-push
+
+Auto-push is off by default. When enabled, the daemon watches and scans
+`sync_dir` for local `.md` creates/edits, waits until each file is
+stable, then runs the same safe push path as `rmsync push` with
+`includeDeletes = false` and `force = false`.
+
+It never accepts cloud changes and never propagates deletes. If the
+cloud doc changed since the local baseline, the file is dataless, the
+local read would overwrite prior non-empty content with empty text, or a
+new local file collides with an existing cloud path, auto-push refuses
+and records the reason.
+
+Tracked docs also need an accepted remote snapshot baseline from the
+current explicit pull cache. If the stored baseline is missing or no
+longer matches the cached remote fingerprint, auto-push refuses and asks
+for a manual `rmsync push` or `rmsync pull`/review cycle. On daemon
+restart, interrupted auto-push rows are verified by downloading and
+rendering the remote document; state is repaired only if the rendered
+Markdown hash matches the operation record.
+
+Auto-push is disabled inside repositories initialized with
+`rmsync git`. That workflow treats git `HEAD` as the source of truth and
+uploads through `rmsync git push`.
+
+Inspect recent attempts with:
+
+```sh
+rmsync auto-push status
+```
+
+Enable it in `config.toml`:
+
+```toml
+[auto_push]
+enabled               = true
+new_files             = true
+debounce_seconds      = 2.0
+stable_sample_count   = 2
+scan_interval_seconds = 30
+max_pushes_per_minute = 30
+```
 
 ### …recover a file I deleted by mistake
 

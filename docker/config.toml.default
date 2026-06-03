@@ -16,6 +16,20 @@ remote_folder = "Writing"
 [deletion]
 trash_retention_days = 30 # 0 keeps local .rmsync-trash entries forever
 
+# Optional safe auto-push. Local Markdown creates/edits are pushed after
+# they are stable on disk. Auto-push never propagates deletes, never uses
+# --force, and pauses/refuses when the cloud changed since the local
+# baseline. Tracked docs need a cached accepted remote snapshot, and
+# rmsync-git repositories must upload with `rmsync git push`.
+# Cloud/tablet edits still require explicit pull/diff/accept.
+# [auto_push]
+# enabled               = false
+# new_files             = true
+# debounce_seconds      = 2.0
+# stable_sample_count   = 2
+# scan_interval_seconds = 30
+# max_pushes_per_minute = 30
+
 # Optional: web dashboard (replaces the macOS menubar for Linux users).
 # When enabled, daemon listens on the configured TCP port and serves
 # a status page + pause/resume actions. Sync mutations stay in the CLI.

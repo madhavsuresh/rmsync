@@ -20,6 +20,7 @@ struct Config: Decodable, Sendable {
     var backupSnapshotsToKeep: Int
     var dryRun: Bool
     var log: LogConfig
+    var autoPush: AutoPushConfig
 
     /// Optional ``[inbox]`` block: a "drop folder" for sending PDFs /
     /// EPUBs to the tablet without going through rmapi by hand. Daemon
@@ -64,6 +65,50 @@ struct Config: Decodable, Sendable {
             case info = "INFO"
             case warning = "WARNING"
             case error = "ERROR"
+        }
+    }
+
+    struct AutoPushConfig: Decodable, Sendable {
+        var enabled: Bool
+        var newFiles: Bool
+        var debounceSeconds: Double
+        var stableSampleCount: Int
+        var scanIntervalSeconds: Int
+        var maxPushesPerMinute: Int
+
+        enum CodingKeys: String, CodingKey {
+            case enabled
+            case newFiles = "new_files"
+            case debounceSeconds = "debounce_seconds"
+            case stableSampleCount = "stable_sample_count"
+            case scanIntervalSeconds = "scan_interval_seconds"
+            case maxPushesPerMinute = "max_pushes_per_minute"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+            self.newFiles = try c.decodeIfPresent(Bool.self, forKey: .newFiles) ?? true
+            self.debounceSeconds = try c.decodeIfPresent(Double.self, forKey: .debounceSeconds) ?? 2.0
+            self.stableSampleCount = max(1, try c.decodeIfPresent(Int.self, forKey: .stableSampleCount) ?? 2)
+            self.scanIntervalSeconds = max(1, try c.decodeIfPresent(Int.self, forKey: .scanIntervalSeconds) ?? 30)
+            self.maxPushesPerMinute = max(1, try c.decodeIfPresent(Int.self, forKey: .maxPushesPerMinute) ?? 30)
+        }
+
+        init(
+            enabled: Bool = false,
+            newFiles: Bool = true,
+            debounceSeconds: Double = 2.0,
+            stableSampleCount: Int = 2,
+            scanIntervalSeconds: Int = 30,
+            maxPushesPerMinute: Int = 30
+        ) {
+            self.enabled = enabled
+            self.newFiles = newFiles
+            self.debounceSeconds = debounceSeconds
+            self.stableSampleCount = max(1, stableSampleCount)
+            self.scanIntervalSeconds = max(1, scanIntervalSeconds)
+            self.maxPushesPerMinute = max(1, maxPushesPerMinute)
         }
     }
 
@@ -220,6 +265,7 @@ struct Config: Decodable, Sendable {
         case backupSnapshotsToKeep = "backup_snapshots_to_keep"
         case dryRun = "dry_run"
         case log
+        case autoPush = "auto_push"
         case inbox
         case web
         case deletion
@@ -243,6 +289,8 @@ struct Config: Decodable, Sendable {
         self.dryRun = try c.decodeIfPresent(Bool.self, forKey: .dryRun) ?? false
         self.log = try c.decodeIfPresent(LogConfig.self, forKey: .log)
             ?? LogConfig(level: .info)
+        self.autoPush = try c.decodeIfPresent(AutoPushConfig.self, forKey: .autoPush)
+            ?? AutoPushConfig()
         self.inbox = try c.decodeIfPresent(InboxConfig.self, forKey: .inbox)
         self.web = try c.decodeIfPresent(WebConfig.self, forKey: .web)
         self.deletion = try c.decodeIfPresent(DeletionConfig.self, forKey: .deletion)
@@ -274,6 +322,7 @@ struct Config: Decodable, Sendable {
         backupSnapshotsToKeep: Int = 30,
         dryRun: Bool = false,
         log: LogConfig = LogConfig(level: .info),
+        autoPush: AutoPushConfig = AutoPushConfig(),
         inbox: InboxConfig? = nil,
         web: WebConfig? = nil,
         deletion: DeletionConfig = DeletionConfig()
@@ -292,9 +341,9 @@ struct Config: Decodable, Sendable {
         self.backupSnapshotsToKeep = backupSnapshotsToKeep
         self.dryRun = dryRun
         self.log = log
+        self.autoPush = autoPush
         self.inbox = inbox
         self.web = web
         self.deletion = deletion
     }
 }
-

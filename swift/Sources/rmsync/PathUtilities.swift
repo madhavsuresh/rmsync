@@ -186,7 +186,8 @@ enum PathUtilities {
             at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let tmp = path.appendingPathExtension("tmp")
+        let tmp = path.deletingLastPathComponent()
+            .appendingPathComponent(".\(path.lastPathComponent).\(UUID().uuidString).tmp")
         try text.write(to: tmp, atomically: false, encoding: .utf8)
 
         // ``replaceItemAt`` handles the case where ``path`` already
