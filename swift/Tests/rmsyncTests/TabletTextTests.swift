@@ -30,6 +30,18 @@ struct TabletTextTests {
         )
     }
 
+    @Test("paragraph-rendered tablet no-op preserves exact source")
+    func paragraphRenderedNoopPreservesSource() {
+        let source = "## Heading\n\n- item\n\nbody\n"
+        let paragraphRenderedTablet = "## Heading\n\n- item\n\nbody\n"
+        #expect(
+            TabletText.sourceByApplyingTabletEdit(
+                baseSource: source,
+                editedTablet: paragraphRenderedTablet
+            ) == source
+        )
+    }
+
     @Test("tablet append applies without rewriting unrelated spacing")
     func appendPreservesSourceSpacing() {
         let source = "## Heading\n\nbody\n"
@@ -51,6 +63,26 @@ struct TabletTextTests {
                 baseSource: source,
                 editedTablet: edited
             ) == "# Intro\n\nchanged\n"
+        )
+    }
+
+    @Test("tablet append ignores paragraph-rendering spacing noise")
+    func appendIgnoresParagraphSpacingNoise() {
+        let source = "What are the confusions with the test here. \n\n"
+            + "What is covariance adjusted, what does that mean. \n\n"
+            + "But the main thing is that we are estimating the gaussian \n"
+            + "how do we finally\n\n\n"
+        let paragraphRenderedTablet = "What are the confusions with the test here. \n\n\n"
+            + "What is covariance adjusted, what does that mean. \n\n"
+            + "But the main thing is that we are estimating the gaussian \n\n"
+            + "how do we finally\n\n"
+            + "what's here\n\n\n"
+
+        #expect(
+            TabletText.sourceByApplyingTabletEdit(
+                baseSource: source,
+                editedTablet: paragraphRenderedTablet
+            ) == source + "what's here\n"
         )
     }
 }
