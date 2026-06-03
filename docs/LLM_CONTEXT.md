@@ -208,7 +208,7 @@ push, accept, delete, restore, or force-push.
 | `rmsync pause` | IPC | Sets paused flag. Survives daemon restart. | ✓ |
 | `rmsync resume` | IPC | Clears paused flag. | ✓ |
 | `rmsync pull` | rmapi + staging | Fetch cloud changes into staging without touching local files. | ✓ |
-| `rmsync diff` | staging | Show staged cloud changes. | ✓ |
+| `rmsync diff [path]` | staging | Show staged cloud changes, or one file diff. | ✓ |
 | `rmsync accept <path>` | filesystem + state DB | Apply selected staged cloud changes locally. | ✓ |
 | `rmsync accept --all` | filesystem + state DB | Apply all staged non-delete changes. | ✓ |
 | `rmsync accept --include-deletes <path>` | filesystem + state DB | Accept staged cloud deletes and move local files to trash. | ✓ |

@@ -9,7 +9,7 @@ struct RMSyncCommand: AsyncParsableCommand {
         discussion: """
         Current sync is explicit:
           rmsync pull
-          rmsync diff
+          rmsync diff [path]
           rmsync accept <path>    # or: rmsync accept --all
           rmsync push [path ...]
 

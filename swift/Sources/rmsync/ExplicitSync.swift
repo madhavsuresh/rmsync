@@ -111,6 +111,8 @@ enum ExplicitSync {
         case localDatalessPlaceholder(String)
         case localEmptyWouldOverwrite(String)
         case invalidPath(String)
+        case stagedDiffUnavailable(String)
+        case diffFailed(exitCode: Int32, stderr: String)
 
         var description: String {
             switch self {
@@ -138,6 +140,10 @@ enum ExplicitSync {
                 return "refusing to push empty local read over previously non-empty cloud content: \(path)"
             case .invalidPath(let path):
                 return "path is outside sync_dir: \(path)"
+            case .stagedDiffUnavailable(let path):
+                return "staged diff unavailable for \(path)"
+            case .diffFailed(let code, let stderr):
+                return "diff(1) failed (exit \(code)): \(stderr)"
             }
         }
     }
@@ -464,6 +470,22 @@ enum ExplicitSync {
         }
     }
 
+    static func printDiff(_ manifest: Manifest, root: URL, path: String) throws {
+        let text = try diffText(manifest, root: root, path: path)
+        if text.isEmpty {
+            print("no staged cloud changes for \(normalizeSelectionPath(path))")
+        } else {
+            print(text, terminator: text.hasSuffix("\n") ? "" : "\n")
+        }
+    }
+
+    static func diffText(_ manifest: Manifest, root: URL, path: String) throws -> String {
+        guard let entry = try selectEntries(manifest.entries, paths: [path], all: false).first else {
+            throw SyncError.pathNotStaged(path)
+        }
+        return try diffText(entry, root: root)
+    }
+
     static func printForcePushPlan(_ items: [ForcePushPlanItem]) {
         if items.isEmpty {
             print("remote already matches an empty local tree")
@@ -778,6 +800,41 @@ enum ExplicitSync {
         return try JSONDecoder().decode(Manifest.self, from: data)
     }
 
+    private static func diffText(_ entry: Entry, root: URL) throws -> String {
+        let label = entry.kind.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0)
+        let heading = "\(label) \(entry.relativePath)\n"
+
+        if let error = entry.error, entry.kind == .error {
+            return "\(heading)(\(error))\n"
+        }
+
+        let fm = FileManager.default
+        let localURL = URL(fileURLWithPath: entry.localPath)
+        let oldURL: URL?
+        let newURL: URL?
+
+        if entry.kind == .deleted {
+            oldURL = fm.fileExists(atPath: localURL.path) ? localURL : nil
+            newURL = nil
+        } else {
+            guard let stagedPath = entry.stagedPath else {
+                throw SyncError.stagedDiffUnavailable(entry.relativePath)
+            }
+            let stagedURL = appendRelative(stagedPath, to: root)
+            guard fm.fileExists(atPath: stagedURL.path) else {
+                throw SyncError.stagedDiffUnavailable(entry.relativePath)
+            }
+            oldURL = fm.fileExists(atPath: localURL.path) ? localURL : nil
+            newURL = stagedURL
+        }
+
+        let diff = try unifiedDiff(old: oldURL, new: newURL)
+        if diff.isEmpty {
+            return entry.kind == .unchanged ? "" : "\(heading)(no text diff)\n"
+        }
+        return heading + diff
+    }
+
     private static func selectEntries(
         _ entries: [Entry],
         paths: [String],
@@ -1026,5 +1083,38 @@ enum ExplicitSync {
 
     private static func displayPath(_ url: URL, syncDir: URL) -> String {
         relativePathForLocal(url.path, syncDir: syncDir) ?? url.path
+    }
+
+    private struct DiffResult {
+        let exitCode: Int32
+        let stdout: String
+        let stderr: String
+    }
+
+    private static func unifiedDiff(old: URL?, new: URL?) throws -> String {
+        let result = try runDiff(args: ["-u", old?.path ?? "/dev/null", new?.path ?? "/dev/null"])
+        if result.exitCode == 0 || result.exitCode == 1 {
+            return result.stdout
+        }
+        throw SyncError.diffFailed(exitCode: result.exitCode, stderr: result.stderr)
+    }
+
+    private static func runDiff(args: [String]) throws -> DiffResult {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/diff")
+        proc.arguments = args
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        try proc.run()
+        proc.waitUntilExit()
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        return DiffResult(
+            exitCode: proc.terminationStatus,
+            stdout: String(data: outData, encoding: .utf8) ?? "",
+            stderr: String(data: errData, encoding: .utf8) ?? ""
+        )
     }
 }

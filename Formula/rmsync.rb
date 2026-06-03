@@ -159,7 +159,7 @@ class Rmsync < Formula
       menu bar, dashboard, and IPC online, but it does not poll the
       cloud or watch local files for background mutation. Sync with:
           rmsync pull
-          rmsync diff
+          rmsync diff [path]
           rmsync accept <path>  # or: rmsync accept --all
           rmsync push [path ...]
 
