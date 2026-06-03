@@ -71,9 +71,16 @@ All 10 subcommands. Run any of them from anywhere.
 | Command | What it does | Mechanism |
 |---|---|---|
 | `rmsync status` | Current state, tracked docs, last pull/push, conflicts, errors | Live IPC |
-| `rmsync pause` | Stop syncing without stopping the daemon | IPC → state DB |
-| `rmsync resume` | Resume | IPC → state DB |
-| `rmsync sync-now` | Force an immediate poll cycle | IPC |
+| `rmsync pull` | Fetch cloud changes into a staging area without touching local files | rmapi + staging dir |
+| `rmsync diff` | Show the currently staged cloud changes | Staging manifest |
+| `rmsync accept <path>` | Apply selected staged cloud changes locally | Staging → sync dir |
+| `rmsync accept --all` | Apply every staged non-delete cloud change | Staging → sync dir |
+| `rmsync accept --include-deletes <path>` | Accept staged cloud deletes, moving local files to trash | Staging → `.rmsync-trash` |
+| `rmsync push [path ...]` | Push local Markdown changes to the cloud | Direct rmapi |
+| `rmsync push --include-deletes` | Also propagate tracked local files missing on disk | Direct rmapi |
+| `rmsync pause` | Set the paused status flag | IPC → state DB |
+| `rmsync resume` | Clear the paused status flag | IPC → state DB |
+| `rmsync sync-now` | Deprecated; automatic polling is disabled | IPC |
 | `rmsync conflicts` | List unresolved `.md.conflict` files | State DB |
 | `rmsync doctor` | Run all 10 health checks, exit 1 on failure | Direct |
 | `rmsync logs -f` | Tail the structured JSON log | File tail |
@@ -86,9 +93,9 @@ All 10 subcommands. Run any of them from anywhere.
 `daemon` and `init` also exist but you don't run them by hand — `daemon`
 is what launchd invokes; `init` just prints a pointer to `install.sh`.
 
-Everything that changes daemon state (`pause`, `resume`, `sync-now`)
-goes through the Unix-socket IPC. Everything that controls the agent
-lifecycle (`start`, `stop`, `restart`, `relocate`) talks to `launchctl`.
+`pull`, `accept`, and `push` are the only sync-mutating commands in
+the explicit model. Everything that controls the agent lifecycle
+(`start`, `stop`, `restart`, `relocate`) talks to `launchctl`.
 
 ---
 
@@ -96,46 +103,39 @@ lifecycle (`start`, `stop`, `restart`, `relocate`) talks to `launchctl`.
 
 ### …edit a Markdown file on my Mac and see it on the tablet
 
-Just edit it.
+Edit it, then push when you are ready.
 
 ```sh
 echo "new line" >> ~/Library/CloudStorage/Dropbox/reMarkable/hello.md
+rmsync push hello.md
 ```
 
 What happens:
 
-1. FSEventStream fires within ~100ms.
-2. Watcher debounces 2s (coalesces rapid editor saves).
-3. Worker packs the file, shells `rmapi put --force` to the cloud.
+1. `rmsync push` packs the selected Markdown file as a reMarkable doc.
+2. It checks the stored cloud baseline unless you passed `--force`.
+3. It shells `rmapi put --force` to update the cloud.
 4. Sync appears on the tablet the next time you sync it (swipe-down
    from the top on the home screen) or within its own auto-sync window.
-
-End-to-end ~5s from save to cloud, plus however long the tablet takes
-to pull.
 
 `rmsync status` will show `last push:` updated and `tracked docs:`
 incremented if it was a new file.
 
 ### …write on the tablet and have it appear as Markdown locally
 
-Write on the tablet. When the tablet syncs back to the cloud (auto on
-modern firmware), our poller sees it.
-
-Poll intervals adapt based on recent activity:
-- **15s** when something changed in the last 5 minutes
-- **30s** default
-- **120s** when idle for 20+ minutes
-
-So the first change after a quiet stretch can take up to 2 minutes to
-show up locally. Once you start editing, subsequent changes are 15s.
-
-If you don't want to wait:
+Write on the tablet and let the tablet sync back to the reMarkable
+cloud. Then pull into staging:
 
 ```sh
-rmsync sync-now
+rmsync pull
+rmsync diff
+rmsync accept path/from/diff.md
 ```
 
-Which kicks the poller immediately.
+`rmsync pull` never overwrites local files directly. It downloads cloud
+content into the staging area, classifies each path as added, modified,
+deleted, conflict, or local_modified, and leaves local state untouched
+until you accept a staged entry.
 
 ### …move the sync dir to Dropbox (or anywhere else)
 
@@ -278,27 +278,26 @@ Config keys and defaults (all paths relative to your home):
 |---|---|---|
 | `sync_dir` | `~/rmsync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
 | `remote_folder` | `Writing` | Which cloud folder to mirror |
-| `worker_pool_size` | `3` | Parallel pull/push workers |
-| `poll_interval_seconds` | `30` | Default poll cadence |
-| `poll_active_interval_seconds` | `15` | After recent activity |
-| `poll_idle_interval_seconds` | `120` | After 20+ min quiet |
-| `debounce_seconds` | `2.0` | Local edit → push delay |
-| `echo_fence_seconds` | `5.0` | Drop watcher events we caused |
+| `worker_pool_size` | `3` | Legacy daemon worker setting; explicit CLI sync does not use background workers |
+| `poll_interval_seconds` | `30` | Legacy poll cadence; automatic polling is disabled |
+| `poll_active_interval_seconds` | `15` | Legacy active poll cadence |
+| `poll_idle_interval_seconds` | `120` | Legacy idle poll cadence |
+| `debounce_seconds` | `2.0` | Legacy watcher debounce; automatic local watching is disabled |
+| `echo_fence_seconds` | `5.0` | Legacy watcher echo-fence window |
 | `retry_max_attempts` | `3` | Per-operation retry budget |
 | `push_strategy` | `native_plain` | Also: `native_formatted` (stub), `pdf` (stub) |
 | `dry_run` | `false` | Log intent, don't execute |
 | `[log].level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `[deletion].enable_propagation` | `true` | Master switch for rename/delete propagation. Default flipped on in v0.2.27 (was opt-in in v0.2.19–v0.2.26). Set false to disable. |
-| `[deletion].trash_retention_days` | `30` | Auto-prune cadence (`0` = keep forever). |
-| `[deletion].bulk_delete_threshold` | `0.5` | Refuse if `>N` of tracked docs would be deleted in window. |
-| `[deletion].bulk_delete_window_seconds` | `30` | Rolling window for the bulk-delete brake. |
+| `[deletion].enable_propagation` | `true` | Legacy daemon switch. Deletes now require explicit `accept --include-deletes` or `push --include-deletes`. |
+| `[deletion].trash_retention_days` | `30` | Retention used by `rmsync trash prune` (`0` = keep forever). |
+| `[deletion].bulk_delete_threshold` | `0.5` | Legacy daemon bulk-delete brake threshold. |
+| `[deletion].bulk_delete_window_seconds` | `30` | Legacy daemon bulk-delete brake window. |
 
 ### …recover a file I deleted by mistake
 
-If `[deletion] enable_propagation = true` is set, every local
-delete (and tablet-side delete) parks the file under
+Explicit delete acceptance parks local files under
 `<sync_dir>/.rmsync-trash/<utc-stamp>/<rel-path>` before doing
-anything irreversible. To inspect and recover:
+anything irreversible. To inspect and recover local trash:
 
 ```sh
 rmsync trash list                       # everything currently parked
@@ -306,9 +305,9 @@ rmsync trash restore "old/note.md"      # one-file restore
 rmsync trash restore --all              # bulk restore
 ```
 
-Restored files reappear at their original location; the daemon's
-watcher sees them on its next tick and re-pushes to the cloud as
-if newly created.
+Restored files reappear at their original location. They are not pushed
+automatically; run `rmsync push <path>` if you want the restored
+content on the cloud.
 
 The reMarkable cloud also keeps its own trash for cloud-side
 deletes, recoverable via the cloud UI within reMarkable's
@@ -322,24 +321,17 @@ rmsync trash prune                       # honors trash_retention_days
 rmsync trash prune --days 7              # one-off override
 ```
 
-The daemon also auto-prunes at startup based on
-`trash_retention_days` (set to 0 to keep forever).
+The status-only daemon does not prune automatically; run
+`rmsync trash prune` when you want to enforce `trash_retention_days`
+(set to 0 to keep forever).
 
 ### …organize my docs in folders
 
-`mkdir <sync_dir>/papers/2026/` creates a matching folder on the
-cloud (and on the tablet) on the next sync cycle. Save
-`<sync_dir>/papers/2026/foo.md` and the doc lands at
-`/Writing/papers/2026/foo` on the cloud rather than flat at the
-top. Folder creation works in both directions:
-
-- Local mkdir → cloud mkdir (always-on, v0.2.22+).
-- Cloud mkdir on the tablet → local empty dir on next poll.
-- Local rmdir on an empty dir → cloud rmdir (gated on
-  `[deletion] enable_propagation = true`; only fires once the
-  cloud folder is verified empty).
-- Cloud rmdir → local empty-dir cleanup (same propagation gate;
-  only removes if the local dir is also empty).
+`mkdir <sync_dir>/papers/2026/` creates local structure. When you push
+`<sync_dir>/papers/2026/foo.md`, the doc lands at
+`/Writing/papers/2026/foo` on the cloud rather than flat at the top.
+Cloud folder structure appears in the staged tree after `rmsync pull`;
+accepting selected files creates the corresponding local directories.
 
 So you can structure a long writing project however you like —
 chapters, sections, sub-projects — and it stays in sync. Hidden
@@ -370,8 +362,8 @@ rmsync history diff ~/rmsync-writing/Chapter-3.md \
     --against 2026-04-29T22:14:08Z
 
 # revert. parks the current local file in .rmsync-trash/ first
-# (recoverable via `rmsync trash restore`), then asks the daemon
-# to push the reverted content to the cloud immediately.
+# (recoverable via `rmsync trash restore`). Push explicitly after
+# inspecting the restored content.
 rmsync history restore ~/rmsync-writing/Chapter-3.md \
     --to 2026-04-29T22:14:08Z
 ```
@@ -401,27 +393,9 @@ remote_folder     = "Inbox"
 delete_after_push = true
 ```
 
-Then `rmsync restart`. Drop a `.pdf` or `.epub` into `local_dir`;
-within ~5 seconds the daemon pushes it to `/Inbox/` on your
-reMarkable cloud and (by default) removes the local copy. Closes
-the "send paper to tablet" loop without email or rmapi-by-hand.
-
-The daemon creates `local_dir` on startup if missing. Watcher
-shares the same FSEvents subscription model as the main
-sync_dir watcher — just with a `mode: .inbox` filter that
-accepts only PDFs and EPUBs.
-
-`docker exec rmsync rmsync logs -f` (or `rmsync logs -f` on
-macOS) shows the push events; the daemon never silently drops a
-file:
-
-```
-{"event":"inbox push starting","path":"/Users/you/rmsync-writing/_inbox/paper.pdf"}
-{"event":"inbox push complete; local removed","path":".../paper.pdf"}
-```
-
-Non-`.pdf`/`.epub` files in the inbox are ignored with a one-time
-warning per filename.
+This legacy config block is retained, but the explicit sync daemon does
+not start automatic inbox watchers. Use rmapi directly for PDF / EPUB
+sends until rmsync has a dedicated explicit send command.
 
 ---
 
@@ -440,8 +414,8 @@ port       = 7878
 Then `rmsync restart`. Open `http://127.0.0.1:7878/?token=...` —
 the token is written to `~/Library/Application Support/rmsync/web-token`
 on first start (or whatever you set explicitly). Shows live
-status, recent docs, conflicts, with manual sync-now / pause /
-resume buttons.
+status, recent docs, conflicts, with pause / resume buttons. Pull,
+accept, and push stay in the CLI so sync intent is explicit.
 
 Token gets stored in your browser's localStorage on first load,
 so subsequent visits work from `http://127.0.0.1:7878/` without
@@ -477,7 +451,7 @@ screen. Click it for the menu.
 - **Open Sync Folder** — reveals it in Finder
 - **Show Conflicts (N)** — hidden when zero
 - **Pause / Resume** — toggles the pause state (persists)
-- **Sync Now** — force poll
+- **Manual sync mode** — informational; use `rmsync pull` / `push`
 - **Restart Daemon** — `launchctl kickstart -k`
 - **Open Logs** — opens the log file in Console.app
 - **Edit Config…** — opens `config.toml`
@@ -606,70 +580,27 @@ to remove those manually.
 
 ## Rough edges to know about
 
-### Rename / move / delete propagation (default)
+### Rename / move / delete propagation
 
-**Default since v0.2.27** (was opt-in via `[deletion]
-enable_propagation = true` in v0.2.19–v0.2.26).
+Rename, move, and delete propagation is explicit. The daemon no longer
+mirrors destructive changes just because it observed a filesystem or
+cloud event.
 
-The daemon mirrors deletes and renames in both directions
-without any configuration:
+- **Local delete → cloud trash.** Delete the local file, then run
+  `rmsync push --include-deletes` when you really want the tracked cloud
+  doc moved to the reMarkable cloud trash.
+- **Cloud delete → local trash.** Run `rmsync pull`, review the staged
+  delete with `rmsync diff`, then accept it with
+  `rmsync accept --include-deletes <path>`.
+- **Local rename / move → cloud update.** Rename or move the local file,
+  then push the new path explicitly.
+- **Cloud rename / move → local update.** Pull, review the staged path,
+  then accept it explicitly.
 
-- **Local delete → cloud trash.** Removing `hello.md` from
-  `sync_dir` parks the file in `<sync_dir>/.rmsync-trash/` and
-  moves the cloud doc to the reMarkable cloud's trash (`rmapi rm`
-  is a soft-delete — recoverable from the cloud UI within
-  reMarkable's retention window).
-- **Cloud delete → local trash.** Deleting a doc on the tablet
-  (or via `rmapi rm`) drops the local file into
-  `<sync_dir>/.rmsync-trash/` on the next poll cycle.
-- **Local rename → cloud rename.** `mv old.md new.md` calls
-  `rmapi mv` to move the cloud doc to match.
-- **Cloud rename → local rename.** Renaming on the tablet moves
-  the local file to match.
-
-Recovery: `rmsync trash list` shows recent deletions;
-`rmsync trash restore <rel-path>` puts a file back (the daemon
-re-pushes it to the cloud on the next watcher tick). The trash
-auto-prunes at daemon startup based on `trash_retention_days`;
-set to 0 to keep forever.
-
-Safety gates that protect against runaway events:
-- **Soft-delete to `.rmsync-trash/`.** Nothing is hard-deleted
-  on the local side — recoverable for `trash_retention_days`
-  (default 30 days).
-- **Bulk-delete brake.** Refuses to apply more than
-  `bulk_delete_threshold` of tracked docs in a
-  `bulk_delete_window_seconds` window. An accidental
-  `rm -rf sync_dir` parks the bulk in trash, refuses the cloud
-  side, and surfaces `error_state = "bulk_delete_refused"` in
-  `rmsync status`.
-- **Per-doc lock.** Rename + delete + push on the same doc
-  serialize through `LockRegistry`.
-- **Echo fence.** Cloud→local rename seeds the fence so the
-  watcher's resulting filesystem event for our own move is
-  suppressed (otherwise we'd ping-pong forever).
-- **First-start-after-upgrade guard (v0.2.31+).** The daemon
-  stamps its version into state.db at the end of every
-  successful reconcile. On the next start, if the binary's
-  version differs from what's stored (i.e., you just upgraded),
-  the deletion-reconcile pass runs in **skip-propagation
-  mode**: tracked-but-locally-missing rows get parked with
-  `error_state = "missing_pre_upgrade"` instead of cascading
-  to cloud-side deletes. Protects users who rm'd files locally
-  on a version that didn't propagate (the pre-v0.2.27 default)
-  from having those rms silently cascade now that propagation
-  is on. Run `rmsync errors` after upgrade to see the parked
-  rows and pick: `rmapi rm <remote_path>` if you meant to
-  delete on cloud, or `rmsync sync-now` to re-pull the local
-  files from cloud.
-
-To opt out (v0.2.18-style behavior — local delete logs but
-doesn't touch cloud), explicitly set:
-
-```toml
-[deletion]
-enable_propagation = false
-```
+Recovery: `rmsync trash list` shows local files parked by accepted
+deletes; `rmsync trash restore <rel-path>` puts one back. Restoring does
+not push automatically, so run `rmsync push <path>` after inspection if
+the restored content should go to the cloud.
 
 Tunables (defaults shown):
 
@@ -690,9 +621,9 @@ errors when the doc already exists.
 ### Dropbox "conflicted copy" files ignored
 
 If Dropbox decides to manufacture a `foo (Mac mini's conflicted copy
-2026-04-17).md` file, the watcher ignores it. It won't be pushed as a
-new reMarkable doc. You handle Dropbox's conflict resolution manually
-— keep the copy you want, delete the other.
+2026-04-17).md` file, the sync filter ignores it. It won't be pushed
+as a new reMarkable doc. You handle Dropbox's conflict resolution
+manually — keep the copy you want, delete the other.
 
 ### Handwriting pages pull as empty
 
@@ -711,9 +642,10 @@ table in the "How do I…" section above.
 
 ### Dropbox "smart sync" / online-only
 
-If Dropbox has the sync folder on smart-sync (online-only files), our
-watcher will see 0-byte placeholders and push empties. Keep the sync
-folder set to "Always Keep on This Device" in Dropbox's UI.
+If Dropbox has the sync folder on smart-sync (online-only files), a
+manual push can still read placeholder bytes instead of the full file.
+Keep the sync folder set to "Always Keep on This Device" in Dropbox's
+UI before pushing.
 
 ---
 

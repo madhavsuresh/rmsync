@@ -5,7 +5,7 @@ import Foundation
 struct RMSyncCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "rmsync",
-        abstract: "Bidirectional reMarkable ↔ Markdown sync.",
+        abstract: "Explicit reMarkable cloud push/pull for a Markdown tree.",
         // ``--version`` prints Version.current (rewritten to the tag
         // during ``brew install`` — see Formula/rmsync.rb). ``rmsync
         // status`` separately reports the running *daemon's* version
@@ -15,6 +15,10 @@ struct RMSyncCommand: AsyncParsableCommand {
         subcommands: [
             Daemon.self,
             Status.self,
+            PullCmd.self,
+            DiffCmd.self,
+            AcceptCmd.self,
+            PushCmd.self,
             StartCmd.self,
             StopCmd.self,
             RestartCmd.self,

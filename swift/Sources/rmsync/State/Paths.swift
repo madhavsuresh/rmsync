@@ -57,4 +57,18 @@ enum Paths {
     static var pauseSentinel: URL { stateDir.appendingPathComponent("paused") }
     static var resyncDir: URL { stateDir.appendingPathComponent("resync", isDirectory: true) }
     static var backupDir: URL { stateDir.appendingPathComponent("backups", isDirectory: true) }
+
+    static var stagingDir: URL {
+        if let override = ProcessInfo.processInfo.environment["RM_SYNC_STAGING_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return stateDir.appendingPathComponent("staging", isDirectory: true)
+    }
+
+    static var scratchDir: URL {
+        if let override = ProcessInfo.processInfo.environment["RM_SYNC_TMP_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return stateDir.appendingPathComponent("tmp", isDirectory: true)
+    }
 }

@@ -54,7 +54,7 @@ enum Archive {
         // Extract to a fresh tempdir and then read the files. unzip -p
         // (stream one file) would save the temp hop but complicates the
         // multi-file-per-page iteration; the cost is one tempdir per pull.
-        let tmp = FileManager.default.temporaryDirectory
+        let tmp = Paths.scratchDir
             .appendingPathComponent("rmsync-unpack-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -146,7 +146,7 @@ enum Archive {
     static func pack(_ doc: RmDoc, to outPath: URL) async throws -> URL {
         // Build the two JSON blobs + page files under a fresh tempdir,
         // then invoke /usr/bin/zip.
-        let staging = FileManager.default.temporaryDirectory
+        let staging = Paths.scratchDir
             .appendingPathComponent("rmsync-pack-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: staging) }

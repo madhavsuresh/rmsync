@@ -199,15 +199,163 @@ private func togglePaused(_ paused: Bool, verb: String) async throws {
 struct SyncNow: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "sync-now",
-        abstract: "Trigger an immediate poll cycle."
+        abstract: "Deprecated: automatic polling is disabled in explicit sync mode."
     )
     func run() async throws {
         do {
             _ = try IPCClientSync.request("sync_now")
             print("sync requested")
+        } catch IPCClientSync.CallError.commandFailed(let message)
+            where message == "explicit_sync_mode" {
+            print("automatic polling is disabled; use `rmsync pull`, review with `rmsync diff`, then `rmsync accept`.")
+            throw ExitCode(1)
         } catch {
             print("daemon not running; start it with `rmsync start`.")
             throw ExitCode(1)
+        }
+    }
+}
+
+// MARK: - explicit sync
+
+struct PullCmd: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "pull",
+        abstract: "Fetch cloud changes into a staging area without touching local files."
+    )
+
+    func run() async throws {
+        do {
+            let cfg = try Config.load()
+            let state = try State(path: Paths.stateDBPath)
+            let result = try await ExplicitSync.stagePull(cfg: cfg, state: state)
+            print("staged pull:    \(result.id)")
+            print("stage dir:      \(result.root.path)")
+            printSummary(result.entries)
+            print("review with:    rmsync diff")
+            print("apply with:     rmsync accept <path>  or  rmsync accept --all")
+        } catch let error as ExplicitSync.SyncError {
+            print(error.description)
+            throw ExitCode(1)
+        }
+    }
+}
+
+struct DiffCmd: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "diff",
+        abstract: "Show the currently staged cloud changes."
+    )
+
+    func run() throws {
+        do {
+            let (_, manifest) = try ExplicitSync.loadCurrentStage()
+            print("staged pull: \(manifest.id)")
+            ExplicitSync.printDiff(manifest)
+        } catch let error as ExplicitSync.SyncError {
+            print(error.description)
+            throw ExitCode(1)
+        }
+    }
+}
+
+struct AcceptCmd: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "accept",
+        abstract: "Apply selected staged cloud changes to the local tree."
+    )
+
+    @Flag(name: .long, help: "Apply every non-unchanged staged change.")
+    var all: Bool = false
+
+    @Flag(name: .long, help: "Allow staged cloud deletes to move local files to .rmsync-trash.")
+    var includeDeletes: Bool = false
+
+    @Flag(name: .long, help: "Overwrite local conflicts or files changed since the pull was staged.")
+    var force: Bool = false
+
+    @Argument(help: "Relative paths from the sync dir to accept.")
+    var paths: [String] = []
+
+    func run() async throws {
+        do {
+            let cfg = try Config.load()
+            let state = try State(path: Paths.stateDBPath)
+            let result = try await ExplicitSync.accept(
+                cfg: cfg,
+                state: state,
+                paths: paths,
+                all: all,
+                includeDeletes: includeDeletes,
+                force: force
+            )
+            for refusal in result.refused {
+                print("refused: \(refusal)")
+            }
+            print("applied: \(result.applied)")
+            print("deleted: \(result.deleted)")
+            print("skipped: \(result.skipped)")
+            if !result.refused.isEmpty { throw ExitCode(1) }
+        } catch let error as ExplicitSync.SyncError {
+            print(error.description)
+            throw ExitCode(1)
+        }
+    }
+}
+
+struct PushCmd: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "push",
+        abstract: "Push local Markdown changes to the cloud explicitly."
+    )
+
+    @Flag(name: .long, help: "Propagate local deletions for tracked docs missing on disk.")
+    var includeDeletes: Bool = false
+
+    @Flag(name: .long, help: "Bypass remote baseline checks.")
+    var force: Bool = false
+
+    @Argument(help: "Optional relative paths from the sync dir to push.")
+    var paths: [String] = []
+
+    func run() async throws {
+        do {
+            let cfg = try Config.load()
+            let state = try State(path: Paths.stateDBPath)
+            let result = try await ExplicitSync.push(
+                cfg: cfg,
+                state: state,
+                paths: paths,
+                includeDeletes: includeDeletes,
+                force: force
+            )
+            for refusal in result.refused {
+                print("refused: \(refusal)")
+            }
+            print("pushed:  \(result.pushed)")
+            print("skipped: \(result.skipped)")
+            if !result.refused.isEmpty { throw ExitCode(1) }
+        } catch let error as ExplicitSync.SyncError {
+            print(error.description)
+            throw ExitCode(1)
+        }
+    }
+}
+
+private func printSummary(_ entries: [ExplicitSync.Entry]) {
+    let grouped = Dictionary(grouping: entries, by: \.kind)
+    for kind in [
+        ExplicitSync.ChangeKind.added,
+        .modified,
+        .deleted,
+        .conflict,
+        .localModified,
+        .error,
+        .unchanged,
+    ] {
+        if let count = grouped[kind]?.count, count > 0 {
+            let label = kind.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0)
+            print("\(label) \(count)")
         }
     }
 }
@@ -497,9 +645,8 @@ struct TrashCmd: AsyncParsableCommand {
     }
 
     /// ``rmsync trash restore`` — move file(s) back from the trash
-    /// into ``sync_dir``. The daemon (if running) picks them up
-    /// on the next watcher tick and re-pushes to the cloud as if
-    /// they were freshly created.
+    /// into ``sync_dir``. In explicit sync mode the user decides
+    /// whether to push restored files with ``rmsync push``.
     struct Restore: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "restore",
@@ -548,15 +695,13 @@ struct TrashCmd: AsyncParsableCommand {
             }
             if restored > 0 {
                 print("")
-                print("\(restored) file(s) restored. The daemon will re-push them on the next watcher tick.")
+                print("\(restored) file(s) restored. Run `rmsync push <path>` for any restored file you want on the cloud.")
             }
         }
     }
 
     /// ``rmsync trash prune`` — explicitly drop trash entries
-    /// older than ``trash_retention_days``. The daemon does this
-    /// automatically at startup; the manual command exists so a
-    /// user can free disk on demand without restarting.
+    /// older than ``trash_retention_days``.
     struct Prune: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "prune",
@@ -718,8 +863,8 @@ struct History: AsyncParsableCommand {
 
     /// ``rmsync history restore <path> --to <ts>`` — revert local
     /// file to a previous snapshot, parking the current content in
-    /// trash for safety, then asks the running daemon to push the
-    /// reverted version immediately.
+    /// trash for safety. In explicit sync mode the user pushes that
+    /// restored file deliberately with ``rmsync push``.
     struct Restore: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "restore",
@@ -762,22 +907,13 @@ struct History: AsyncParsableCommand {
             }
 
             // 2. Write the snapshot content into the live path.
-            //    Atomic-write so a watcher doesn't observe a
-            //    half-written file (though we don't seed the
-            //    echo fence — restore is a deliberate user
-            //    write that SHOULD reach the daemon).
+            //    Atomic-write so the restored file is never
+            //    half-written if the user inspects or pushes it.
             let snapshotText = try Snapshots.read(entry)
             try PathUtilities.atomicWriteText(snapshotText, to: target)
             print("restored to snapshot \(formatDisplayStamp(entry.stamp)) (\(entry.wordCount) words)")
 
-            // 3. Tell the daemon to push immediately. Falls
-            //    through quietly if the daemon's down — the
-            //    watcher will pick it up at next start.
-            if IPCClientSync.pushPath(target.path) {
-                print("daemon notified; push enqueued")
-            } else {
-                print("(daemon not running — start it and the file will push)")
-            }
+            print("not pushed; run `rmsync push \(resolved.relativeOrAbsolute)` when ready")
         }
     }
 
@@ -863,32 +999,11 @@ struct History: AsyncParsableCommand {
 
 // MARK: - retry-parked
 
-/// Force a push retry for every doc currently parked with
-/// ``error_state = "push_failed"``. v0.2.26+.
+/// Force an explicit push retry for every doc currently parked with
+/// ``error_state = "push_failed"``.
 ///
-/// Background: when ``rmapi put`` fails, the worker writes a
-/// ``state.db`` row marking the doc as ``push_failed`` and
-/// stamps its ``last_synced_md_hash`` with the bytes that *would
-/// have* been uploaded. This stops the daemon from retry-looping
-/// on every reconcile pass, but it also means subsequent
-/// retry-attempts hit the worker's "skip if hash unchanged"
-/// no-op short-circuit — the file's current content matches the
-/// stored hash, so nothing happens.
-///
-/// This command sends a ``push_path`` IPC frame with ``force =
-/// true`` for each parked doc, bypassing the no-op check. The
-/// worker uses ``--force`` mode against rmapi (replace-existing
-/// rather than create-new), which both handles the
-/// already-tracked case and gives rmapi the explicit signal.
-/// Successful retry → ``markPushed`` clears ``error_state``
-/// → parked count drops. Failed retry → ``error_state`` re-set;
-/// the cloud-health probe (v0.2.25) classifies the failure
-/// (rmapi/cloud incompatibility vs auth vs per-doc).
-///
-/// Other ``error_state`` values (``parse_failed``,
-/// ``bulk_delete_refused``) are NOT retried — those represent
-/// failure modes where retrying without other action wouldn't
-/// help. Targets ``push_failed`` only by design.
+/// Other ``error_state`` values are NOT retried — those represent failure
+/// modes where retrying without other action would not help.
 struct RetryParked: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "retry-parked",
@@ -899,7 +1014,7 @@ struct RetryParked: AsyncParsableCommand {
     var dryRun: Bool = false
 
     func run() async throws {
-        _ = try Config.load()
+        let cfg = try Config.load()
         let state = try State(path: Paths.stateDBPath)
         let allDocs = try await state.allDocuments()
         let parked = allDocs.filter { $0.errorState == "push_failed" }
@@ -921,29 +1036,24 @@ struct RetryParked: AsyncParsableCommand {
             return
         }
 
-        if !IPCClientSync.daemonIsUp() {
-            print("")
-            print("daemon not running — start it (`rmsync start`) and re-run.")
-            throw ExitCode(1)
-        }
-
-        var enqueued = 0
+        var pushed = 0
+        var refused: [String] = []
         for doc in parked {
-            // ``force = true`` bypasses the worker's
-            // hash-unchanged no-op short-circuit. Without it the
-            // retry would silently skip — see RetryParked
-            // doc-comment for why.
-            if IPCClientSync.pushPath(doc.localPath, force: true) {
-                enqueued += 1
-            } else {
-                print("  ! IPC push_path failed for \(doc.localPath)")
-            }
+            let result = try await ExplicitSync.push(
+                cfg: cfg,
+                state: state,
+                paths: [doc.localPath],
+                includeDeletes: false,
+                force: true
+            )
+            pushed += result.pushed
+            refused.append(contentsOf: result.refused)
         }
 
         print("")
-        print("Enqueued \(enqueued)/\(parked.count) push(es). Watch progress:")
-        print("    rmsync status              # parked count drops as pushes succeed")
-        print("    rmsync logs --tail         # see per-doc push results")
+        for line in refused { print("refused: \(line)") }
+        print("Pushed \(pushed)/\(parked.count) parked doc(s).")
+        if !refused.isEmpty { throw ExitCode(1) }
     }
 }
 
@@ -1076,8 +1186,8 @@ struct Errors: AsyncParsableCommand {
             print("    for each, then `sqlite3 <state.db> \"DELETE FROM")
             print("    documents WHERE error_state = 'missing_pre_upgrade'\"`.")
             print("  • You DIDN'T mean to delete → re-pull from cloud:")
-            print("    `rmsync sync-now` will refetch any cloud doc whose")
-            print("    local file is missing.")
+            print("    `rmsync pull`, review with `rmsync diff`, then")
+            print("    `rmsync accept <path>` for the docs you want restored.")
             print("  • Unsure → leave them parked. They don't hurt anything")
             print("    while sitting; the daemon won't act on them.")
             print("")

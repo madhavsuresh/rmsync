@@ -1,21 +1,11 @@
 import Foundation
 
-/// Top-level daemon event loop — the real one, no longer a scaffold.
+/// Top-level daemon event loop.
 ///
-/// Startup sequence mirrors the Python ``_run`` in
-/// ``src/rm_sync/daemon.py``:
-///
-///   1. Load config, open state DB (migrations apply).
-///   2. Start IPC server so the CLI / menu bar can connect even during
-///      the slow initial reconcile.
-///   3. Start workers (using the initial-sync rmapi concurrency cap).
-///   4. Reconcile local deletions (before pulling, so we don't re-pull
-///      files the user deleted).
-///   5. Initial pull of the entire Writing tree.
-///   6. Reconcile local creates/edits (after the pull, so state is
-///      current before we decide what looks "new").
-///   7. Start watcher + poller for steady-state operation.
-///   8. Park until SIGTERM.
+/// The daemon is intentionally status-only in the explicit sync model.
+/// It keeps IPC / dashboard status online, but it does not watch local
+/// files, poll the cloud, or reconcile deletions. Sync mutations happen
+/// only through explicit CLI commands: ``pull``, ``accept``, and ``push``.
 enum DaemonScaffold {
     static func run() async throws {
         // First thing: announce we got off the ground. If the user's
@@ -58,55 +48,12 @@ enum DaemonScaffold {
         let state = try State(path: Paths.stateDBPath)
         let bus = StateBus()
         let queue = JobQueue()
-        let fence = EchoFence(windowSeconds: cfg.echoFenceSeconds)
-        let locks = LockRegistry()
-
-        // Initial-sync rmapi gets capped concurrency so we don't stack
-        // our worker pool × RMAPI_CONCURRENT during the big pull.
-        let initialCloud = Cloud(concurrentOverride: 5)
-        let steadyCloud = Cloud()
-
-        // Bulk-delete brake — shared across every worker in the pool
-        // so the rolling window measures aggregate rate, not per-
-        // worker. ``cfg.deletion.enable_propagation == false``? The
-        // limiter still gets constructed, but the worker handlers
-        // bail before calling it; harmless and keeps the wiring
-        // identical across the on/off toggle.
-        let limiter = DeletionRateLimiter(cfg: cfg, state: state)
-
-        // Workers come up first so they're ready to drain the queue as
-        // soon as the reconciliation step enqueues jobs.
-        // ``bus`` is passed so the worker can publish cloud-health
-        // classifications onto it on push failure (v0.2.29 — the
-        // classifier is stateless, doesn't write any cloud canary).
-        var workers: [SyncWorker] = []
-        for i in 0..<cfg.workerPoolSize {
-            workers.append(SyncWorker(
-                id: i, queue: queue, cloud: initialCloud, state: state,
-                cfg: cfg, locks: locks, fence: fence, limiter: limiter,
-                bus: bus
-            ))
-        }
-        let workerTasks = workers.map { worker in
-            Task.detached { await worker.run() }
-        }
-
-        do { try await steadyCloud.checkVersion() } catch {
-            Logger.shared.warn(
-                "rmapi version check failed", meta: ["error": "\(error)"]
-            )
-        }
 
         try await refreshBus(bus: bus, state: state, cfg: cfg, queue: queue)
 
-        // Poller is needed before IPC so the ``sync_now`` command can
-        // poke the real poller's force-cycle event.
-        let poller = CloudPoller(
-            cloud: steadyCloud, state: state, cfg: cfg, queue: queue
-        )
-
-        // IPC server accepts pause/resume/sync_now/get_status. Matches
-        // the Python daemon's protocol byte-for-byte.
+        // IPC server accepts pause/resume/sync_now/get_status. In
+        // explicit mode, sync_now and push_path return clear errors
+        // instead of scheduling hidden mutation work.
         let server = IPCServer(socketPath: Paths.ipcSocketPath, bus: bus)
         await server.register("pause") { _ in
             try? await state.setPaused(true)
@@ -119,36 +66,26 @@ enum DaemonScaffold {
             return SendableJSON.dict([:])
         }
         await server.register("sync_now") { _ in
-            await poller.requestCycle()
-            return SendableJSON.dict([:])
+            Logger.shared.info("sync_now ignored in explicit sync mode")
+            return SendableJSON.dict([
+                "ok": false,
+                "error": "explicit_sync_mode",
+                "hint": "use `rmsync pull`, `rmsync accept`, and `rmsync push`",
+            ])
         }
         await server.register("get_status") { _ in
             let snap = await bus.snapshot()
             return Self.snapshotFrame(snap)
         }
-        // ``push_path`` is the immediate-push verb wired up for
-        // ``rmsync history restore`` so a reverted file goes to
-        // the cloud without waiting on the watcher's debounce.
-        // Path-only payload — the worker resolves docID via
-        // state.byLocalPath when the job runs (existing push
-        // semantics handle both tracked and untracked paths
-        // correctly).
-        await server.register("push_path") { frame in
-            let dict = frame.decodeDict()
-            let path = (dict?["path"] as? String) ?? ""
-            guard !path.isEmpty else {
-                return SendableJSON.dict(["error": "missing path"])
-            }
-            // v0.2.26: optional ``force`` flag bypasses the
-            // worker's hash-unchanged no-op short-circuit.
-            // ``rmsync retry-parked`` uses this to re-push docs
-            // whose previous push failed even though the file
-            // content didn't change between attempts.
-            let force = (dict?["force"] as? Bool) ?? false
-            await queue.enqueue(Job(
-                kind: .push, docID: nil, hint: path, force: force
-            ))
-            return SendableJSON.dict(["enqueued": true])
+        // Compatibility endpoint for older clients. It deliberately
+        // refuses to enqueue hidden work in explicit sync mode.
+        await server.register("push_path") { _ in
+            Logger.shared.info("push_path ignored in explicit sync mode")
+            return SendableJSON.dict([
+                "ok": false,
+                "error": "explicit_sync_mode",
+                "hint": "use `rmsync push <path>`",
+            ])
         }
         try await server.start()
         Logger.shared.info(
@@ -162,144 +99,14 @@ enum DaemonScaffold {
         // ``$STATE_DIR/web-token`` so they can read it without
         // hand-editing config.
         let httpServer = try await Self.startHTTPDashboardIfEnabled(
-            cfg: cfg, bus: bus, queue: queue, state: state, poller: poller
+            cfg: cfg, bus: bus, queue: queue, state: state
         )
 
-        // Trash retention prune fires once per daemon start, not
-        // on a periodic timer — daemon restarts are frequent
-        // enough (brew upgrades, login cycles, manual kicks) that
-        // a daily-or-so prune cadence is fine for most users. A
-        // user with extreme write volume can run ``rmsync trash
-        // prune`` manually in between.
-        Reconcile.pruneTrash(
-            syncDir: cfg.syncDir,
-            retentionDays: cfg.deletion.trashRetentionDays
+        // Explicit sync mode: no reconcile, no watcher, no cloud poller.
+        // Keep only IPC / dashboard status alive.
+        Logger.shared.info(
+            "explicit sync mode: daemon is status-only; use rmsync pull/push"
         )
-
-        // First-start-after-upgrade detection. v0.2.31+. The
-        // version stamped at the end of the previous successful
-        // reconcile is compared against the current binary's
-        // version. A mismatch (or unset, for state.db files
-        // older than this setting) means we run the deletion
-        // reconcile in *skip-propagation* mode — tracked-but-
-        // locally-missing rows get parked as
-        // ``error_state = "missing_pre_upgrade"`` instead of
-        // cascading to cloud-side deletes. Protects the case
-        // where a user rm'd files locally on a version that
-        // didn't propagate, then upgrades to one that does.
-        let lastSeenVersion = (try? await state.getLastSeenDaemonVersion()) ?? ""
-        let isFirstStartAfterUpgrade = lastSeenVersion != Version.current
-        if isFirstStartAfterUpgrade {
-            Logger.shared.info(
-                "first start after upgrade — deletion reconcile in skip-propagation mode",
-                meta: [
-                    "previous_version": lastSeenVersion.isEmpty ? "(unset)" : lastSeenVersion,
-                    "current_version": Version.current,
-                ]
-            )
-        }
-
-        // Reconcile: deletions → initial pull → local creates/edits.
-        do {
-            try await Reconcile.localDeletions(
-                state: state, queue: queue,
-                skipDeletePropagation: isFirstStartAfterUpgrade
-            )
-            await queue.waitUntilEmpty()
-            try await Reconcile.initialPull(cloud: initialCloud, cfg: cfg, queue: queue)
-            try await Reconcile.localCreatesAndEdits(
-                state: state, cfg: cfg, queue: queue
-            )
-            await queue.waitUntilEmpty()
-            // Stamp the version AFTER reconcile completes
-            // successfully. If reconcile crashed mid-way we want
-            // the next start to also treat the boot as "first
-            // after upgrade" — otherwise a half-finished migration
-            // would lose its grace period.
-            try? await state.setLastSeenDaemonVersion(Version.current)
-        } catch {
-            Logger.shared.error(
-                "initial reconcile failed; continuing into steady state",
-                meta: ["error": "\(error)"]
-            )
-        }
-
-        // Switch the workers over to the un-capped ``steadyCloud`` now
-        // that the initial burst is done. Done by cancelling the old
-        // workers and starting fresh ones pointed at ``steadyCloud``.
-        for w in workers { await w.stop() }
-        for t in workerTasks { _ = await t.value }
-        workers.removeAll()
-        var steadyTasks: [Task<Void, Never>] = []
-        for i in 0..<cfg.workerPoolSize {
-            let steady = SyncWorker(
-                id: i, queue: queue, cloud: steadyCloud, state: state,
-                cfg: cfg, locks: locks, fence: fence, limiter: limiter,
-                bus: bus
-            )
-            workers.append(steady)
-            steadyTasks.append(Task.detached { await steady.run() })
-        }
-
-        // Watcher and poller start only AFTER reconcile so they don't
-        // observe the initial flurry of writes. The watcher
-        // implementation is platform-specific: FSEventStream on
-        // macOS, inotify on Linux. Both expose the same init/start/stop
-        // surface so the rest of the daemon doesn't care.
-        //
-        // When ``[inbox]`` is configured we also spin up a SECOND
-        // watcher (same FSEvents/inotify code path, just with
-        // ``mode: .inbox``) pointed at the inbox dir. It emits
-        // ``Job(.pushInbox)`` for PDF/EPUB drops, which the worker
-        // pipes straight through ``rmapi put --force``.
-        #if os(macOS)
-        let watcher = LocalWatcher(
-            syncDir: cfg.syncDir,
-            queue: queue,
-            fence: fence,
-            debounceSeconds: cfg.debounceSeconds,
-            mode: .markdown
-        )
-        let inboxWatcher: LocalWatcher? = cfg.inbox.map { ic in
-            LocalWatcher(
-                syncDir: ic.localDir,
-                queue: queue,
-                fence: fence,
-                debounceSeconds: cfg.debounceSeconds,
-                mode: .inbox
-            )
-        }
-        #else
-        let watcher = INotifyWatcher(
-            syncDir: cfg.syncDir,
-            queue: queue,
-            fence: fence,
-            debounceSeconds: cfg.debounceSeconds,
-            mode: .markdown
-        )
-        let inboxWatcher: INotifyWatcher? = cfg.inbox.map { ic in
-            INotifyWatcher(
-                syncDir: ic.localDir,
-                queue: queue,
-                fence: fence,
-                debounceSeconds: cfg.debounceSeconds,
-                mode: .inbox
-            )
-        }
-        #endif
-        watcher.start()
-        if let inboxWatcher {
-            // Make sure the inbox dir exists so the first drop has
-            // somewhere to land. Same idempotent mkdir we do for
-            // sync_dir at the top of run(). Cheap.
-            if let inbox = cfg.inbox {
-                try? FileManager.default.createDirectory(
-                    at: inbox.localDir, withIntermediateDirectories: true
-                )
-            }
-            inboxWatcher.start()
-        }
-        let pollerTask = Task.detached { await poller.run() }
 
         // Periodic bus refresh so the menu bar sees live counts even
         // during quiet stretches. Light touch — 5s tick.
@@ -317,13 +124,7 @@ enum DaemonScaffold {
         // Orderly shutdown (unreached in practice — launchd SIGTERMs the
         // process, but kept for completeness).
         busTask.cancel()
-        watcher.stop()
-        inboxWatcher?.stop()
         if let httpServer { await httpServer.stop() }
-        await poller.stop()
-        pollerTask.cancel()
-        for w in workers { await w.stop() }
-        for t in steadyTasks { _ = await t.value }
         await server.stop()
     }
 
@@ -387,7 +188,7 @@ enum DaemonScaffold {
     /// can paste it into the dashboard URL without editing config.
     private static func startHTTPDashboardIfEnabled(
         cfg: Config, bus: StateBus, queue: JobQueue,
-        state: State, poller: CloudPoller
+        state: State
     ) async throws -> HTTPServer? {
         guard let web = cfg.web, web.enabled else { return nil }
 
@@ -421,7 +222,7 @@ enum DaemonScaffold {
             bus: bus, queue: queue, state: state
         )
         await http.register("sync-now") {
-            await poller.requestCycle()
+            Logger.shared.info("dashboard sync-now ignored in explicit sync mode")
         }
         await http.register("pause") {
             try? await state.setPaused(true)
