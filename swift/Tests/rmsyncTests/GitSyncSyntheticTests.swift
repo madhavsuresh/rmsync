@@ -135,6 +135,11 @@ struct GitSyncSyntheticTests {
         #expect(await cloud.createdPaths() == [
             "/sync", "/sync/git", "/sync/git/default-remote",
         ])
+        let git = try await Git.open(at: repo)
+        let cfg = GitSync.RepoConfig(name: "default-remote", syncRoot: ".")
+        let cloudRef = try await git.run(["rev-parse", cfg.cloudRef])
+        let lastSnapshotRef = try await git.run(["rev-parse", cfg.lastRemoteSnapshotRef])
+        #expect(cloudRef == lastSnapshotRef)
     }
 
     @Test("old repo config with remoteRoot is rejected")
