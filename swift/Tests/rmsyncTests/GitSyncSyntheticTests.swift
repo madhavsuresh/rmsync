@@ -29,6 +29,25 @@ struct GitSyncSyntheticTests {
         #expect(out == source)
     }
 
+    @Test("git rename detection reports synced markdown moves")
+    func gitRenameDetectionReportsMarkdownMove() async throws {
+        let repo = try await makeRepo("rename-detection")
+        try write("same\n", to: repo.appendingPathComponent("old.md"))
+        try await commitAll(repo, "base")
+
+        let git = try await Git.open(at: repo)
+        let base = try await git.headCommit()
+        try FileManager.default.moveItem(
+            at: repo.appendingPathComponent("old.md"),
+            to: repo.appendingPathComponent("new.md")
+        )
+        try await commitAll(repo, "move")
+        let target = try await git.headCommit()
+
+        let renames = try await git.renamedPaths(from: base, to: target)
+        #expect(renames == [Git.Rename(oldPath: "old.md", newPath: "new.md")])
+    }
+
     @Test("cloud snapshots replace only synced markdown paths")
     func cloudSnapshotTreeScopesMarkdownReplacement() async throws {
         let repo = try await makeRepo("snapshot-tree")

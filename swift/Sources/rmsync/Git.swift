@@ -5,6 +5,11 @@ struct Git: Sendable {
         var tree: String
     }
 
+    struct Rename: Sendable, Hashable {
+        var oldPath: String
+        var newPath: String
+    }
+
     enum TreeSource: Sendable {
         case file(URL)
         case blob(String)
@@ -241,6 +246,36 @@ struct Git: Sendable {
             throw GitError.missingOutput(args)
         }
         return MergeTreeResult(tree: tree)
+    }
+
+    func renamedPaths(from base: String, to target: String, under pathspec: String? = nil) async throws -> [Rename] {
+        var args = ["diff", "--name-status", "-M", "--diff-filter=R", "-z", base, target]
+        if let pathspec, pathspec != "." {
+            args += ["--", pathspec]
+        }
+        let result = try await runResult(args)
+        guard result.exitCode == 0 else {
+            throw GitError.commandFailed(
+                args: args,
+                exitCode: result.exitCode,
+                stdout: result.stdout,
+                stderr: result.stderr
+            )
+        }
+
+        let fields = result.stdout.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        var renames: [Rename] = []
+        var index = 0
+        while index < fields.count {
+            let status = fields[index]
+            if status.hasPrefix("R"), index + 2 < fields.count {
+                renames.append(Rename(oldPath: fields[index + 1], newPath: fields[index + 2]))
+                index += 3
+            } else {
+                index += 1
+            }
+        }
+        return renames
     }
 
     private func run(

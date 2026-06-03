@@ -395,6 +395,7 @@ struct ForcePushCmd: AsyncParsableCommand {
                 print("refused: \(refusal)")
             }
             print("created:     \(result.created)")
+            print("moved:       \(result.moved)")
             print("overwritten: \(result.overwritten)")
             print("deleted:     \(result.deleted)")
             print("unchanged:   \(result.unchanged)")

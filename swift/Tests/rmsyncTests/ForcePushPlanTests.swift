@@ -60,6 +60,70 @@ struct ForcePushPlanTests {
         #expect(items.isEmpty)
     }
 
+    @Test("rename pair plans remote move instead of delete create")
+    func renamePlansMove() {
+        let hash = PathUtilities.sha256("same\n")
+        let items = ExplicitSync.forcePushPlanItems(
+            remoteEntries: [entry("old.md", hash: hash)],
+            localFiles: [localFile("new.md", hash)],
+            renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
+        )
+
+        #expect(items.count == 1)
+        #expect(items[0].action == .moveRemote)
+        #expect(items[0].sourceRelativePath == "old.md")
+        #expect(items[0].relativePath == "new.md")
+        #expect(items[0].remotePath == "/Writing/old")
+        #expect(items[0].destinationRemotePath == "/Writing/new")
+    }
+
+    @Test("folder move derives nested destination path")
+    func folderMovePlansMove() {
+        let hash = PathUtilities.sha256("same\n")
+        let items = ExplicitSync.forcePushPlanItems(
+            remoteEntries: [entry("old/place.md", hash: hash)],
+            localFiles: [localFile("new/place.md", hash)],
+            renames: [ExplicitSync.ForcePushRename(oldPath: "old/place.md", newPath: "new/place.md")]
+        )
+
+        #expect(items.count == 1)
+        #expect(items[0].action == .moveRemote)
+        #expect(items[0].remotePath == "/Writing/old/place")
+        #expect(items[0].destinationRemotePath == "/Writing/new/place")
+    }
+
+    @Test("rename with changed content plans move and overwrite")
+    func renameWithEditPlansMoveAndOverwrite() {
+        let items = ExplicitSync.forcePushPlanItems(
+            remoteEntries: [entry("old.md", hash: PathUtilities.sha256("remote\n"))],
+            localFiles: [localFile("new.md", PathUtilities.sha256("local\n"))],
+            renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
+        )
+
+        #expect(items.count == 1)
+        #expect(items[0].action == .moveAndOverwriteRemote)
+        #expect(items[0].sourceRelativePath == "old.md")
+        #expect(items[0].destinationRemotePath == "/Writing/new")
+    }
+
+    @Test("rename destination collision is refused without deleting source")
+    func renameDestinationCollisionRefusesMove() {
+        let items = ExplicitSync.forcePushPlanItems(
+            remoteEntries: [
+                entry("old.md", hash: PathUtilities.sha256("old remote\n")),
+                entry("new.md", hash: PathUtilities.sha256("existing remote\n")),
+            ],
+            localFiles: [localFile("new.md", PathUtilities.sha256("local\n"))],
+            renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
+        )
+
+        #expect(items.count == 1)
+        #expect(items[0].action == .error)
+        #expect(items[0].sourceRelativePath == "old.md")
+        #expect(items[0].relativePath == "new.md")
+        #expect(items[0].error == "rename destination already exists on cloud")
+    }
+
     private func localFile(_ rel: String, _ hash: String) -> ExplicitSync.LocalFile {
         ExplicitSync.LocalFile(
             url: URL(fileURLWithPath: "/sync/\(rel)"),

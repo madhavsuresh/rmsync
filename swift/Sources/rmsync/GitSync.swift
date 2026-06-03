@@ -28,6 +28,7 @@ enum GitSync {
         var target: String
         var remoteSnapshot: String
         var created: Int
+        var moved: Int
         var overwritten: Int
         var deleted: Int
         var unchanged: Int
@@ -97,7 +98,7 @@ enum GitSync {
         name rawName: String?,
         syncRoot rawSyncRoot: String,
         remoteRoot: String,
-        cloud: Cloud = Cloud()
+        cloud: any CloudWriteClient = Cloud()
     ) async throws -> InitResult {
         let git = try await Git.open(at: cwd)
         let common = try await git.commonDir()
@@ -130,7 +131,7 @@ enum GitSync {
         return InitResult(name: name, remotePath: remotePath, cloudBase: initialCommit)
     }
 
-    static func pull(cwd: URL, cloud: Cloud = Cloud()) async throws -> PullResult {
+    static func pull(cwd: URL, cloud: any CloudClient = Cloud()) async throws -> PullResult {
         let git = try await Git.open(at: cwd)
         let loaded = try await load(git: git)
         guard try await git.refExists(loaded.cfg.cloudRef) else {
@@ -163,7 +164,7 @@ enum GitSync {
         cwd: URL,
         dryRun: Bool,
         allowDirty: Bool,
-        cloud: Cloud = Cloud()
+        cloud: any CloudWriteClient = Cloud()
     ) async throws -> PushResult {
         let git = try await Git.open(at: cwd)
         let loaded = try await load(git: git)
@@ -196,6 +197,7 @@ enum GitSync {
                 target: local,
                 remoteSnapshot: remoteSnapshot,
                 created: 0,
+                moved: 0,
                 overwritten: 0,
                 deleted: 0,
                 unchanged: remote.stage.entries.count,
@@ -234,6 +236,7 @@ enum GitSync {
             }
         }
 
+        let renames = try await forcePushRenames(git: git, base: base, target: target, cfg: loaded.cfg)
         let targetSync = try await materializeSyncTree(git: git, commit: target, cfg: loaded.cfg)
         let targetCfg = Config(syncDir: targetSync, remoteFolder: loaded.cfg.remoteFolder)
         let state = try State(path: stateDBURL(common: loaded.common))
@@ -241,7 +244,8 @@ enum GitSync {
             cfg: targetCfg,
             state: state,
             cloud: cloud,
-            stagingDir: stagingDir(common: loaded.common)
+            stagingDir: stagingDir(common: loaded.common),
+            renames: renames
         )
 
         if dryRun {
@@ -250,7 +254,12 @@ enum GitSync {
                 target: target,
                 remoteSnapshot: remoteSnapshot,
                 created: plan.items.filter { $0.action == .createRemote }.count,
-                overwritten: plan.items.filter { $0.action == .overwriteRemote }.count,
+                moved: plan.items.filter {
+                    $0.action == .moveRemote || $0.action == .moveAndOverwriteRemote
+                }.count,
+                overwritten: plan.items.filter {
+                    $0.action == .overwriteRemote || $0.action == .moveAndOverwriteRemote
+                }.count,
                 deleted: plan.items.filter { $0.action == .deleteRemote }.count,
                 unchanged: plan.items.filter { $0.action == .unchanged }.count,
                 mergeCommit: mergeCommit,
@@ -298,6 +307,7 @@ enum GitSync {
             target: target,
             remoteSnapshot: remoteSnapshot,
             created: applied.created,
+            moved: applied.moved,
             overwritten: applied.overwritten,
             deleted: applied.deleted,
             unchanged: applied.unchanged,
@@ -406,13 +416,33 @@ enum GitSync {
             .filter { isSyncedMarkdown(repoPath: $0, syncRoot: cfg.syncRoot) }
     }
 
+    private static func forcePushRenames(
+        git: Git,
+        base: String,
+        target: String,
+        cfg: RepoConfig
+    ) async throws -> [ExplicitSync.ForcePushRename] {
+        let pathspec = cfg.syncRoot == "." ? nil : cfg.syncRoot
+        return try await git.renamedPaths(from: base, to: target, under: pathspec)
+            .filter {
+                isSyncedMarkdown(repoPath: $0.oldPath, syncRoot: cfg.syncRoot)
+                    && isSyncedMarkdown(repoPath: $0.newPath, syncRoot: cfg.syncRoot)
+            }
+            .map {
+                ExplicitSync.ForcePushRename(
+                    oldPath: syncRelativePath(syncRoot: cfg.syncRoot, repoPath: $0.oldPath),
+                    newPath: syncRelativePath(syncRoot: cfg.syncRoot, repoPath: $0.newPath)
+                )
+            }
+    }
+
     // MARK: - cloud staging
 
     private static func stageCurrentCloud(
         git: Git,
         cfg: RepoConfig,
         baseCommit: String,
-        cloud: Cloud
+        cloud: any CloudClient
     ) async throws -> (syncDir: URL, stage: ExplicitSync.StageResult) {
         let syncDir = try await materializeSyncTree(git: git, commit: baseCommit, cfg: cfg)
         let explicitCfg = Config(syncDir: syncDir, remoteFolder: cfg.remoteFolder)
@@ -431,7 +461,7 @@ enum GitSync {
         return (syncDir, stage)
     }
 
-    private static func ensureRemoteFolderIsNew(cfg: RepoConfig, cloud: Cloud) async throws {
+    private static func ensureRemoteFolderIsNew(cfg: RepoConfig, cloud: any CloudWriteClient) async throws {
         do {
             try await cloud.mkdir("/\(cfg.remoteRoot)")
         } catch {

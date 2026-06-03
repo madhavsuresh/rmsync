@@ -103,6 +103,7 @@ struct GitSyncPushCmd: AsyncParsableCommand {
             print("target:       \(result.target)")
             print("cloud base:   \(result.remoteSnapshot)")
             print("created:      \(result.created)")
+            print("moved:        \(result.moved)")
             print("overwritten:  \(result.overwritten)")
             print("deleted:      \(result.deleted)")
             print("unchanged:    \(result.unchanged)")

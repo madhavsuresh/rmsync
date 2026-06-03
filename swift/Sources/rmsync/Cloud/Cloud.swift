@@ -5,6 +5,14 @@ protocol CloudClient: Sendable {
     func get(_ remotePath: String, dest: URL) async throws -> URL
 }
 
+protocol CloudWriteClient: CloudClient {
+    func stat(_ remotePath: String) async throws -> StatResult?
+    func put(local: URL, remoteParent: String, update: Bool) async throws
+    func mkdir(_ remotePath: String) async throws
+    func mv(from src: String, to dst: String) async throws
+    func rm(_ remotePath: String) async throws
+}
+
 /// reMarkable cloud access via the ``rmapi`` Go binary.
 ///
 /// Ports ``src/rm_sync/cloud.py`` verbatim. The Python implementation
@@ -19,7 +27,7 @@ protocol CloudClient: Sendable {
 ///   ``--content-only`` is PDF-only; don't use it for .rmdoc updates.
 /// - Under sync15 the ``Version`` field is pinned to 0; use
 ///   ``ModifiedClient`` as the change signal.
-actor Cloud: CloudClient {
+actor Cloud: CloudWriteClient {
     /// rmapi versions we've validated against.
     ///
     /// Bumped from 0.0.29 → 0.0.32 in v0.2.23 after a cloud-side

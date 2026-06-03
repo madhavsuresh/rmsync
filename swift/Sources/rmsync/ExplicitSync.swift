@@ -63,16 +63,25 @@ enum ExplicitSync {
     enum ForcePushAction: String, Codable, Sendable {
         case createRemote = "create_remote"
         case overwriteRemote = "overwrite_remote"
+        case moveRemote = "move_remote"
+        case moveAndOverwriteRemote = "move_and_overwrite_remote"
         case deleteRemote = "delete_remote"
         case unchanged
         case error
     }
 
+    struct ForcePushRename: Sendable, Hashable {
+        var oldPath: String
+        var newPath: String
+    }
+
     struct ForcePushPlanItem: Codable, Sendable {
         var action: ForcePushAction
         var relativePath: String
+        var sourceRelativePath: String?
         var localPath: String?
         var remotePath: String?
+        var destinationRemotePath: String?
         var docID: String?
         var remoteModified: String?
         var remoteVersion: Int?
@@ -91,6 +100,7 @@ enum ExplicitSync {
 
     struct ForcePushResult {
         var created: Int = 0
+        var moved: Int = 0
         var overwritten: Int = 0
         var deleted: Int = 0
         var unchanged: Int = 0
@@ -515,7 +525,7 @@ enum ExplicitSync {
     static func push(
         cfg: Config,
         state: State,
-        cloud: Cloud = Cloud(),
+        cloud: any CloudWriteClient = Cloud(),
         paths: [String],
         includeDeletes: Bool,
         force: Bool,
@@ -594,8 +604,9 @@ enum ExplicitSync {
     static func planForcePush(
         cfg: Config,
         state: State,
-        cloud: Cloud = Cloud(),
+        cloud: any CloudClient = Cloud(),
         stagingDir: URL? = nil,
+        renames: [ForcePushRename] = [],
         initiator: String = "manual"
     ) async throws -> ForcePushPlan {
         Logger.shared.audit("force push plan started", meta: [
@@ -614,7 +625,9 @@ enum ExplicitSync {
         let localFiles = try localForcePushFiles(cfg: cfg)
         let items = forcePushPlanItems(
             remoteEntries: stage.entries,
-            localFiles: localFiles
+            localFiles: localFiles,
+            remoteFolder: cfg.remoteFolder,
+            renames: renames
         )
         let plan = ForcePushPlan(stage: stage, items: items)
         Logger.shared.audit(
@@ -637,7 +650,7 @@ enum ExplicitSync {
         _ plan: ForcePushPlan,
         cfg: Config,
         state: State,
-        cloud: Cloud = Cloud(),
+        cloud: any CloudWriteClient = Cloud(),
         initiator: String = "manual"
     ) async throws -> ForcePushResult {
         Logger.shared.audit("force push apply started", meta: [
@@ -676,6 +689,26 @@ enum ExplicitSync {
                         force: true,
                         remoteOverride: item
                     )
+                    result.overwritten += 1
+                case .moveRemote:
+                    try await moveRemote(item, cfg: cfg, state: state, cloud: cloud)
+                    result.moved += 1
+                case .moveAndOverwriteRemote:
+                    try await moveRemote(item, cfg: cfg, state: state, cloud: cloud)
+                    guard let localPath = item.localPath else {
+                        throw SyncError.invalidPath(item.relativePath)
+                    }
+                    var moved = item
+                    moved.remotePath = item.destinationRemotePath
+                    try await pushFile(
+                        URL(fileURLWithPath: localPath),
+                        cfg: cfg,
+                        state: state,
+                        cloud: cloud,
+                        force: true,
+                        remoteOverride: moved
+                    )
+                    result.moved += 1
                     result.overwritten += 1
                 case .deleteRemote:
                     try await deleteRemoteOnly(item, state: state, cloud: cloud)
@@ -825,6 +858,7 @@ enum ExplicitSync {
             "initiator": initiator,
             "items": "\(items)",
             "created": "\(result.created)",
+            "moved": "\(result.moved)",
             "overwritten": "\(result.overwritten)",
             "deleted": "\(result.deleted)",
             "unchanged": "\(result.unchanged)",
@@ -850,6 +884,8 @@ enum ExplicitSync {
         return [
             "create_remote": "\(grouped[.createRemote]?.count ?? 0)",
             "overwrite_remote": "\(grouped[.overwriteRemote]?.count ?? 0)",
+            "move_remote": "\(grouped[.moveRemote]?.count ?? 0)",
+            "move_and_overwrite_remote": "\(grouped[.moveAndOverwriteRemote]?.count ?? 0)",
             "delete_remote": "\(grouped[.deleteRemote]?.count ?? 0)",
             "unchanged": "\(grouped[.unchanged]?.count ?? 0)",
             "error": "\(grouped[.error]?.count ?? 0)",
@@ -949,7 +985,7 @@ enum ExplicitSync {
         _ localURL: URL,
         cfg: Config,
         state: State,
-        cloud: Cloud,
+        cloud: any CloudWriteClient,
         force: Bool,
         remoteOverride: ForcePushPlanItem? = nil
     ) async throws -> PushFileOutcome {
@@ -1080,7 +1116,7 @@ enum ExplicitSync {
     private static func pushDelete(
         _ localURL: URL,
         state: State,
-        cloud: Cloud,
+        cloud: any CloudWriteClient,
         force: Bool
     ) async throws {
         guard let stored = try await state.byLocalPath(localURL.path) else { return }
@@ -1094,13 +1130,55 @@ enum ExplicitSync {
     private static func deleteRemoteOnly(
         _ item: ForcePushPlanItem,
         state: State,
-        cloud: Cloud
+        cloud: any CloudWriteClient
     ) async throws {
         guard let remotePath = item.remotePath, let docID = item.docID else {
             throw SyncError.pathNotStaged(item.relativePath)
         }
         try await cloud.rm(remotePath)
         try await state.delete(docID: docID)
+    }
+
+    private static func moveRemote(
+        _ item: ForcePushPlanItem,
+        cfg: Config,
+        state: State,
+        cloud: any CloudWriteClient
+    ) async throws {
+        guard let remotePath = item.remotePath,
+              let destinationRemotePath = item.destinationRemotePath,
+              let docID = item.docID,
+              let localPath = item.localPath else {
+            throw SyncError.pathNotStaged(item.relativePath)
+        }
+
+        let derivation = PathUtilities.localToRemoteParentChain(
+            localPath: URL(fileURLWithPath: localPath),
+            syncDir: cfg.syncDir,
+            remoteFolder: cfg.remoteFolder
+        )
+        for prefix in derivation.mkdirChain.dropFirst() { try? await cloud.mkdir(prefix) }
+
+        try await cloud.mv(from: remotePath, to: destinationRemotePath)
+
+        let existing = try await state.get(docID: docID)
+        try await state.upsert(Document(
+            docID: docID,
+            parentID: existing?.parentID ?? "",
+            docType: "DocumentType",
+            remotePath: destinationRemotePath,
+            localPath: localPath,
+            remoteVersion: item.remoteVersion ?? existing?.remoteVersion ?? 0,
+            remoteModified: item.remoteModified ?? existing?.remoteModified,
+            lastSyncedMDHash: item.remoteHash ?? existing?.lastSyncedMDHash,
+            lastSyncedTabletHash: item.remoteTabletHash ?? existing?.lastSyncedTabletHash,
+            lastPullAt: existing?.lastPullAt,
+            lastPushAt: existing?.lastPushAt,
+            conflictState: nil,
+            errorState: nil,
+            pageIDs: item.pageIDs,
+            pendingOp: nil
+        ))
     }
 
     private static func markRemoteUnchanged(
@@ -1135,7 +1213,7 @@ enum ExplicitSync {
         ))
     }
 
-    private static func ensureCloudStillAtBaseline(_ doc: Document, cloud: Cloud) async throws {
+    private static func ensureCloudStillAtBaseline(_ doc: Document, cloud: any CloudWriteClient) async throws {
         guard let baseline = doc.remoteModified, !baseline.isEmpty else { return }
         guard let stat = try await cloud.stat(doc.remotePath) else {
             throw SyncError.cloudMissing(doc.remotePath)
@@ -1335,7 +1413,9 @@ enum ExplicitSync {
 
     static func forcePushPlanItems(
         remoteEntries: [Entry],
-        localFiles: [LocalFile]
+        localFiles: [LocalFile],
+        remoteFolder: String = "Writing",
+        renames: [ForcePushRename] = []
     ) -> [ForcePushPlanItem] {
         let remoteDocs = remoteEntries.filter { $0.kind != .deleted }
         var remoteByPath: [String: Entry] = [:]
@@ -1346,7 +1426,24 @@ enum ExplicitSync {
         for file in localFiles {
             localByPath[normalizeSelectionPath(file.relativePath)] = file
         }
-        let allPaths = Set(remoteByPath.keys).union(localByPath.keys)
+        var allPaths = Set(remoteByPath.keys).union(localByPath.keys)
+        var renameByDestination: [String: String] = [:]
+        var blockedRenameByDestination: [String: String] = [:]
+        for rename in renames {
+            let oldPath = normalizeSelectionPath(rename.oldPath)
+            let newPath = normalizeSelectionPath(rename.newPath)
+            guard remoteByPath[oldPath] != nil,
+                  localByPath[newPath] != nil else {
+                continue
+            }
+            if remoteByPath[newPath] != nil {
+                blockedRenameByDestination[newPath] = oldPath
+                allPaths.remove(oldPath)
+                continue
+            }
+            renameByDestination[newPath] = oldPath
+            allPaths.remove(oldPath)
+        }
 
         return allPaths.sorted().map { path in
             let local = localByPath[path]
@@ -1361,6 +1458,16 @@ enum ExplicitSync {
                     error: remote.error ?? "remote snapshot failed"
                 )
             }
+            if let source = blockedRenameByDestination[path] {
+                return forcePushItem(
+                    action: .error,
+                    path: path,
+                    local: local,
+                    remote: remote,
+                    sourcePath: source,
+                    error: "rename destination already exists on cloud"
+                )
+            }
 
             switch (local, remote) {
             case let (.some(local), .some(remote)):
@@ -1369,6 +1476,20 @@ enum ExplicitSync {
                     : .overwriteRemote
                 return forcePushItem(action: action, path: path, local: local, remote: remote)
             case let (.some(local), .none):
+                if let source = renameByDestination[path],
+                   let sourceRemote = remoteByPath[source] {
+                    let action: ForcePushAction = local.hash == sourceRemote.remoteHash
+                        ? .moveRemote
+                        : .moveAndOverwriteRemote
+                    return forcePushItem(
+                        action: action,
+                        path: path,
+                        local: local,
+                        remote: sourceRemote,
+                        sourcePath: source,
+                        destinationRemotePath: remotePath(relativePath: path, remoteFolder: remoteFolder)
+                    )
+                }
                 return forcePushItem(action: .createRemote, path: path, local: local, remote: nil)
             case let (.none, .some(remote)):
                 return forcePushItem(action: .deleteRemote, path: path, local: nil, remote: remote)
@@ -1383,13 +1504,17 @@ enum ExplicitSync {
         path: String,
         local: LocalFile?,
         remote: Entry?,
+        sourcePath: String? = nil,
+        destinationRemotePath: String? = nil,
         error: String? = nil
     ) -> ForcePushPlanItem {
         ForcePushPlanItem(
             action: action,
             relativePath: path,
+            sourceRelativePath: sourcePath,
             localPath: local?.url.path,
             remotePath: remote?.remotePath,
+            destinationRemotePath: destinationRemotePath,
             docID: remote?.docID,
             remoteModified: remote?.remoteModified,
             remoteVersion: remote?.remoteVersion,
@@ -1400,6 +1525,12 @@ enum ExplicitSync {
             pageIDs: remote?.pageIDs ?? [],
             error: error
         )
+    }
+
+    private static func remotePath(relativePath: String, remoteFolder: String) -> String {
+        var rel = normalizeSelectionPath(relativePath)
+        if rel.hasSuffix(".md") { rel.removeLast(3) }
+        return "/" + ([remoteFolder] + rel.split(separator: "/").map(String.init)).joined(separator: "/")
     }
 
     private static func renderTabletMarkdown(_ rmdoc: Archive.RmDoc) throws -> String {
