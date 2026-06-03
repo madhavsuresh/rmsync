@@ -247,11 +247,18 @@ struct DiffCmd: ParsableCommand {
         abstract: "Show the currently staged cloud changes."
     )
 
+    @Argument(help: "Optional relative or absolute path from the sync dir to show as a unified diff.")
+    var path: String?
+
     func run() throws {
         do {
-            let (_, manifest) = try ExplicitSync.loadCurrentStage()
+            let (root, manifest) = try ExplicitSync.loadCurrentStage()
             print("staged pull: \(manifest.id)")
-            ExplicitSync.printDiff(manifest)
+            if let path {
+                try ExplicitSync.printDiff(manifest, root: root, path: path)
+            } else {
+                ExplicitSync.printDiff(manifest)
+            }
         } catch let error as ExplicitSync.SyncError {
             print(error.description)
             throw ExitCode(1)

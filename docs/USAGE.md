@@ -74,7 +74,7 @@ Core subcommands. Run any of them from anywhere.
 |---|---|---|
 | `rmsync status` | Current state, tracked docs, last pull/push, conflicts, errors | Live IPC |
 | `rmsync pull` | Fetch cloud changes into a staging area without touching local files | rmapi + staging dir |
-| `rmsync diff` | Show the currently staged cloud changes | Staging manifest |
+| `rmsync diff [path]` | Show currently staged cloud changes, or a unified diff for one path | Staging manifest |
 | `rmsync accept <path>` | Apply selected staged cloud changes locally | Staging → sync dir |
 | `rmsync accept --all` | Apply every staged non-delete cloud change | Staging → sync dir |
 | `rmsync accept --include-deletes <path>` | Accept staged cloud deletes, moving local files to trash | Staging → `.rmsync-trash` |
@@ -133,6 +133,7 @@ cloud. Then pull into staging:
 ```sh
 rmsync pull
 rmsync diff
+rmsync diff path/from/diff.md
 rmsync accept path/from/diff.md
 ```
 

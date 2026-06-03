@@ -19,7 +19,7 @@ Once installed (see [Quick start](#quick-start) below):
 ```sh
 rmsync status                        # is the daemon healthy? what's queued?
 rmsync pull                          # fetch cloud changes into staging
-rmsync diff                          # review the staged cloud changes
+rmsync diff [path]                   # review staged changes, or one file diff
 rmsync accept <path>                 # apply one staged cloud change locally
 rmsync accept --all                  # apply all staged non-delete changes
 rmsync push [path ...]               # push local Markdown changes to cloud
@@ -463,7 +463,7 @@ rmsync stop               # stop it
 rmsync restart            # kick the agent (use after config edits or rebuilds)
 rmsync status             # current state, tracked docs, last pull/push
 rmsync pull               # fetch cloud changes into staging
-rmsync diff               # review staged cloud changes
+rmsync diff [path]        # review staged cloud changes, or one file diff
 rmsync accept <path>      # apply one staged cloud change locally
 rmsync accept --all       # apply all staged non-delete changes
 rmsync push [path ...]    # push local Markdown changes to cloud

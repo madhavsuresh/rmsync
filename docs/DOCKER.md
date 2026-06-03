@@ -43,7 +43,7 @@ If `doctor` is all checkmarks, setup is healthy. Sync explicitly:
 
 ```sh
 docker exec rmsync rmsync pull
-docker exec rmsync rmsync diff
+docker exec rmsync rmsync diff [path]
 docker exec rmsync rmsync accept <path>  # or: accept --all
 docker exec rmsync rmsync push [path ...]
 ```
@@ -252,7 +252,7 @@ that lives in `/state/ipc.sock`:
 docker exec rmsync rmsync status
 docker exec rmsync rmsync doctor
 docker exec rmsync rmsync pull               # stage cloud changes
-docker exec rmsync rmsync diff               # review staged changes
+docker exec rmsync rmsync diff [path]        # review staged changes, or one file diff
 docker exec rmsync rmsync accept <path>      # apply selected staged change
 docker exec rmsync rmsync push [path ...]    # push local Markdown changes
 docker exec rmsync rmsync sync-now           # deprecated; auto polling disabled
