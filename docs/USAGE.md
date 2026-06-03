@@ -110,6 +110,8 @@ Core subcommands. Run any of them from anywhere.
 | `rmsync force-push` | Stage current cloud state and preview replacing it with the local tree | rmapi + staging dir |
 | `rmsync force-push --apply` | Replace same-path cloud docs, upload local-only docs, and trash remote-only docs | Direct rmapi |
 | `rmsync init` | Create the local sync dir and configured cloud folder | filesystem + rmapi |
+| `rmsync purge` | Preview a full local cleanup, including config/state/logs and the configured sync dir | filesystem |
+| `rmsync purge --cloud` | Preview the same local cleanup plus moving the configured cloud folder to cloud trash | rmapi + filesystem |
 | `rmsync git init` | Initialize `/sync/git/<repo>` for a git-backed workflow | git refs + rmapi |
 | `rmsync git pull` / `rmsync-git pull` | Render cloud state into a new git branch | rmapi + git branch |
 | `rmsync git push` / `rmsync-git push` | Merge cloud with `HEAD`, then upload the verified git tree | git merge-tree + rmapi |
@@ -723,19 +725,47 @@ cd ~/code/rmsync
 ./uninstall.sh
 ```
 
-Nuclear option — wipe state too:
+Nuclear option — preview all local files that would be removed:
 
 ```sh
-./uninstall.sh --purge
+rmsync purge
+```
+
+Apply the local purge:
+
+```sh
+rmsync purge --apply
 ```
 
 Purge removes:
+- `~/Library/LaunchAgents/com.user.rmsync.plist`
+- `~/Library/LaunchAgents/com.user.rmsync.menubar.plist`
+- `~/.local/bin/rmsync`
 - `~/.config/rmsync/`
 - `~/Library/Application Support/rmsync/`
 - `~/Library/Logs/rmsync/`
+- the configured `sync_dir`
 
-After either, the `.md` files in the sync dir stay on disk. You have
-to remove those manually.
+Add `--keep-sync-dir` to preserve the local Markdown tree. Add
+`--rmapi-auth` to remove rmapi's separate `~/.config/rmapi/`
+credentials/config.
+
+Cloud cleanup is explicit and happens before local config removal:
+
+```sh
+rmsync purge --cloud        # preview configured remote_folder cleanup
+rmsync purge --cloud --apply
+```
+
+`--cloud` moves every document/collection under the configured
+`remote_folder` to the reMarkable cloud trash. If the local config has
+already been removed, pass `--remote-folder <folder>`. Repo-scoped
+git-sync folders can be targeted the same way, for example
+`--remote-folder sync/git/notes`.
+
+`./uninstall.sh --purge` delegates to `rmsync purge --apply` when the
+installed CLI supports it, then falls back to the legacy state/config/log
+cleanup.
 
 ---
 
