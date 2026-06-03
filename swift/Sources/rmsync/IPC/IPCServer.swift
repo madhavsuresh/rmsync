@@ -148,10 +148,13 @@ actor IPCServer {
     ) async {
         defer { close(fd) }
 
-        let hello = await StateBus.helloFrame(for: bus.snapshot())
-        guard writeFrame(fd: fd, payload: hello) else { return }
+        let (stream, subID, initialStatus) = await bus.subscribe()
+        let hello = StateBus.helloFrame(for: initialStatus)
+        guard writeFrame(fd: fd, payload: hello) else {
+            await bus.unsubscribe(id: subID)
+            return
+        }
 
-        let (stream, subID) = await bus.subscribe()
         let writerTask = Task.detached { [stream] in
             for await frame in stream {
                 if !writeFrame(fd: fd, payload: frame) { break }

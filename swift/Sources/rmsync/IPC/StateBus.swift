@@ -23,7 +23,7 @@ actor StateBus {
         }
     }
 
-    func subscribe() -> (AsyncStream<SendableJSON>, UUID) {
+    func subscribe() -> (AsyncStream<SendableJSON>, UUID, IPC.Status) {
         let id = UUID()
         let stream = AsyncStream<SendableJSON> { cont in
             subscribers[id] = cont
@@ -31,7 +31,7 @@ actor StateBus {
                 Task { [weak self] in await self?.unsubscribe(id: id) }
             }
         }
-        return (stream, id)
+        return (stream, id, status)
     }
 
     func unsubscribe(id: UUID) {

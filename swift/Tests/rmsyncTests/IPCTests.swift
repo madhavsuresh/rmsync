@@ -10,11 +10,14 @@ import Testing
 
 @Suite("IPC server + client")
 struct IPCTests {
-    /// ``AF_UNIX`` paths are capped at 104 bytes on macOS, and pytest's
-    /// tmpdir is longer — same constraint the Python port had. Use /tmp
-    /// directly for the socket path.
+    /// ``AF_UNIX`` paths are capped at 104 bytes on macOS, and default
+    /// temporary directories can be longer. Let local runs choose a short
+    /// scratch directory, then fall back to /tmp for CI.
     private func makeSocketPath() -> URL {
-        URL(fileURLWithPath: "/tmp/rmipc-\(UUID().uuidString.prefix(8)).sock")
+        let root =
+            ProcessInfo.processInfo.environment["RMSYNC_TEST_TMPDIR"] ?? "/tmp"
+        return URL(fileURLWithPath: root)
+            .appendingPathComponent("rmipc-\(UUID().uuidString.prefix(8)).sock")
     }
 
     @Test("hello frame sent on connect")
@@ -127,6 +130,11 @@ struct IPCTests {
         // target — normalises Darwin/Glibc type differences.
         let fd = socket(AF_UNIX, SOCK_STREAM_I32, 0)
         #expect(fd >= 0)
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        _ = setsockopt(
+            fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+            socklen_t(MemoryLayout<timeval>.size)
+        )
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathCStr = sock.path.utf8CString
@@ -166,9 +174,13 @@ struct IPCTests {
             var sent = 0
             while sent < raw.count {
                 let n = write(fd, raw.baseAddress!.advanced(by: sent), raw.count - sent)
-                if n < 0 { return }
+                if n <= 0 { throw SocketWriteError(errno: errno) }
                 sent += n
             }
         }
+    }
+
+    private struct SocketWriteError: Error {
+        let errno: Int32
     }
 }
