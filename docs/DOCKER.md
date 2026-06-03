@@ -101,12 +101,12 @@ you want files to be owned by your host user, uncomment the
 `user:` line in `docker-compose.yml` and set it to your
 `id -u:id -g`. The entrypoint and daemon respect any UID.
 
-### Legacy watcher settings
+### Current config only
 
-The container no longer starts the inotify watcher in explicit-sync
-mode. Older config keys such as `debounce_seconds` and
-`poll_interval_seconds` are retained for compatibility, but sync
-mutations happen through `pull`, `accept`, `push`, and `force-push`.
+The container supports only the explicit-sync config. Older worker,
+poller, inbox, and delete-propagation keys are rejected; if you are
+upgrading from an old container state, move `data/config/config.toml`
+and `data/state/state.db` aside and rerun setup.
 
 ---
 
@@ -192,25 +192,6 @@ Inspect attempts and refusal reasons with:
 docker exec rmsync rmsync auto-push status
 ```
 
-## Send PDFs / EPUBs to the tablet (inbox)
-
-The `[inbox]` config block is legacy. Current explicit-sync releases
-do not watch an inbox folder or push dropped PDFs / EPUBs
-automatically.
-
-To enable, edit `data/config/config.toml` and add:
-
-```toml
-[inbox]
-local_dir         = "/sync/_inbox"   # any path inside /sync (or bind-mount another)
-remote_folder     = "Inbox"
-delete_after_push = true             # set false to keep a copy locally
-```
-
-Adding the block is harmless for older installs, but the current
-daemon ignores it. Use `rmapi put --force <file.pdf> /Inbox`
-directly until rmsync has a dedicated explicit send command.
-
 ## Rename / move / delete propagation
 
 Delete propagation is explicit. A local delete affects the cloud only
@@ -239,7 +220,7 @@ docker exec rmsync rmsync trash prune          # one-shot manual prune
 docker exec rmsync rmsync trash prune --days 7 # one-off override
 ```
 
-The status-only daemon does not prune trash automatically; run
+The daemon does not prune trash automatically; run
 `rmsync trash prune` when you want to enforce retention.
 
 ## Snapshot history (always on)
@@ -276,7 +257,6 @@ docker exec rmsync rmsync diff [path]        # review staged changes, or one fil
 docker exec rmsync rmsync accept <path>      # apply selected staged change
 docker exec rmsync rmsync push [path ...]    # push local Markdown changes
 docker exec rmsync rmsync auto-push status   # inspect optional auto-push attempts
-docker exec rmsync rmsync sync-now           # deprecated; auto polling disabled
 docker exec rmsync rmsync conflicts          # list unresolved
 docker exec rmsync rmsync conflicts --resolve-stale
 docker exec rmsync rmsync logs --diagnose    # print log paths + tail

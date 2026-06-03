@@ -21,6 +21,18 @@ struct StatusSnapshot {
     let lastError: String?
     let updatedAt: String
     let pid: Int?
+    let autoPushEnabled: Bool
+    let autoPushQueued: Int
+    let autoPushUploading: Int
+    let autoPushSucceeded: Int
+    let autoPushSkipped: Int
+    let autoPushRefused: Int
+    let autoPushFailed: Int
+    let autoPushLastSucceededAt: String?
+    let pullState: String
+    let pullChanges: Int
+    let pullCheckedAt: String?
+    let pullError: String?
     /// Version string reported by the daemon over IPC. Empty if the
     /// daemon is older than the field (pre-Swift-version-stamp) or
     /// didn't send it. Separate from this menubar binary's own
@@ -85,10 +97,6 @@ final class IPCClient {
 
     func setPaused(_ paused: Bool) {
         send(["type": paused ? "pause" : "resume"])
-    }
-
-    func syncNow() {
-        send(["type": "sync_now"])
     }
 
     func restartDaemon() {
@@ -253,10 +261,34 @@ final class IPCClient {
             lastError: raw["last_error"] as? String,
             updatedAt: raw["updated_at"] as? String ?? "",
             pid: raw["pid"] as? Int,
+            autoPushEnabled: Self.boolValue(raw["auto_push_enabled"]),
+            autoPushQueued: Self.intValue(raw["auto_push_queued"]),
+            autoPushUploading: Self.intValue(raw["auto_push_uploading"]),
+            autoPushSucceeded: Self.intValue(raw["auto_push_succeeded"]),
+            autoPushSkipped: Self.intValue(raw["auto_push_skipped"]),
+            autoPushRefused: Self.intValue(raw["auto_push_refused"]),
+            autoPushFailed: Self.intValue(raw["auto_push_failed"]),
+            autoPushLastSucceededAt: raw["auto_push_last_succeeded_at"] as? String,
+            pullState: raw["pull_state"] as? String ?? "unknown",
+            pullChanges: Self.intValue(raw["pull_changes"]),
+            pullCheckedAt: raw["pull_checked_at"] as? String,
+            pullError: raw["pull_error"] as? String,
             daemonVersion: raw["version"] as? String ?? "",
             cloudHealth: raw["cloud_health"] as? String ?? "",
             cloudHealthDetail: raw["cloud_health_detail"] as? String
         )
+    }
+
+    private static func intValue(_ raw: Any?) -> Int {
+        if let n = raw as? Int { return n }
+        if let n = raw as? NSNumber { return n.intValue }
+        return 0
+    }
+
+    private static func boolValue(_ raw: Any?) -> Bool {
+        if let b = raw as? Bool { return b }
+        if let n = raw as? NSNumber { return n.boolValue }
+        return false
     }
 
     // MARK: - writing

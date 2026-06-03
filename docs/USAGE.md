@@ -92,7 +92,6 @@ Core subcommands. Run any of them from anywhere.
 | `rmsync auto-push status` | Show optional safe auto-push attempts and refusal reasons | State DB |
 | `rmsync pause` | Set the paused status flag | IPC → state DB |
 | `rmsync resume` | Clear the paused status flag | IPC → state DB |
-| `rmsync sync-now` | Deprecated; automatic polling is disabled | IPC |
 | `rmsync conflicts` | List unresolved `.md.conflict` files | State DB |
 | `rmsync doctor` | Run all 10 health checks, exit 1 on failure | Direct |
 | `rmsync logs -f` | Tail the structured JSON log | File tail |
@@ -357,7 +356,7 @@ Modern config keys and defaults (all paths relative to your home):
 | Key | Default | Effect |
 |---|---|---|
 | `sync_dir` | `~/rmsync-notes` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
-| `remote_folder` | `sync/notes` | Which cloud folder to mirror. `/Writing` is supported for existing configs; new installs use `/sync/notes`. |
+| `remote_folder` | `sync/notes` | Which cloud folder to mirror. Only `sync/notes` is supported in user config. |
 | `[auto_push].enabled` | `false` | Opt into safe local-to-cloud auto-push for stable `.md` creates/edits |
 | `[auto_push].new_files` | `true` | Allow local-only `.md` files to auto-create cloud docs |
 | `[auto_push].debounce_seconds` | `2.0` | Delay between file stability samples |
@@ -420,29 +419,6 @@ scan_interval_seconds = 30
 max_pushes_per_minute = 30
 ```
 
-### Migrating an existing `/Writing` setup to `/sync/notes`
-
-Existing configs with `remote_folder = "Writing"` keep working. To move
-to the single top-level `/sync` layout, first make sure your local
-`sync_dir` is the source of truth. Then edit `config.toml`:
-
-```toml
-remote_folder = "sync/notes"
-```
-
-Run:
-
-```sh
-rmsync init
-rmsync force-push
-rmsync force-push --apply
-```
-
-`rmsync init` creates `/sync` and `/sync/notes` if needed. The
-force-push preview shows exactly what will be uploaded before applying.
-This does not delete `/Writing`; remove or archive that folder manually
-only after you have verified `/sync/notes` on the tablet.
-
 ### …recover a file I deleted by mistake
 
 Explicit delete acceptance parks local files under
@@ -471,7 +447,7 @@ rmsync trash prune                       # honors trash_retention_days
 rmsync trash prune --days 7              # one-off override
 ```
 
-The status-only daemon does not prune automatically; run
+The daemon does not prune automatically; run
 `rmsync trash prune` when you want to enforce `trash_retention_days`
 (set to 0 to keep forever).
 
@@ -530,23 +506,6 @@ actively-written doc.
 
 ---
 
-## Optional: drop-folder for sending PDFs / EPUBs
-
-Add to `~/.config/rmsync/config.toml`:
-
-```toml
-[inbox]
-local_dir         = "~/rmsync-notes/_inbox"
-remote_folder     = "Inbox"
-delete_after_push = true
-```
-
-This legacy config block is retained, but the explicit sync daemon does
-not start automatic inbox watchers. Use rmapi directly for PDF / EPUB
-sends until rmsync has a dedicated explicit send command.
-
----
-
 ## Optional: web dashboard
 
 Add to `~/.config/rmsync/config.toml`:
@@ -586,20 +545,22 @@ screen. Click it for the menu.
 
 | Icon | Meaning |
 |---|---|
-| ✓ | Synced, idle |
-| tablet-and-pencil + ⟳ | Syncing |
-| tablet-and-pencil + ⚠ | Unresolved conflicts present |
+| hand.raised | Manual sync mode; auto-push is off |
+| arrow.up.circle | Auto-push enabled or uploading |
+| tray.and.arrow.down | Pull would bring cloud changes |
+| tablet-and-pencil + ⚠ | Conflicts, errors, or auto-push attention |
 | tablet-and-pencil + ⏸ | Paused |
 | tablet-and-pencil + ✗ | Error or daemon stopped |
 
 ### Menu items
 
-- **Synced (N docs)** — status line, updates live from IPC
+- **Status line** — manual mode, auto-push state, pull availability, or daemon health
+- **Mode** — manual push/pull mode or auto-push queue/upload/failure summary
+- **Pull** — read-only probe result: available cloud changes, clean, checking, or error
 - **Last pull / push** — relative time (e.g. "2 min ago")
 - **Open Sync Folder** — reveals it in Finder
 - **Show Conflicts (N)** — hidden when zero
 - **Pause / Resume** — toggles the pause state (persists)
-- **Manual sync mode** — informational; use `rmsync pull` / `push`
 - **Restart Daemon** — `launchctl kickstart -k`
 - **Open Logs** — opens the log file in Console.app
 - **Edit Config…** — opens `config.toml`

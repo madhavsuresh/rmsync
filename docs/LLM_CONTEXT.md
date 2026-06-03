@@ -16,8 +16,9 @@ section when a deep issue surfaces (e.g. ghost pages on the tablet).
 ## What rmsync is
 
 An explicit sync tool between one configured reMarkable cloud folder
-and a local Markdown tree. New installs use `/sync/notes`; existing
-`/Writing` configs remain supported. Runs on macOS (via launchd, with
+and a local Markdown tree. The supported ordinary tablet namespace is
+`/sync/notes`; old `/Writing` configs require a fresh reinstall.
+Runs on macOS (via launchd, with
 a menubar app) and on Linux (via Docker, headless).
 
 - **Local to tablet:** edit a `.md` file, then run `rmsync push
@@ -39,10 +40,12 @@ No handwriting OCR. Pen strokes come through as empty markdown. Only
 typed-text notebooks round-trip.
 
 The daemon is a Swift 6 binary. In current explicit-sync releases it
-is status-only: it keeps IPC, dashboard, menu bar state, and periodic
-status refreshes online, but it does not start a local watcher, cloud
-poller, startup reconcile pass, or background worker pool. Sync
-mutations happen through CLI commands.
+keeps IPC, dashboard, menu bar state, periodic status refreshes, a
+read-only pull availability probe, and the optional safe auto-push
+watcher online. It does not start a background pull worker, startup
+reconcile pass, delete propagator, or hidden worker pool. Pull/accept
+mutations happen through CLI commands; cloud mutation happens through
+explicit push/force-push or opt-in safe auto-push.
 
 Platform differences are confined to:
 
@@ -54,8 +57,8 @@ Platform differences are confined to:
 
 Both platforms talk to the daemon over a Unix-domain socket
 (`ipc.sock` under the state dir) for status and lifecycle-adjacent
-actions. `sync-now` is deprecated and returns an explicit-sync error;
-use `pull`, `diff`, `accept`, and `push`.
+actions. There is no `sync-now` command; use `pull`, `diff`, `accept`,
+and `push`.
 
 ---
 
@@ -229,7 +232,6 @@ push, accept, delete, restore, or force-push.
 | `rmsync git init` | git + rmapi | Initialize `/sync/git/<name>` for an optional git-backed workflow. | requires git |
 | `rmsync git pull` / `rmsync-git pull` | git + rmapi | Render cloud state into a new git branch. | requires git |
 | `rmsync git push` / `rmsync-git push` | git + rmapi | Merge cloud with `HEAD`, then upload the verified git tree. | requires git |
-| `rmsync sync-now` | IPC | Deprecated; automatic polling is disabled. | ✓ |
 | `rmsync conflicts` | state DB | Lists unresolved `.md.conflict` files. | ✓ |
 | `rmsync doctor` | direct | Runs 10 health checks; exits 1 on any ✗. | ✓ |
 | `rmsync logs -f` | file tail | Tails the active daemon log, usually `stderr.log`. Ctrl+C to stop. | use `docker logs -f rmsync` |
@@ -359,28 +361,21 @@ daemon does not watch the file.
 | Key | Default | Effect |
 |---|---|---|
 | `sync_dir` | `~/rmsync-notes` | Where local `.md` files live. **Change with `rmsync relocate`, not by hand.** |
-| `remote_folder` | `sync/notes` | Cloud folder to mirror. `/Writing` is legacy-compatible for existing configs. |
-| `worker_pool_size` | `3` | Legacy daemon worker setting; explicit CLI sync does not use background workers |
-| `poll_interval_seconds` | `30` | Legacy poll cadence; automatic polling is disabled |
-| `poll_active_interval_seconds` | `15` | Legacy active poll cadence |
-| `poll_idle_interval_seconds` | `120` | Legacy idle poll cadence |
-| `debounce_seconds` | `2.0` | Legacy watcher debounce; automatic local watching is disabled |
-| `echo_fence_seconds` | `5.0` | Legacy watcher echo-fence window |
-| `retry_max_attempts` | `3` | Per-op retry budget |
-| `push_strategy` | `native_plain` | Also: `native_formatted` (stub), `pdf` (stub) |
-| `dry_run` | `false` | Log intent, don't touch cloud or disk |
+| `remote_folder` | `sync/notes` | Cloud folder to mirror. Only `sync/notes` is supported in user config. |
+| `echo_fence_seconds` | `5.0` | Auto-push echo-fence window |
+| `backup_snapshots_to_keep` | `30` | Snapshot-history retention when snapshots are present |
 | `[log].level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `[inbox].local_dir` | unset | Legacy PDF/EPUB drop folder. Current explicit-sync daemon does not watch it. |
-| `[inbox].remote_folder` | `Inbox` | Legacy cloud folder for PDF/EPUB sends. |
-| `[inbox].delete_after_push` | `true` | Legacy inbox drain setting. |
+| `[auto_push].enabled` | `false` | Opt into safe local-to-cloud auto-push for stable `.md` creates/edits. |
+| `[auto_push].new_files` | `true` | Allow local-only `.md` files to auto-create cloud docs. |
+| `[auto_push].debounce_seconds` | `2.0` | Delay between file stability samples. |
+| `[auto_push].stable_sample_count` | `2` | Number of identical samples required before upload. |
+| `[auto_push].scan_interval_seconds` | `30` | Periodic scan cadence. |
+| `[auto_push].max_pushes_per_minute` | `30` | Rate limit for automatic uploads. |
 | `[web].enabled` | `false` | Embedded HTTP dashboard. Token-authed. |
 | `[web].bind_addr` | `127.0.0.1` | `0.0.0.0` to expose to LAN. |
 | `[web].port` | `7878` | TCP port. |
 | `[web].auth_token` | unset | Empty → daemon generates one in `$STATE_DIR/web-token`. |
-| `[deletion].enable_propagation` | `true` | Legacy daemon switch. Deletes now require explicit `accept --include-deletes` or `push --include-deletes`. |
 | `[deletion].trash_retention_days` | `30` | Retention used by `rmsync trash prune`; `0` keeps forever. |
-| `[deletion].bulk_delete_threshold` | `0.5` | Legacy daemon bulk-delete brake threshold. |
-| `[deletion].bulk_delete_window_seconds` | `30` | Legacy daemon bulk-delete brake window. |
 
 ### `relocate` vs editing `sync_dir`
 
@@ -455,14 +450,7 @@ Delete propagation is explicit:
   `rmsync trash restore <rel-path>`. Cloud trash is recoverable via
   the reMarkable web UI within reMarkable's retention window.
 
-The old propagation flag remains in config for compatibility:
-
-```toml
-[deletion]
-enable_propagation = false
-```
-
-Current explicit-sync releases do not automatically act on that flag.
+Old propagation flags are rejected by the current config loader.
 
 ### Organize docs in folders
 
@@ -473,8 +461,7 @@ Subdirectories under `sync_dir` are reflected by explicit commands:
 - Cloud folder structure appears in the staged tree after
   `rmsync pull`; accepting selected staged files creates matching
   local directories.
-- Empty-folder-only mirroring is legacy watcher/poller behavior and is
-  not automatic in explicit-sync mode.
+- Empty-folder-only mirroring is not automatic in explicit-sync mode.
 
 Hidden dirs (`.git`, `.obsidian`, dot-anything) are filtered.
 
@@ -540,14 +527,16 @@ Click the icon (top-right).
 | Icon state | Meaning |
 |---|---|
 | ✓ | Synced, idle |
-| tablet + ⟳ | Syncing |
-| tablet + ⚠ | Unresolved conflicts |
+| hand.raised | Manual sync mode; auto-push is off |
+| arrow.up.circle | Auto-push enabled or uploading |
+| tray.and.arrow.down | Pull would bring cloud changes |
+| tablet + ⚠ | Conflicts, errors, or auto-push attention |
 | tablet + ⏸ | Paused |
 | tablet + ✗ | Error or daemon down |
 
-Menu items: Synced (N docs), Last pull/push (relative time), Open
-Sync Folder, Show Conflicts (N) — hidden when 0, Pause/Resume, Manual
-sync mode, Restart Daemon, Open Logs, Edit Config…, Quit Menu Bar.
+Menu items: status line, Mode, Pull probe, Last pull/push (relative
+time), Open Sync Folder, Show Conflicts (N) — hidden when 0,
+Pause/Resume, Restart Daemon, Open Logs, Edit Config…, Quit Menu Bar.
 
 "Quit Menu Bar" only stops the menu bar. The daemon/status IPC keeps
 running.
@@ -686,16 +675,8 @@ FROM documents ORDER BY last_push_at DESC;
 SELECT * FROM settings;
 # -> paused (bool), author_uuid (UUID)
 
-# Schema version — 5 as of v0.2.19 (added `pending_op` column on
-# documents to mark in-flight rename/delete operations across
-# daemon restarts; older DBs migrate forward in place).
+# Schema version. Older schemas are rejected; full reinstall is expected.
 SELECT version FROM schema_version;
-
-# Any rows currently mid-rename/delete (Reconcile resumes these
-# at startup):
-SELECT doc_id, local_path, remote_path, pending_op
-FROM documents
-WHERE pending_op IS NOT NULL;
 ```
 
 ### Xattrs
@@ -757,8 +738,10 @@ tool) removes Finder/Spotlight metadata and can make debugging harder.
  reMarkable cloud ◄──────────────► sync_dir/*.md
 ```
 
-Swift 6 strict concurrency. The daemon is status-only in explicit
-sync mode; `ExplicitSync.swift` owns staged pull / accept / push.
+Swift 6 strict concurrency. The daemon is non-mutating for pull-side
+sync: it owns status IPC, menu/dashboard state, the read-only pull
+availability probe, and opt-in safe auto-push. `ExplicitSync.swift`
+owns staged pull / accept / push.
 `GitSync.swift` owns the optional repository-local `rmsync git`
 workflow and shells out to git only when those commands are invoked.
 Three SPM targets: `rmsync` (executable), `rmsync-menubar`
@@ -824,11 +807,9 @@ the state dir for tracked docs.
 config, state, and logs stay. `./uninstall.sh --purge` also removes
 config, state, and logs. `.md` files are never touched.
 
-**Q: Why Swift, not Python?**
-v0.1 was Python. v0.2 ported to Swift for: (a) no runtime
-dependency, (b) in-process v6 codec instead of Python subprocess
-bridge, (c) native launchd integration, (d) single-binary distribution.
-Python archive is at `python-legacy.tar.gz` in the repo root.
+**Q: Why Swift?**
+The daemon and codec run as Swift targets for native launchd integration,
+cross-platform Docker builds, and a single current runtime.
 
 **Q: Where do I report bugs?**
 GitHub issues on the repo the user cloned from. Include:
@@ -843,7 +824,6 @@ GitHub issues on the repo the user cloned from. Include:
 
 - Internal code organization beyond the three targets.
 - The v6 `.rm` CRDT format details (see ricklupton/rmscene upstream).
-- Port history (see `docs/SWIFT_PORT_PHASE1.md`).
 - Deviations from the original Python spec (see
   `CHANGES_FROM_SPEC.md`).
 

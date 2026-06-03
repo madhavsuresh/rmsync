@@ -34,9 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Pick the SF Symbol + text decorator for each state.
     ///
-    /// Idle gets a clean checkmark — "everything's synced". Every other
-    /// state keeps the tablet-and-pencil with a small decorator glyph so
-    /// the user knows something is up without having to open the menu.
+    /// Manual mode is not an error, so it gets a calm hand icon. Auto-push
+    /// gets upload/activity symbols, and incoming cloud work gets a download
+    /// symbol that points the user toward an explicit pull.
     private func applyStatusIcon(for snapshot: StatusSnapshot?) {
         guard let button = statusItem.button else { return }
         let state = snapshot?.state ?? "unknown"
@@ -52,6 +52,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let symbolName: String
         var decorator = ""
 
+        let autoPushEnabled = snapshot?.autoPushEnabled ?? false
+        let autoPushActive = (snapshot?.autoPushQueued ?? 0)
+            + (snapshot?.autoPushUploading ?? 0)
+            + (snapshot?.queueDepth ?? 0) > 0
+        let autoPushAttention = (snapshot?.autoPushFailed ?? 0) > 0
+            || (snapshot?.autoPushRefused ?? 0) > 0
+        let pullAvailable = (snapshot?.pullState == "available")
+            && (snapshot?.pullChanges ?? 0) > 0
+
         if snapshot == nil || state == "stopped" {
             symbolName = "tablet.and.pencil"
             decorator = " ✗"
@@ -61,20 +70,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if state == "paused" {
             symbolName = "tablet.and.pencil"
             decorator = " ⏸"
-        } else if hasConflicts || hasErrors {
+        } else if hasConflicts || hasErrors || autoPushAttention {
             symbolName = "tablet.and.pencil"
             decorator = " ⚠"
-        } else if state == "syncing" {
-            symbolName = "tablet.and.pencil"
-            decorator = " ⟳"
+        } else if pullAvailable {
+            symbolName = "tray.and.arrow.down"
+            decorator = ""
+        } else if autoPushEnabled && autoPushActive {
+            symbolName = "arrow.up.circle"
+            decorator = ""
+        } else if autoPushEnabled {
+            symbolName = "arrow.up.circle"
+            decorator = ""
         } else {
-            // idle + everything green
-            symbolName = "checkmark"
+            symbolName = "hand.raised"
             decorator = ""
         }
 
         if let image = NSImage(systemSymbolName: symbolName,
-                               accessibilityDescription: "rmsync: \(state)") {
+                               accessibilityDescription: accessibilityDescription(
+                                snapshot: snapshot,
+                                fallbackState: state
+                               )) {
             image.isTemplate = true
             button.image = image
         } else {
@@ -82,5 +99,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.title = symbolName
         }
         button.title = decorator
+    }
+
+    private func accessibilityDescription(
+        snapshot: StatusSnapshot?,
+        fallbackState: String
+    ) -> String {
+        guard let snapshot else { return "rmsync: daemon not running" }
+        if snapshot.pullState == "available", snapshot.pullChanges > 0 {
+            return "rmsync: pull available"
+        }
+        if snapshot.autoPushEnabled {
+            return "rmsync: auto-push \(fallbackState)"
+        }
+        return "rmsync: manual sync mode"
     }
 }
