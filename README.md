@@ -658,6 +658,9 @@ rmsync push [path ...]    # push local Markdown changes to cloud
 rmsync force-push         # preview replacing cloud state with local tree
 rmsync force-push --apply # apply the local-tree overwrite
 rmsync init               # create local sync dir + configured cloud folder
+rmsync purge              # preview deleting local rmsync files and sync dir
+rmsync purge --cloud      # preview also deleting the configured cloud folder
+rmsync purge --apply      # apply the local purge
 rmsync git init           # optional git-backed sync setup, run in a git repo
 rmsync git pull           # optional: import cloud state as a git branch
 rmsync git push           # optional: merge HEAD with cloud and upload

@@ -41,6 +41,7 @@ struct RMSyncCommand: AsyncParsableCommand {
             Doctor.self,
             Relocate.self,
             Init.self,
+            PurgeCmd.self,
             Uninstall.self,
             TrashCmd.self,
             History.self,
