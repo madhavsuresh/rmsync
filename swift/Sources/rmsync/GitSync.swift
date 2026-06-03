@@ -149,6 +149,7 @@ enum GitSync {
             message: "rmsync-git: initialize empty cloud snapshot for \(name)\n"
         )
         try await git.updateRef(cfg.cloudRef, to: initialCommit)
+        try await git.updateRef(cfg.lastRemoteSnapshotRef, to: initialCommit)
 
         return InitResult(name: name, remotePath: remotePath, cloudBase: initialCommit)
     }
@@ -214,6 +215,7 @@ enum GitSync {
         if localTree == remoteTree {
             if !dryRun {
                 try await git.updateRef(loaded.cfg.cloudRef, to: local)
+                try await git.updateRef(loaded.cfg.lastRemoteSnapshotRef, to: local)
             }
             return PushResult(
                 target: local,
@@ -325,6 +327,7 @@ enum GitSync {
         }
 
         try await git.updateRef(loaded.cfg.cloudRef, to: target)
+        try await git.updateRef(loaded.cfg.lastRemoteSnapshotRef, to: target)
         return PushResult(
             target: target,
             remoteSnapshot: remoteSnapshot,

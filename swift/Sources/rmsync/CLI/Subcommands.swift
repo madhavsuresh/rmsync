@@ -33,7 +33,14 @@ struct Status: AsyncParsableCommand {
     )
     func run() async throws {
         let cfg: Config?
-        do { cfg = try Config.load() } catch { cfg = nil }
+        let cfgError: Error?
+        do {
+            cfg = try Config.load()
+            cfgError = nil
+        } catch {
+            cfg = nil
+            cfgError = error
+        }
 
         if let live = IPCClientSync.getStatus() {
             print("sync dir:       \(live.syncDir)")
@@ -67,6 +74,7 @@ struct Status: AsyncParsableCommand {
                     print("                \(detail)")
                 }
             }
+            await Self.printSyncTopology(cfg: cfg, cfgError: cfgError, live: live)
             // Version line shows BOTH the running daemon's version
             // (from IPC) and this CLI binary's version. Divergence
             // means the on-disk binary was upgraded but the daemon
@@ -100,6 +108,334 @@ struct Status: AsyncParsableCommand {
             print("tracked docs:   \(dtCount)")
             print("conflicts:      \(conflicts)")
             print("parked errors:  \(errors)")
+        }
+        await Self.printSyncTopology(cfg: cfg, cfgError: cfgError, live: nil)
+    }
+
+    static func ordinarySyncTopologyLines(
+        cfg: Config?,
+        cfgError: Error?,
+        live: IPC.Status?,
+        directionLine: String? = nil
+    ) -> [String] {
+        let syncDir = nonEmpty(live?.syncDir) ?? cfg?.syncDir.path
+        let remoteFolder = nonEmpty(live?.remoteFolder) ?? cfg?.remoteFolder
+            ?? Config.defaultRemoteFolder
+
+        var lines = ["ordinary sync:"]
+        lines.append("  local files:   \(syncDir ?? "(config unavailable)")")
+        lines.append("  cloud folder:  \(PathUtilities.remoteFolderPath(remoteFolder))")
+        if let directionLine { lines.append(directionLine) }
+        lines.append("  method:        rmsync pull / rmsync diff / rmsync accept / rmsync push")
+        lines.append("  daemon role:   status, menu bar, dashboard; no background pull/reconcile")
+
+        if let live {
+            lines.append("  push mode:     \(autoPushLine(live)); rmsync-git uses manual push")
+        } else if let cfg {
+            let mode = cfg.autoPush.enabled
+                ? "auto-push configured for ordinary sync"
+                : "manual push mode"
+            lines.append("  push mode:     \(mode); rmsync-git uses manual push")
+        } else {
+            lines.append("  push mode:     unknown; config could not be read")
+        }
+
+        if let cfgError {
+            lines.append("  config file:   \(Paths.configPath.path) (unreadable: \(oneLine(cfgError)))")
+        } else {
+            lines.append("  config file:   \(Paths.configPath.path)")
+        }
+        lines.append("  state db:      \(Paths.stateDBPath.path)")
+        lines.append("  staging dir:   \(Paths.stagingDir.path)")
+        lines.append("  scratch dir:   \(Paths.scratchDir.path)")
+        return lines
+    }
+
+    static func gitSyncTopologyLines(
+        containing cwd: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    ) async -> [String] {
+        var lines = ["rmsync-git:"]
+        lines.append("  current dir:   \(cwd.path)")
+
+        let git: Git
+        do {
+            git = try await Git.open(at: cwd)
+        } catch Git.GitError.notRepository {
+            lines.append("  status:        not inside a git repository")
+            lines.append("  cloud root:    /sync/git/<name> per initialized repo")
+            lines.append("  method:        run rmsync git init inside a git repo, then pull/push")
+            return lines
+        } catch {
+            lines.append("  status:        unavailable: \(oneLine(error))")
+            return lines
+        }
+
+        do {
+            let common = try await git.commonDir()
+            let configURL = GitSync.configURL(common: common)
+            lines.append("  current repo:  \(git.root.path)")
+
+            guard FileManager.default.fileExists(atPath: configURL.path) else {
+                lines.append("  status:        not initialized for this repo")
+                lines.append("  config file:   \(configURL.path)")
+                lines.append("  cloud root:    /sync/git/<name> per initialized repo")
+                lines.append("  method:        run rmsync git init, then rmsync git pull / push")
+                return lines
+            }
+
+            let data = try Data(contentsOf: configURL)
+            if let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               raw["remoteRoot"] != nil {
+                lines.append("  status:        unsupported old config")
+                lines.append("  config file:   \(configURL.path)")
+                lines.append("  detail:        contains remoteRoot; rerun rmsync git init")
+                return lines
+            }
+
+            let cfg = try JSONDecoder().decode(GitSync.RepoConfig.self, from: data)
+            lines.append("  status:        initialized")
+            lines.append("  local files:   \(repoPath(cfg.syncRoot, in: git.root).path)")
+            lines.append("  cloud folder:  \(PathUtilities.remoteFolderPath(cfg.remoteFolder))")
+            lines.append(await gitSyncDirectionLine(cfg: cfg, git: git))
+            lines.append("  metadata:      \(GitSync.stateRoot(common: common).path)")
+            lines.append("  state db:      \(GitSync.stateDBURL(common: common).path)")
+            lines.append("  cloud ref:     \(cfg.cloudRef) @ \(await shortRef(cfg.cloudRef, git: git))")
+            lines.append("  last snapshot: \(cfg.lastRemoteSnapshotRef) @ \(await shortRef(cfg.lastRemoteSnapshotRef, git: git))")
+            lines.append("  method:        rmsync git pull, normal git merge/rebase, rmsync git push")
+            lines.append("  separation:    independent from ordinary \(PathUtilities.remoteFolderPath(Config.defaultRemoteFolder))")
+            return lines
+        } catch {
+            lines.append("  status:        unavailable: \(oneLine(error))")
+            return lines
+        }
+    }
+
+    private static func printSyncTopology(
+        cfg: Config?,
+        cfgError: Error?,
+        live: IPC.Status?
+    ) async {
+        print("")
+        print("sync topology:")
+        let ordinaryDirection = await ordinarySyncDirectionLine(
+            cfg: cfg,
+            live: live,
+            stateDBPath: Paths.stateDBPath
+        )
+        for line in ordinarySyncTopologyLines(
+            cfg: cfg,
+            cfgError: cfgError,
+            live: live,
+            directionLine: ordinaryDirection
+        ) {
+            print(line)
+        }
+        for line in await gitSyncTopologyLines() {
+            print(line)
+        }
+    }
+
+    static func ordinarySyncDirectionLine(
+        cfg: Config?,
+        live: IPC.Status?,
+        stateDBPath: URL
+    ) async -> String {
+        guard let cfg else {
+            return "  sync state:    unknown (config unavailable)"
+        }
+        let local = await ordinaryLocalChangeSummary(cfg: cfg, stateDBPath: stateDBPath)
+        let cloud = cloudChangeSummary(live)
+        return "  sync state:    \(directionLabel(local: local, cloud: cloud)) (\(local.description); \(cloud.description))"
+    }
+
+    static func gitSyncDirectionLine(cfg: GitSync.RepoConfig, git: Git) async -> String {
+        guard await gitRefExists(cfg.cloudRef, git: git) else {
+            return "  sync state:    unknown (missing \(cfg.cloudRef))"
+        }
+
+        let local = await gitDiffSummary(
+            cfg: cfg,
+            git: git,
+            from: cfg.cloudRef,
+            to: "HEAD",
+            cleanDescription: "local matches cloud ref",
+            changedDescription: "local path change"
+        )
+
+        let cloud: DirectionSummary
+        if await gitRefExists(cfg.lastRemoteSnapshotRef, git: git) {
+            cloud = await gitDiffSummary(
+                cfg: cfg,
+                git: git,
+                from: cfg.cloudRef,
+                to: cfg.lastRemoteSnapshotRef,
+                cleanDescription: "cloud matches cloud ref",
+                changedDescription: "cloud path change"
+            )
+        } else {
+            cloud = DirectionSummary(
+                count: nil,
+                description: "cloud not checked; run rmsync git pull"
+            )
+        }
+
+        return "  sync state:    \(directionLabel(local: local, cloud: cloud)) (\(local.description); \(cloud.description))"
+    }
+
+    private struct DirectionSummary: Sendable {
+        var count: Int?
+        var description: String
+    }
+
+    private static func ordinaryLocalChangeSummary(
+        cfg: Config,
+        stateDBPath: URL
+    ) async -> DirectionSummary {
+        guard FileManager.default.fileExists(atPath: stateDBPath.path) else {
+            return DirectionSummary(count: nil, description: "local unknown: no state DB yet")
+        }
+
+        do {
+            let state = try State(path: stateDBPath)
+            let docs = try await state.allDocuments()
+                .filter { $0.docType == "DocumentType" }
+            var trackedPathKeys = Set<String>()
+            var changes = 0
+            var unreadable = 0
+
+            for doc in docs {
+                let url = URL(fileURLWithPath: doc.localPath)
+                insertPathKeys(for: url, into: &trackedPathKeys)
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    changes += 1
+                    continue
+                }
+                if FileProvider.status(of: url).isDataless {
+                    unreadable += 1
+                    continue
+                }
+                guard let baseline = doc.lastSyncedMDHash else {
+                    changes += 1
+                    continue
+                }
+                if (try? PathUtilities.sha256File(url)) != baseline {
+                    changes += 1
+                }
+            }
+
+            if let enumerator = FileManager.default.enumerator(
+                at: cfg.syncDir,
+                includingPropertiesForKeys: nil,
+                options: []
+            ) {
+                while let url = enumerator.nextObject() as? URL {
+                    if WatcherFilter.shouldIgnore(url.path, root: cfg.syncDir) {
+                        continue
+                    }
+                    if !trackedPathKeys.contains(pathKey(url)) {
+                        changes += 1
+                    }
+                }
+            }
+
+            var description = changes == 0
+                ? "local clean"
+                : "\(changes) local \(changes == 1 ? "change" : "changes")"
+            if unreadable > 0 {
+                description += ", \(unreadable) unreadable"
+            }
+            return DirectionSummary(count: changes, description: description)
+        } catch {
+            return DirectionSummary(
+                count: nil,
+                description: "local unknown: \(oneLine(error))"
+            )
+        }
+    }
+
+    private static func cloudChangeSummary(_ live: IPC.Status?) -> DirectionSummary {
+        guard let live else {
+            return DirectionSummary(
+                count: nil,
+                description: "cloud unknown: daemon not running"
+            )
+        }
+        switch live.pullState {
+        case "available":
+            let changes = max(0, live.pullChanges)
+            return DirectionSummary(
+                count: changes,
+                description: "\(changes) cloud \(changes == 1 ? "change" : "changes") available"
+            )
+        case "clean":
+            return DirectionSummary(
+                count: 0,
+                description: "cloud clean" + checkedSuffix(live.pullCheckedAt)
+            )
+        case "checking":
+            return DirectionSummary(count: nil, description: "cloud checking")
+        case "error":
+            let detail = live.pullError.map { ": \($0)" } ?? ""
+            return DirectionSummary(count: nil, description: "cloud probe error\(detail)")
+        default:
+            return DirectionSummary(
+                count: nil,
+                description: "cloud not checked yet"
+            )
+        }
+    }
+
+    private static func directionLabel(local: DirectionSummary, cloud: DirectionSummary) -> String {
+        switch (local.count, cloud.count) {
+        case let (local?, cloud?) where local > 0 && cloud > 0:
+            return "diverged"
+        case let (local?, cloud?) where local > 0 && cloud == 0:
+            return "cloud behind"
+        case let (local?, cloud?) where local == 0 && cloud > 0:
+            return "cloud ahead"
+        case let (local?, cloud?) where local == 0 && cloud == 0:
+            return "in sync"
+        case let (local?, nil) where local > 0:
+            return "cloud may be behind"
+        case (nil, let cloud?) where cloud > 0:
+            return "cloud ahead"
+        default:
+            return "unknown"
+        }
+    }
+
+    private static func gitDiffSummary(
+        cfg: GitSync.RepoConfig,
+        git: Git,
+        from base: String,
+        to target: String,
+        cleanDescription: String,
+        changedDescription: String
+    ) async -> DirectionSummary {
+        do {
+            var args = ["diff", "--name-only", "-z", base, target]
+            if cfg.syncRoot != "." {
+                args += ["--", cfg.syncRoot]
+            }
+            let result = try await git.runResult(args)
+            guard result.exitCode == 0 else {
+                return DirectionSummary(
+                    count: nil,
+                    description: "unknown: \(oneLine(result.stderr.isEmpty ? result.stdout : result.stderr))"
+                )
+            }
+            let count = result.stdout
+                .split(separator: "\0", omittingEmptySubsequences: true)
+                .count
+            let description = count == 0
+                ? cleanDescription
+                : "\(count) \(changedDescription)\(count == 1 ? "" : "s")"
+            return DirectionSummary(count: count, description: description)
+        } catch {
+            return DirectionSummary(
+                count: nil,
+                description: "unknown: \(oneLine(error))"
+            )
         }
     }
 
@@ -136,6 +472,55 @@ struct Status: AsyncParsableCommand {
 
     private static func checkedSuffix(_ checkedAt: String?) -> String {
         checkedAt.map { " (checked \($0))" } ?? ""
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return value
+    }
+
+    private static func oneLine(_ value: Any) -> String {
+        "\(value)"
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func repoPath(_ relativePath: String, in root: URL) -> URL {
+        guard relativePath != "." else { return root }
+        var url = root
+        for segment in relativePath.split(separator: "/", omittingEmptySubsequences: true) {
+            url.appendPathComponent(String(segment), isDirectory: true)
+        }
+        return url
+    }
+
+    private static func shortRef(_ ref: String, git: Git) async -> String {
+        do {
+            let result = try await git.runResult([
+                "rev-parse", "--verify", "--short=12", ref,
+            ])
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return result.exitCode == 0 && !value.isEmpty ? value : "missing"
+        } catch {
+            return "unknown: \(oneLine(error))"
+        }
+    }
+
+    private static func gitRefExists(_ ref: String, git: Git) async -> Bool {
+        (try? await git.refExists(ref)) ?? false
+    }
+
+    private static func insertPathKeys(for url: URL, into keys: inout Set<String>) {
+        keys.insert(pathKey(url))
+        keys.insert(url.path)
+        keys.insert(url.standardizedFileURL.path)
+        keys.insert(url.resolvingSymlinksInPath().path)
+    }
+
+    private static func pathKey(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 }
 
