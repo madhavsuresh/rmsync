@@ -27,6 +27,12 @@ menubar app) and on Linux (via Docker, headless).
   `rmsync diff`, and apply selected changes with `rmsync accept`.
   Pull stages cloud content first and never overwrites local files
   until an accept command runs.
+- **Optional git-backed sync:** inside a git repository, run
+  `rmsync git init`, then use `rmsync git pull` and `rmsync git push`
+  (or the `rmsync-git` wrapper) to make all cloud exchanges pass
+  through git branches, commits, and merge conflict handling. This is
+  an additional mode, not a replacement for the normal explicit
+  pull/diff/accept/push workflow.
 
 No handwriting OCR. Pen strokes come through as empty markdown. Only
 typed-text notebooks round-trip.
@@ -62,8 +68,10 @@ Use these exact paths when helping the user. macOS first; Linux
 ```
 # binaries
 ~/.local/bin/rmsync                                 # CLI symlink → swift/.build/release/rmsync
+~/.local/bin/rmsync-git                             # wrapper → rmsync git "$@"
 ~/code/rmsync/swift/.build/release/rmsync               # daemon + CLI binary
 ~/code/rmsync/swift/.build/release/rmsync-menubar      # menu bar app
+/opt/homebrew/bin/rmsync-git                        # Homebrew wrapper → rmsync git "$@"
 
 # launchd agents
 ~/Library/LaunchAgents/com.user.rmsync.plist
@@ -216,6 +224,9 @@ push, accept, delete, restore, or force-push.
 | `rmsync push --include-deletes` | rmapi + state DB | Also propagate tracked local files missing on disk. | ✓ |
 | `rmsync force-push` | rmapi + staging | Preview replacing the cloud folder with the local tree. | ✓ |
 | `rmsync force-push --apply` | rmapi + state DB | Apply the local-tree overwrite/delete plan. | ✓ |
+| `rmsync git init` | git + rmapi | Initialize `/sync/<name>` for an optional git-backed workflow. | requires git |
+| `rmsync git pull` / `rmsync-git pull` | git + rmapi | Render cloud state into a new git branch. | requires git |
+| `rmsync git push` / `rmsync-git push` | git + rmapi | Merge cloud with `HEAD`, then upload the verified git tree. | requires git |
 | `rmsync sync-now` | IPC | Deprecated; automatic polling is disabled. | ✓ |
 | `rmsync conflicts` | state DB | Lists unresolved `.md.conflict` files. | ✓ |
 | `rmsync doctor` | direct | Runs 10 health checks; exits 1 on any ✗. | ✓ |
@@ -294,6 +305,39 @@ plan comparing cloud paths to the local Markdown tree:
 `error`. `rmsync force-push --apply` applies that local-tree plan,
 including remote-only deletes. It refuses any remote doc that failed
 to stage, because the staged snapshot is the recovery point.
+
+### Git-backed sync (`rmsync git`)
+
+This mode is optional and only makes sense inside an existing git
+repository. It uses a separate reMarkable cloud folder under
+`/sync/<name>` and stores repo-local metadata under `.git/rmsync-git/`.
+The old explicit sync flow remains available and continues to use the
+configured `remote_folder`.
+
+1. User runs `rmsync git init --name <name>`.
+   - Fails if `/sync/<name>` already exists.
+   - Creates `.git/rmsync-git/config.json`.
+   - Records the empty initial cloud snapshot in
+     `refs/rmsync-git/<name>/cloud`.
+2. User runs `rmsync git pull`.
+   - Renders current cloud state into a git commit.
+   - Creates a random branch like
+     `rmsync/cloud/<name>/20260603T041500Z-a1b2c3d4`.
+   - The user merges, rebases, diffs, or cherry-picks with normal git
+     tools.
+3. User runs `rmsync git push`.
+   - Requires a clean worktree by default.
+   - Renders current cloud state, then runs a git three-way merge with
+     `refs/rmsync-git/<name>/cloud` as the base, local `HEAD` as local,
+     and current cloud as remote.
+   - If git reports conflicts, no cloud documents are changed. The user
+     resolves via git and retries.
+   - If the merge is clean, rmsync materializes the resolved git tree,
+     uploads through the explicit force-push planner, verifies the cloud
+     matches, then advances `refs/rmsync-git/<name>/cloud`.
+
+`rmsync-git` is a wrapper for `rmsync git`; both command shapes are
+equivalent.
 
 ### Conflict handling
 
@@ -713,6 +757,8 @@ tool) removes Finder/Spotlight metadata and can make debugging harder.
 
 Swift 6 strict concurrency. The daemon is status-only in explicit
 sync mode; `ExplicitSync.swift` owns staged pull / accept / push.
+`GitSync.swift` owns the optional repository-local `rmsync git`
+workflow and shells out to git only when those commands are invoked.
 Three SPM targets: `rmsync` (executable), `rmsync-menubar`
 (executable), `RMScene` (library, Swift port of the v6 CRDT codec from
 [ricklupton/rmscene](https://github.com/ricklupton/rmscene), MIT).

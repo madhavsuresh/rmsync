@@ -27,6 +27,9 @@ rmsync push [path ...]               # push local Markdown changes to cloud
 rmsync push --include-deletes        # also propagate tracked local deletes
 rmsync force-push                    # preview replacing cloud with local tree
 rmsync force-push --apply            # overwrite/delete remote-only cloud docs
+rmsync git init --name my-notes      # optional: initialize git-backed sync
+rmsync git pull                      # optional: import cloud state as a branch
+rmsync git push                      # optional: merge HEAD with cloud and upload
 rmsync doctor                        # full self-check (10 items)
 rmsync logs -f                       # follow the daemon log
 rmsync conflicts                     # list any unresolved .md.conflict files
@@ -44,6 +47,13 @@ rmsync relocate ~/path/to/new/dir
 those changes to reach the tablet. To inspect tablet/cloud changes,
 run `rmsync pull`, review with `rmsync diff`, then accept selected
 files with `rmsync accept`.
+
+**Git-backed sync is optional.** The normal `rmsync pull` / `diff` /
+`accept` / `push` workflow above remains the default. If your notes live
+inside a git repository and you want every cloud exchange to pass through
+git, use `rmsync git ...` (or the `rmsync-git` wrapper). That mode uses a
+separate reMarkable cloud folder under `/sync/<name>` and stores its
+repo-local state under `.git/rmsync-git/`.
 
 **Rename / move / delete propagation is explicit.** Deleting a local
 file no longer deletes the cloud copy unless you run
@@ -155,6 +165,32 @@ stale. Remote-only docs and overwritten remote content are still
 inspectable before you apply. Applying replaces same-path remote docs,
 uploads local-only files, and moves remote-only docs to cloud trash.
 
+**Git as the sync boundary.** If the local Markdown tree is already a git
+repo, you can let git do the merge/conflict work and treat the
+reMarkable cloud as a materialized tree.
+
+```sh
+cd ~/notes
+rmsync git init --name notes
+rmsync git push
+```
+
+`init` creates `/sync/notes` on the reMarkable cloud and fails if that
+folder already exists. `push` snapshots the current cloud, asks git to
+merge that snapshot with `HEAD`, and uploads only a verified resolved
+tree. If git reports conflicts, no cloud documents are changed; run
+`rmsync git pull`, merge or rebase the printed branch with normal git
+tools, commit the resolution, then run `rmsync git push` again.
+
+```sh
+rmsync git pull
+# prints e.g. rmsync/cloud/notes/20260603T041500Z-a1b2c3d4
+git merge rmsync/cloud/notes/20260603T041500Z-a1b2c3d4
+```
+
+The installed `rmsync-git` wrapper is equivalent to `rmsync git`, so
+`rmsync-git push` and `rmsync git push` are the same command.
+
 ---
 
 > ### 🤖 Built with LLM assistance
@@ -191,6 +227,7 @@ brew install madhavsuresh/rmsync/rmsync
 rmapi                           # paste code from remarkable.com/device/desktop/connect
 rmsync-install-agents           # seeds default config + boots daemon + menu bar
 rmsync doctor                   # should be all ✓
+rmsync-git --help               # optional wrapper for `rmsync git`
 ```
 
 `brew upgrade rmsync` from then on for new versions.
@@ -254,6 +291,7 @@ Then:
 ```sh
 rmsync doctor    # verify all 10 checks pass
 rmsync status    # see what the daemon is doing
+rmsync-git --help # optional wrapper for `rmsync git`
 ```
 
 Edit files under your sync dir (`~/rmsync-writing` by default), then
@@ -472,6 +510,10 @@ rmsync accept --all       # apply all staged non-delete changes
 rmsync push [path ...]    # push local Markdown changes to cloud
 rmsync force-push         # preview replacing cloud state with local tree
 rmsync force-push --apply # apply the local-tree overwrite
+rmsync git init           # optional git-backed sync setup, run in a git repo
+rmsync git pull           # optional: import cloud state as a git branch
+rmsync git push           # optional: merge HEAD with cloud and upload
+rmsync-git push           # same as `rmsync git push`
 rmsync logs -f            # tail the structured JSON log
 rmsync pause              # set the paused status flag
 rmsync resume             # clear the pause flag
@@ -545,6 +587,7 @@ rmsync/
 │   ├── Sources/
 │   │   ├── rmsync/              daemon + CLI (~6000 LoC, cross-platform)
 │   │   │   ├── ExplicitSync.swift staged pull / accept / push workflow
+│   │   │   ├── GitSync.swift     optional git-backed sync workflow
 │   │   │   ├── Watcher/          legacy watcher code retained but not started
 │   │   │   └── Web/              embedded HTTP dashboard (opt-in)
 │   │   ├── rmsync-menubar/      menu bar app (macOS-only)
@@ -553,7 +596,7 @@ rmsync/
 │       ├── rmsyncTests/         daemon tests + live-cloud smoke
 │       └── RMSceneTests/        50 codec tests w/ real fixtures
 ├── assets/folder-icon.icns      bundled Finder folder icon (macOS)
-├── scripts/                     launchd plist templates + dev helpers
+├── scripts/                     launchd plist templates + dev helpers + rmsync-git wrapper
 ├── docker/                      Docker entrypoint + default config
 ├── Dockerfile                   multi-stage build (swift:6.1-jammy)
 ├── docker-compose.yml           example single-service compose

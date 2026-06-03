@@ -84,6 +84,7 @@ git push
 brew tap <you>/rmsync
 brew install --build-from-source rmsync
 rmsync --version
+rmsync-git --help
 rmsync-install-agents
 rmsync doctor
 ```
@@ -183,6 +184,11 @@ git push origin vX.Y.Z
 The Action builds the binaries, publishes the GitHub Release, and
 opens a PR on the tap. Review the PR, merge, done. Users then
 `brew upgrade rmsync`.
+
+The formula installs both `rmsync` and `rmsync-git`. `rmsync-git` is a
+thin wrapper for `rmsync git`, so Homebrew users can run either
+`rmsync git push` or `rmsync-git push` from inside a git-backed notes
+repository.
 
 ### Manual tap bump (fallback)
 

@@ -244,9 +244,9 @@ survives container restarts — same persistence story as `state.db`.
 
 ## Operational commands
 
-All `rmsync` subcommands work via `docker exec` against the
-running container, talking to the daemon over the IPC socket
-that lives in `/state/ipc.sock`:
+Normal explicit-sync `rmsync` subcommands work via `docker exec`
+against the running container, talking to the daemon over the IPC
+socket that lives in `/state/ipc.sock`:
 
 ```sh
 docker exec rmsync rmsync status
@@ -262,6 +262,11 @@ docker exec rmsync rmsync logs --diagnose    # print log paths + tail
 docker exec rmsync rmsync pause              # set paused status flag
 docker exec rmsync rmsync resume             # clear paused status flag
 ```
+
+The optional `rmsync git ...` workflow shells out to `git`. The
+published Docker runtime image is kept small and does not install git,
+so use the normal explicit `pull` / `diff` / `accept` / `push` flow in
+Docker unless you build a custom image that adds git.
 
 `rmsync start / stop / restart` are not applicable in Docker —
 those are launchd / agent-lifecycle commands. The container

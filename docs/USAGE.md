@@ -103,9 +103,11 @@ Core subcommands. Run any of them from anywhere.
 `daemon` and `init` also exist but you don't run them by hand — `daemon`
 is what launchd invokes; `init` just prints a pointer to `install.sh`.
 
-`pull`, `accept`, and `push` are the only sync-mutating commands in
-the explicit model. Everything that controls the agent lifecycle
-(`start`, `stop`, `restart`, `relocate`) talks to `launchctl`.
+`pull`, `accept`, and `push` are the default sync-mutating commands in
+the explicit model. `rmsync git ...` is an optional git-backed workflow
+for repositories; it does not replace the normal staged
+`pull`/`diff`/`accept`/`push` flow. Everything that controls the agent
+lifecycle (`start`, `stop`, `restart`, `relocate`) talks to `launchctl`.
 
 ---
 
@@ -179,7 +181,10 @@ suspicious empty local reads are still refused.
 ### …use git as the sync boundary
 
 Run this from an existing git repository when you want every synced
-state to be a real commit.
+state to be a real commit. This is a separate optional mode: existing
+`rmsync pull`, `rmsync diff`, `rmsync accept`, and `rmsync push` keep
+using the configured `remote_folder` and continue to work exactly as
+before.
 
 ```sh
 rmsync-git init --name attack
