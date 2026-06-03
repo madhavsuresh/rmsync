@@ -11,6 +11,8 @@ final class MenuController: NSObject, NSMenuDelegate {
     private let titleItem = NSMenuItem()
     private let versionItem = NSMenuItem()
     private let statusItem = NSMenuItem()
+    private let modeItem = NSMenuItem()
+    private let pullProbeItem = NSMenuItem()
     private let pullItem = NSMenuItem()
     private let pushItem = NSMenuItem()
     private let openFolderItem = NSMenuItem()
@@ -20,7 +22,6 @@ final class MenuController: NSObject, NSMenuDelegate {
     /// Keeps the menu uncluttered for healthy installs.
     private let whyBrokenItem = NSMenuItem()
     private let pauseItem = NSMenuItem()
-    private let syncNowItem = NSMenuItem()
     private let restartItem = NSMenuItem()
     private let logsItem = NSMenuItem()
     private let prefsItem = NSMenuItem()
@@ -57,6 +58,13 @@ final class MenuController: NSObject, NSMenuDelegate {
         statusItem.title = "Loading…"
         statusItem.isEnabled = false
         menu.addItem(statusItem)
+
+        modeItem.title = "Mode: —"
+        modeItem.isEnabled = false
+        pullProbeItem.title = "Pull: —"
+        pullProbeItem.isEnabled = false
+        menu.addItem(modeItem)
+        menu.addItem(pullProbeItem)
 
         pullItem.isEnabled = false
         pushItem.isEnabled = false
@@ -98,11 +106,6 @@ final class MenuController: NSObject, NSMenuDelegate {
         pauseItem.action = #selector(togglePause(_:))
         menu.addItem(pauseItem)
 
-        syncNowItem.title = "Sync Now"
-        syncNowItem.target = self
-        syncNowItem.action = #selector(syncNow(_:))
-        menu.addItem(syncNowItem)
-
         restartItem.title = "Restart Daemon"
         restartItem.target = self
         restartItem.action = #selector(restartDaemon(_:))
@@ -136,6 +139,8 @@ final class MenuController: NSObject, NSMenuDelegate {
 
         if let s = snapshot {
             statusItem.title = humanState(s)
+            modeItem.title = modeLine(s)
+            pullProbeItem.title = pullProbeLine(s)
             pullItem.title = "Last pull: \(shortTime(s.lastPullAt))"
             pushItem.title = "Last push: \(shortTime(s.lastPushAt))"
             pauseItem.title = s.state == "paused" ? "Resume" : "Pause"
@@ -170,6 +175,8 @@ final class MenuController: NSObject, NSMenuDelegate {
             openFolderItem.title = "Open \(URL(fileURLWithPath: s.syncDir).lastPathComponent)"
         } else {
             statusItem.title = "Daemon not running"
+            modeItem.title = "Mode: —"
+            pullProbeItem.title = "Pull: —"
             pullItem.title = "Last pull: —"
             pushItem.title = "Last push: —"
             pauseItem.title = "Pause"
@@ -221,11 +228,21 @@ final class MenuController: NSObject, NSMenuDelegate {
             let plural = s.conflicts == 1 ? "" : "s"
             return "Conflicts — \(s.conflicts) doc\(plural) need attention"
         }
+        if s.pullState == "available", s.pullChanges > 0 {
+            let plural = s.pullChanges == 1 ? "" : "s"
+            return "Pull available — \(s.pullChanges) cloud change\(plural)"
+        }
         switch s.state {
         case "idle":
-            return "Synced (\(s.trackedDocs) docs)"
+            if s.autoPushEnabled {
+                return "Auto-push on — \(s.trackedDocs) docs"
+            }
+            return "Manual sync — \(s.trackedDocs) docs"
         case "syncing":
-            return "Syncing… (\(s.queueDepth) in queue)"
+            if s.autoPushEnabled {
+                return "Auto-push active — \(s.queueDepth) queued"
+            }
+            return "Working… (\(s.queueDepth) queued)"
         case "paused":
             return "Paused"
         case "error":
@@ -235,6 +252,44 @@ final class MenuController: NSObject, NSMenuDelegate {
         default:
             return "State: \(s.state)"
         }
+    }
+
+    private func modeLine(_ s: StatusSnapshot) -> String {
+        guard s.autoPushEnabled else {
+            return "Mode: manual push/pull"
+        }
+        let active = s.autoPushQueued + s.autoPushUploading
+        if active > 0 {
+            return "Auto-push: \(active) queued/uploading"
+        }
+        if s.autoPushFailed > 0 || s.autoPushRefused > 0 {
+            return "Auto-push: \(s.autoPushFailed) failed, \(s.autoPushRefused) refused"
+        }
+        if let last = s.autoPushLastSucceededAt {
+            return "Auto-push: on, last \(shortTime(last))"
+        }
+        return "Auto-push: on"
+    }
+
+    private func pullProbeLine(_ s: StatusSnapshot) -> String {
+        switch s.pullState {
+        case "available":
+            let plural = s.pullChanges == 1 ? "" : "s"
+            return "Pull: \(s.pullChanges) cloud change\(plural) available"
+        case "clean":
+            return "Pull: no cloud changes" + checkedShortSuffix(s.pullCheckedAt)
+        case "checking":
+            return "Pull: checking cloud…"
+        case "error":
+            return "Pull: check failed" + (s.pullError.map { " (\($0))" } ?? "")
+        default:
+            return "Pull: not checked yet"
+        }
+    }
+
+    private func checkedShortSuffix(_ iso: String?) -> String {
+        guard let iso else { return "" }
+        return " · \(shortTime(iso))"
     }
 
     private func shortTime(_ iso: String?) -> String {
@@ -264,10 +319,6 @@ final class MenuController: NSObject, NSMenuDelegate {
     @objc private func togglePause(_ sender: Any) {
         let isPaused = snapshot?.state == "paused"
         ipc.setPaused(!isPaused)
-    }
-
-    @objc private func syncNow(_ sender: Any) {
-        ipc.syncNow()
     }
 
     @objc private func restartDaemon(_ sender: Any) {

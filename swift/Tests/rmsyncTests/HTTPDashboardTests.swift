@@ -67,7 +67,7 @@ struct HTTPDashboardTests {
     @Test("server binds, serves /, requires auth on /api")
     func endToEndServe() async throws {
         let bus = StateBus()
-        let queue = JobQueue()
+        let queue = AutoPushEventQueue()
         let stateDB = FileManager.default.temporaryDirectory
             .appendingPathComponent("rmsync-web-test-\(UUID().uuidString).db")
         let state = try State(path: stateDB)

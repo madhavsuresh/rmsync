@@ -91,13 +91,14 @@ enum PathUtilities {
     /// putting the doc.
     ///
     /// For ``<sync_dir>/papers/2026/foo.md`` with
-    /// ``remoteFolder = "Writing"``:
+    /// ``remoteFolder = "sync/notes"``:
     /// ```
-    ///   parentPath = "/Writing/papers/2026"
+    ///   parentPath = "/sync/notes/papers/2026"
     ///   mkdirChain = [
-    ///     "/Writing",
-    ///     "/Writing/papers",
-    ///     "/Writing/papers/2026",
+    ///     "/sync",
+    ///     "/sync/notes",
+    ///     "/sync/notes/papers",
+    ///     "/sync/notes/papers/2026",
     ///   ]
     /// ```
     /// The caller issues ``cloud.mkdir(_:)`` on each chain entry
@@ -125,71 +126,6 @@ enum PathUtilities {
             chain.append(prefix)
         }
         return (parentPath: prefix, mkdirChain: chain)
-    }
-
-    /// Inverse of ``localDirToRemoteChain``: cloud directory
-    /// path → local directory URL. Like ``remoteToLocal`` but
-    /// without appending the ``.md`` suffix to the leaf, since
-    /// directories aren't files. Used by ``CloudPoller`` to
-    /// mirror cloud-side empty folders into local empty dirs.
-    ///
-    /// The remote-folder prefix segment is stripped exactly the
-    /// same way ``remoteToLocal`` does it, and segments are
-    /// sanitised through ``sanitizeSegment``. A bare
-    /// ``/<remoteFolder>`` returns ``syncDir`` itself.
-    static func remoteToLocalDir(
-        remotePath: String, syncDir: URL, remoteFolder: String
-    ) -> URL {
-        let parts = stripRemoteFolderPrefix(
-            remotePath.split(separator: "/").map(String.init),
-            remoteFolder: remoteFolder
-        )
-        let safe = parts.map(sanitizeSegment)
-        if safe.isEmpty { return syncDir }
-        var url = syncDir
-        for segment in safe {
-            url.appendPathComponent(segment, isDirectory: true)
-        }
-        return url
-    }
-
-    /// Inverse of ``remoteToLocal`` for a *directory* path
-    /// (rather than a file's parent). Returns the cloud-side
-    /// path of the directory plus the chain of prefixes to
-    /// defensive-mkdir before any operation on it.
-    ///
-    /// For ``<sync_dir>/papers/2026`` with
-    /// ``remoteFolder = "Writing"``:
-    /// ```
-    ///   cloudPath  = "/Writing/papers/2026"
-    ///   mkdirChain = [
-    ///     "/Writing",
-    ///     "/Writing/papers",
-    ///     "/Writing/papers/2026",
-    ///   ]
-    /// ```
-    /// The sync_dir itself maps to ``/<remoteFolder>`` with a
-    /// single-element chain. Directories outside ``syncDir`` get
-    /// the same fallback as ``localToRemoteParentChain``.
-    ///
-    /// Distinct from ``localToRemoteParentChain`` (which drops
-    /// the last segment because it's keyed on a file's *parent*).
-    /// For directories we want the directory itself.
-    static func localDirToRemoteChain(
-        localDir: URL, syncDir: URL, remoteFolder: String
-    ) -> (cloudPath: String, mkdirChain: [String]) {
-        let topLevel = remoteFolderPath(remoteFolder)
-        var dirSegs: [String] = []
-        if let relSegs = resolvedRelativePath(from: syncDir, to: localDir) {
-            dirSegs = relSegs
-        }
-        var prefix = topLevel
-        var chain = remoteFolderMkdirChain(remoteFolder)
-        for seg in dirSegs {
-            prefix = prefix == "/" ? "/\(seg)" : "\(prefix)/\(seg)"
-            chain.append(prefix)
-        }
-        return (cloudPath: prefix, mkdirChain: chain)
     }
 
     /// Resolve symlinks in both paths before checking whether ``target``

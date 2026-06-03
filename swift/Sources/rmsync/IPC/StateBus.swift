@@ -57,7 +57,7 @@ actor StateBus {
     /// under ``status`` and ``type`` lives at the outer layer).
     /// Refactored from two near-identical literals in v0.2.25 so
     /// the cloud-health fields can be added in one place.
-    private static func statusPayload(
+    static func statusPayload(
         _ s: IPC.Status, includeType: Bool
     ) -> [String: SendableValue] {
         var payload: [String: SendableValue] = [
@@ -72,6 +72,18 @@ actor StateBus {
             "updated_at": .string(s.updatedAt),
             "pid": .int(s.pid),
             "version": .string(s.version),
+            "auto_push_enabled": .bool(s.autoPushEnabled),
+            "auto_push_queued": .int(s.autoPushQueued),
+            "auto_push_uploading": .int(s.autoPushUploading),
+            "auto_push_succeeded": .int(s.autoPushSucceeded),
+            "auto_push_skipped": .int(s.autoPushSkipped),
+            "auto_push_refused": .int(s.autoPushRefused),
+            "auto_push_failed": .int(s.autoPushFailed),
+            "auto_push_last_succeeded_at": s.autoPushLastSucceededAt.map { .string($0) } ?? .null,
+            "pull_state": .string(s.pullState),
+            "pull_changes": .int(s.pullChanges),
+            "pull_checked_at": s.pullCheckedAt.map { .string($0) } ?? .null,
+            "pull_error": s.pullError.map { .string($0) } ?? .null,
             "last_pull_at": s.lastPullAt.map { .string($0) } ?? .null,
             "last_push_at": s.lastPushAt.map { .string($0) } ?? .null,
             "last_error": s.lastError.map { .string($0) } ?? .null,

@@ -9,8 +9,10 @@ import GRDB
 /// long-running operations off the main database queue.
 actor State {
     private let writer: any DatabaseWriter
+    private let dbPath: URL
 
     init(path: URL) throws {
+        self.dbPath = path
         try FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -22,6 +24,10 @@ actor State {
         }
         self.writer = try DatabasePool(path: path.path, configuration: config)
         try SchemaMigrator.migrate(self.writer)
+    }
+
+    func storageDir() -> URL {
+        dbPath.deletingLastPathComponent()
     }
 
     // MARK: - documents
@@ -114,29 +120,6 @@ actor State {
         }
     }
 
-    /// Stamp / clear the in-flight ``pending_op`` marker. Set
-    /// before a destructive cloud call begins, cleared on success.
-    /// Schema v5+. Pass ``nil`` to clear.
-    func setPendingOp(docID: String, op: String?) throws {
-        try writer.write { db in
-            try db.execute(
-                sql: "UPDATE documents SET pending_op = ? WHERE doc_id = ?",
-                arguments: [op, docID]
-            )
-        }
-    }
-
-    /// Every row whose ``pending_op`` is non-NULL — used by the
-    /// startup reconciler to resume rename / delete operations
-    /// that didn't finish before the daemon last exited.
-    func pendingOpDocs() throws -> [Document] {
-        try writer.read { db in
-            try Document.fetchAll(
-                db, sql: "SELECT * FROM documents WHERE pending_op IS NOT NULL"
-            )
-        }
-    }
-
     func setPageIDs(docID: String, pageIDs: [String]) throws {
         let blob = String(
             data: try JSONEncoder().encode(pageIDs), encoding: .utf8
@@ -200,25 +183,6 @@ actor State {
         let fresh = UUID().uuidString.lowercased()
         try setSetting("author_uuid", fresh)
         return fresh
-    }
-
-    /// The daemon-binary version stamped at the end of the most
-    /// recent successful startup reconcile. Compared against
-    /// ``Version.current`` on the next startup; a mismatch means
-    /// "first run after an upgrade" and the destructive
-    /// reconcile passes (delete-cascade especially) get a
-    /// one-cycle grace period. v0.2.31+.
-    ///
-    /// Returns ``nil`` for state.db files that predate this
-    /// setting (Python era, or any Swift version <0.2.31). Treat
-    /// nil as "first run after upgrade" — same conservative
-    /// behavior.
-    func getLastSeenDaemonVersion() throws -> String? {
-        try getSetting("last_seen_daemon_version")
-    }
-
-    func setLastSeenDaemonVersion(_ version: String) throws {
-        try setSetting("last_seen_daemon_version", version)
     }
 
     // MARK: - auto-push operations

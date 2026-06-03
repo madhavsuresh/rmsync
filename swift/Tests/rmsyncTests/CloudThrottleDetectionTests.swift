@@ -56,15 +56,15 @@ struct CloudThrottleDetectionTests {
         // UUID segments are hyphen-bounded. Pre-fix patterns of /\b429\b/
         // matched ``-429-`` as word-bounded. Bug reported 2026-04-27.
         #expect(!Cloud.isThrottled("[f] doc-uuid-429-abc"))
-        #expect(!Cloud.isThrottled("/Writing/abc-503-def"))
+        #expect(!Cloud.isThrottled("/sync/notes/abc-503-def"))
         #expect(!Cloud.isThrottled("71acc84c-8a2f-4a40-bfa5-014ed8078d1a"))
         #expect(!Cloud.isThrottled("12345-429-67890-503-abcde"))
     }
 
     @Test("doc names containing 429/503 numbers don't false-positive")
     func docNamesAreClean() {
-        #expect(!Cloud.isThrottled("[f] /Writing/Page 429.md"))
-        #expect(!Cloud.isThrottled("[f] /Writing/Issue 503"))
+        #expect(!Cloud.isThrottled("[f] /sync/notes/Page 429.md"))
+        #expect(!Cloud.isThrottled("[f] /sync/notes/Issue 503"))
         #expect(!Cloud.isThrottled("[d] /Quick sheets/notes-429-final"))
     }
 
@@ -81,13 +81,13 @@ struct CloudThrottleDetectionTests {
     func findOutputIsClean() {
         // Sample of what `rmapi find /` actually emits in shell mode.
         let output = """
-        [d] /Writing
+        [d] /sync/notes
         [d] /Quick sheets
         [d] /Trash
         [f] /Quick sheets/My day
-        [f] /Writing/Random thoughts
-        [f] /Writing/Issue 429
-        [f] /Writing/abc-503-doc
+        [f] /sync/notes/Random thoughts
+        [f] /sync/notes/Issue 429
+        [f] /sync/notes/abc-503-doc
         """
         #expect(!Cloud.isThrottled(output))
     }

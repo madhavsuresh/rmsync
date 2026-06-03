@@ -175,10 +175,9 @@ enum Xattrs {
         _ = (meta, path)
     }
 
-    /// Always returns nil on Linux. Used by SyncWorker to recover the
-    /// reMarkable doc_id from a renamed local .md; on Linux we look
-    /// up by path in state.db instead, which is the same fallback
-    /// the macOS path uses when the xattr is missing.
+    /// Always returns nil on Linux. Explicit push looks up by path
+    /// in state.db instead, which is the same fallback the macOS
+    /// path uses when the xattr is missing.
     static func readDocID(at path: URL) -> String? {
         _ = path
         return nil

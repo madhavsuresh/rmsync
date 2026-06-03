@@ -59,7 +59,7 @@ struct CloudHealthProbeTests {
     func compat400() {
         // The 2026-04 schema-v4 break's error wording.
         let err = StringError(message:
-            "rmapi put --force /tmp/foo.rmdoc /Writing exited 1: " +
+            "rmapi put --force /tmp/foo.rmdoc /sync/notes exited 1: " +
             "ERROR: Error: failed to upload file [/tmp/foo.rmdoc] " +
             "request failed with status 400")
         let result = CloudHealthProbe.classify(err)

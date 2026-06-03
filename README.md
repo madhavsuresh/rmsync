@@ -1,15 +1,16 @@
 # rmsync
 
 Explicit push/pull sync between a reMarkable cloud folder and a local
-Markdown tree on macOS. New installs use `/sync/notes` on the tablet;
-existing `/Writing` configs keep working. Cloud changes are pulled
+Markdown tree on macOS. The supported tablet namespace is `/sync/notes`;
+older `/Writing` configs require a fresh reinstall. Cloud changes are pulled
 into a staging area first; you review them, accept the files you want,
 and then push local changes deliberately. The daemon stays up for
-status, menu bar, and dashboard IPC, but it does not poll the cloud or
-watch local files for automatic mutation.
+status, menu bar, and dashboard IPC. It may run a read-only pull
+availability probe and, when enabled, the safe auto-push watcher; it
+does not pull, reconcile, or delete files in the background.
 
-**v0.2 — Swift daemon, zero Python runtime.** The v0.1 Python
-implementation is archived at `python-legacy.tar.gz`.
+**Current sync model:** Swift daemon, explicit CLI mutations, one
+top-level tablet namespace under `/sync`.
 
 ---
 
@@ -196,16 +197,6 @@ git merge rmsync/cloud/notes/20260603T041500Z-a1b2c3d4
 The installed `rmsync-git` wrapper is equivalent to `rmsync git`, so
 `rmsync-git push` and `rmsync git push` are the same command.
 
-**Migrating from `/Writing`.** Existing configs with
-`remote_folder = "Writing"` keep working. To move to the single
-top-level `/sync` layout, first verify your local tree is the source of
-truth, then set `remote_folder = "sync/notes"`, run `rmsync init`, run
-`rmsync force-push` to preview, and only then run
-`rmsync force-push --apply`. This does not delete `/Writing`; remove or
-archive that folder manually after verifying `/sync/notes`.
-
----
-
 > ### 🤖 Built with LLM assistance
 >
 > Almost everything in this repo — Swift source, tests, CI workflows,
@@ -321,23 +312,6 @@ reference, troubleshooting, and rough edges to know about.
 
 ## Optional features
 
-Existing installs keep their config blocks, but explicit sync mode
-keeps mutation-oriented automation disabled unless there is a matching
-explicit command.
-
-### 📥 Inbox folder — legacy automatic drop folder
-
-```toml
-[inbox]
-local_dir         = "~/rmsync-notes/_inbox"   # any path
-remote_folder     = "Inbox"
-delete_after_push = true                         # set false to keep a copy
-```
-
-This config block is retained for older installs, but the explicit
-sync daemon does not start automatic inbox watchers. Use rmapi directly
-for PDF / EPUB sends until an explicit `rmsync send` flow exists.
-
 ### 🌐 Web dashboard — browser UI for status / actions
 
 ```toml
@@ -377,7 +351,7 @@ reMarkable cloud, your doc would be wiped on every device.
 
 **Two independent defenses ship in rmsync** (v0.2.7+):
 
-1. **Push-side guard** (`SyncWorker.doPush`). `FileProvider.status(of:)`
+1. **Push-side guard** (`ExplicitSync.push`). `FileProvider.status(of:)`
    uses `stat()` to detect the dataless signature — `st_size > 0
    && st_blocks == 0` — which is unambiguous on APFS regardless of
    which provider is responsible. If it's dataless and we've
@@ -413,8 +387,8 @@ without being subject to File Provider eviction.
 **Does:**
 
 - Explicitly pushes and pulls one configured cloud folder between the
-  tablet cloud and a local folder. New installs use `/sync/notes`;
-  existing `/Writing` configs keep working.
+  tablet cloud and a local folder. The supported ordinary namespace is
+  `/sync/notes`.
 - Typed-text notebooks round-trip as Markdown.
 - Handles conflicts: writes a `.md.conflict` file with git-style
   markers, never silently merges.
@@ -426,8 +400,6 @@ without being subject to File Provider eviction.
 - **Runs on macOS (menubar) or Linux (Docker, headless)** — same daemon
   binary, same commands, same sync logic. Multi-arch image at
   [`ghcr.io/madhavsuresh/rmsync`](https://github.com/madhavsuresh/rmsync/pkgs/container/rmsync).
-- **Inbox folder config retained for compatibility.** Automatic inbox
-  watching is disabled in explicit sync mode.
 - **Optional web dashboard.** Embed an HTTP server in the daemon (off by
   default) for browser-based status / pause UI. Useful for
   Linux/Docker users without a menubar; a parity option for macOS users
@@ -534,7 +506,6 @@ rmsync auto-push status   # inspect optional safe auto-push attempts
 rmsync logs -f            # tail the structured JSON event log
 rmsync pause              # set the paused status flag
 rmsync resume             # clear the pause flag
-rmsync sync-now           # deprecated; auto polling is disabled
 rmsync conflicts          # list unresolved conflicts
 rmsync doctor             # run all 10 self-checks, exit 1 on failure
 rmsync relocate <path>    # move sync dir + rewrite state + update config
@@ -582,9 +553,10 @@ Full config reference and behavioural details in `docs/USAGE.md`.
  reMarkable cloud ◄──────────────► sync_dir/*.md
 ```
 
-- **Daemon** runs as `com.user.rmsync` under launchd. It is status-only
-  in explicit sync mode: no watcher, no cloud poller, no background
-  reconciler.
+- **Daemon** runs as `com.user.rmsync` under launchd. It keeps IPC,
+  dashboard, menu bar state, the optional safe auto-push watcher, and
+  a read-only pull availability probe online. It does not run a
+  background pull worker, cloud reconciler, or delete propagator.
 - **Menu bar app** runs as `com.user.rmsync.menubar`, connects to the
   daemon over a Unix-domain socket, and shows state live.
 - **CLI** is the same `rmsync` binary with different subcommands. The
@@ -605,7 +577,7 @@ rmsync/
 │   │   ├── rmsync/              daemon + CLI (~6000 LoC, cross-platform)
 │   │   │   ├── ExplicitSync.swift staged pull / accept / push workflow
 │   │   │   ├── GitSync.swift     optional git-backed sync workflow
-│   │   │   ├── Watcher/          legacy watcher code retained but not started
+│   │   │   ├── Watcher/          opt-in auto-push Markdown watcher
 │   │   │   └── Web/              embedded HTTP dashboard (opt-in)
 │   │   ├── rmsync-menubar/      menu bar app (macOS-only)
 │   │   └── RMScene/             vendored v6 CRDT codec (cross-platform)
@@ -624,15 +596,13 @@ rmsync/
 │   ├── DOCKER.md                ← Linux/Docker operational guide
 │   ├── LLM_CONTEXT.md           ← single-file context for LLM chats
 │   ├── HOMEBREW.md              ← setting up the brew tap
-│   ├── TESTING.md               ← test infra (offline/live/fresh-install)
-│   └── SWIFT_PORT_PHASE1.md     the port plan we executed
+│   └── TESTING.md               ← test infra (offline/live/fresh-install)
 ├── Formula/rmsync.rb            Homebrew formula
 ├── .github/workflows/
 │   ├── ci.yml                   macOS + Linux build + live-cloud smoke
 │   └── release.yml              tag-triggered: GitHub release + brew bump + GHCR
-├── CHANGES_FROM_SPEC.md         invariants from the Python v0.1
-├── README.md                    you are here
-└── python-legacy.tar.gz         v0.1 archive (safe to delete)
+├── CHANGES_FROM_SPEC.md         historical implementation notes
+└── README.md                    you are here
 ```
 
 ---

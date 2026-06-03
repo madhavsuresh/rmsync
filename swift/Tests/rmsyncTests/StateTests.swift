@@ -13,6 +13,7 @@ struct StateTests {
 
         // schema_version row exists at the expected version.
         try await assertSchemaVersion(dbPath, equals: SchemaMigrator.currentSchemaVersion)
+        try await assertDocumentColumnsDoNotContainPendingOp(dbPath)
     }
 
     @Test("upsert + get round-trips a Document")
@@ -24,7 +25,7 @@ struct StateTests {
             docID: "abc",
             parentID: "",
             docType: "DocumentType",
-            remotePath: "/Writing/Hello",
+            remotePath: "/sync/notes/Hello",
             localPath: "/tmp/hello.md",
             remoteVersion: 1,
             lastSyncedMDHash: "deadbeef",
@@ -35,7 +36,7 @@ struct StateTests {
 
         let loaded = try await state.get(docID: "abc")
         #expect(loaded != nil)
-        #expect(loaded?.remotePath == "/Writing/Hello")
+        #expect(loaded?.remotePath == "/sync/notes/Hello")
         #expect(loaded?.lastSyncedTabletHash == "feedface")
         #expect(loaded?.pageIDs == ["p1", "p2"])
     }
@@ -95,7 +96,7 @@ struct StateTests {
 
         try await state.upsertRemoteSnapshot(RemoteSnapshot(
             docID: "doc",
-            remotePath: "/Writing/doc",
+            remotePath: "/sync/notes/doc",
             remoteModified: "2026-06-03T00:00:00Z",
             remoteVersion: 7,
             remoteFingerprint: "fingerprint",
@@ -108,7 +109,7 @@ struct StateTests {
         ))
 
         let loaded = try await state.remoteSnapshot(docID: "doc")
-        #expect(loaded?.remotePath == "/Writing/doc")
+        #expect(loaded?.remotePath == "/sync/notes/doc")
         #expect(loaded?.remoteFingerprint == "fingerprint")
         #expect(loaded?.sourceHash == "source")
         #expect(loaded?.tabletHash == "tablet")
@@ -117,24 +118,15 @@ struct StateTests {
         #expect(loaded?.archiveHash == "archive")
     }
 
-    @Test("legacy v7 DB migrates remote_snapshots table")
-    func legacyV7MigratesRemoteSnapshots() async throws {
+    @Test("legacy v7 DB is rejected")
+    func legacyV7Rejected() async throws {
         let dir = try tempDir()
         let dbPath = dir.appendingPathComponent("state.db")
         try createLegacyV7Database(at: dbPath)
 
-        let state = try State(path: dbPath)
-        try await state.upsertRemoteSnapshot(RemoteSnapshot(
-            docID: "doc",
-            remotePath: "/Writing/doc",
-            remoteVersion: 0,
-            remoteFingerprint: "fingerprint",
-            sourceHash: "source",
-            cachedSourcePath: "/cache/doc.md"
-        ))
-
-        #expect(try await state.remoteSnapshot(docID: "doc")?.sourceHash == "source")
-        try await assertSchemaVersion(dbPath, equals: SchemaMigrator.currentSchemaVersion)
+        #expect(throws: SchemaMigrator.SchemaError.self) {
+            _ = try State(path: dbPath)
+        }
     }
 
     // MARK: - helpers
@@ -158,6 +150,15 @@ struct StateTests {
             try Int.fetchOne(db, sql: "SELECT version FROM schema_version")
         }
         #expect(actual == expected)
+    }
+
+    private func assertDocumentColumnsDoNotContainPendingOp(_ dbPath: URL) async throws {
+        let queue = try DatabaseQueue(path: dbPath.path)
+        let columns = try await queue.read { db in
+            try Row.fetchAll(db, sql: "PRAGMA table_info(documents)")
+                .compactMap { (row: Row) in row["name"] as String? }
+        }
+        #expect(!columns.contains("pending_op"))
     }
 
     private func createLegacyV7Database(at dbPath: URL) throws {

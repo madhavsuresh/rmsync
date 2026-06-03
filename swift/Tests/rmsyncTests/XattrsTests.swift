@@ -20,7 +20,7 @@ struct XattrsTests {
 
         let meta = Xattrs.FileMetadata(
             docID: "abc-123",
-            remotePath: "/Writing/foo",
+            remotePath: "/sync/notes/foo",
             remoteModified: "2026-04-18T12:00:00Z",
             pageIDs: ["p1", "p2"]
         )
@@ -30,7 +30,7 @@ struct XattrsTests {
         #expect(String(data: docIDRead, encoding: .utf8) == "abc-123")
 
         let rp = try Xattrs.getRaw(path: file, name: Xattrs.remotePathKey)
-        #expect(String(data: rp, encoding: .utf8) == "/Writing/foo")
+        #expect(String(data: rp, encoding: .utf8) == "/sync/notes/foo")
 
         let rm = try Xattrs.getRaw(path: file, name: Xattrs.remoteModifiedKey)
         #expect(String(data: rm, encoding: .utf8) == "2026-04-18T12:00:00Z")
@@ -46,7 +46,7 @@ struct XattrsTests {
         let wf = try PropertyListSerialization.propertyList(
             from: wfData, format: nil
         ) as! [String]
-        #expect(wf == ["reMarkable Cloud", "/Writing/foo"])
+        #expect(wf == ["reMarkable Cloud", "/sync/notes/foo"])
 
         // Kind is a single-string bplist.
         let kindData = try Xattrs.getRaw(path: file, name: Xattrs.kind)

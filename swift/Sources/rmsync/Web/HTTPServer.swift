@@ -1,6 +1,6 @@
 // Optional HTTP dashboard. Embed-only — listens on a TCP port,
 // serves a single HTML page plus a small JSON API, talks to the
-// existing ``StateBus`` and ``JobQueue``. Useful for Docker users
+// existing ``StateBus`` and auto-push queue. Useful for Docker users
 // who don't have the macOS menubar.
 //
 // Built directly on POSIX sockets (same recipe as IPCServer). No
@@ -32,7 +32,7 @@ actor HTTPServer {
     /// unauthenticated.
     private let authToken: String
     private let bus: StateBus
-    private let queue: JobQueue
+    private let queue: AutoPushEventQueue
     private let state: State
 
     /// Action handlers registered by the daemon. Each one is invoked
@@ -46,7 +46,7 @@ actor HTTPServer {
         port: Int,
         authToken: String,
         bus: StateBus,
-        queue: JobQueue,
+        queue: AutoPushEventQueue,
         state: State
     ) {
         self.bindAddr = bindAddr
@@ -161,7 +161,7 @@ actor HTTPServer {
         authToken: String,
         actions: [String: Action],
         bus: StateBus,
-        queue: JobQueue,
+        queue: AutoPushEventQueue,
         state: State
     ) {
         while true {
@@ -197,7 +197,7 @@ actor HTTPServer {
         authToken: String,
         actions: [String: Action],
         bus: StateBus,
-        queue: JobQueue,
+        queue: AutoPushEventQueue,
         state: State
     ) async {
         defer { close(fd) }
@@ -282,9 +282,21 @@ actor HTTPServer {
             "version": status.version,
             "pid": status.pid,
             "updated_at": status.updatedAt,
+            "auto_push_enabled": status.autoPushEnabled,
+            "auto_push_queued": status.autoPushQueued,
+            "auto_push_uploading": status.autoPushUploading,
+            "auto_push_succeeded": status.autoPushSucceeded,
+            "auto_push_skipped": status.autoPushSkipped,
+            "auto_push_refused": status.autoPushRefused,
+            "auto_push_failed": status.autoPushFailed,
+            "pull_state": status.pullState,
+            "pull_changes": status.pullChanges,
         ]
         if let lp = status.lastPullAt { obj["last_pull_at"] = lp }
         if let lp = status.lastPushAt { obj["last_push_at"] = lp }
+        if let ap = status.autoPushLastSucceededAt { obj["auto_push_last_succeeded_at"] = ap }
+        if let pc = status.pullCheckedAt { obj["pull_checked_at"] = pc }
+        if let pe = status.pullError { obj["pull_error"] = pe }
 
         // Top 10 most-recently-pushed docs for the dashboard table.
         let recent = docs

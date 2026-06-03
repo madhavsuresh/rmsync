@@ -191,34 +191,6 @@ struct TrashTests {
         #expect(entries.first?.relPath == "fresh.md")
     }
 
-    @Test("Reconcile.pruneTrash removes stale stamps and skips zero-retention")
-    func reconcilePrunePass() async throws {
-        let dir = try tempSyncDir()
-        let stale = dir.appendingPathComponent("stale.md")
-        try "x".write(to: stale, atomically: true, encoding: .utf8)
-        // Plant the file with a stamp 100 days in the past so a
-        // 30-day window prunes it.
-        let oldStamp = Trash.trashRoot(dir)
-            .appendingPathComponent(
-                Trash.stampString(Date().addingTimeInterval(-100 * 86_400)),
-                isDirectory: true
-            )
-        try FileManager.default.createDirectory(
-            at: oldStamp, withIntermediateDirectories: true
-        )
-        try FileManager.default.moveItem(
-            at: stale, to: oldStamp.appendingPathComponent("stale.md")
-        )
-
-        // Zero retention: prune is a no-op (kept forever).
-        Reconcile.pruneTrash(syncDir: dir, retentionDays: 0)
-        #expect(try Trash.list(syncDir: dir).count == 1)
-
-        // 30-day retention prunes the 100-day-old stamp.
-        Reconcile.pruneTrash(syncDir: dir, retentionDays: 30)
-        #expect(try Trash.list(syncDir: dir).isEmpty)
-    }
-
     @Test("prune ignores stamps with unparseable names")
     func pruneIgnoresJunk() async throws {
         let dir = try tempSyncDir()
@@ -233,8 +205,6 @@ struct TrashTests {
         #expect(removed == 0)
         #expect(FileManager.default.fileExists(atPath: junk.path))
     }
-
-    // MARK: - schema v5 round-trip
 
     // MARK: - CLI integration (smoke)
 
@@ -265,27 +235,6 @@ struct TrashTests {
         #expect(FileManager.default.fileExists(atPath: b.path))
         // Trash now empty.
         #expect(try Trash.list(syncDir: dir).isEmpty)
-    }
-
-    @Test("Document round-trips pending_op through GRDB")
-    func documentPendingOpRoundTrip() async throws {
-        let dir = try tempSyncDir()
-        let state = try State(path: dir.appendingPathComponent("state.db"))
-        try await state.upsert(Document(
-            docID: "abc",
-            pendingOp: "pending_delete"
-        ))
-        var loaded = try await state.get(docID: "abc")
-        #expect(loaded?.pendingOp == "pending_delete")
-
-        try await state.setPendingOp(docID: "abc", op: nil)
-        loaded = try await state.get(docID: "abc")
-        #expect(loaded?.pendingOp == nil)
-
-        try await state.setPendingOp(docID: "abc", op: "pending_rename")
-        let pending = try await state.pendingOpDocs()
-        #expect(pending.count == 1)
-        #expect(pending.first?.pendingOp == "pending_rename")
     }
 
     // MARK: - helpers

@@ -45,7 +45,7 @@ struct PathUtilitiesTests {
     func remoteToLocalBasic() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
         let result = PathUtilities.remoteToLocal(
-            remotePath: "/Writing/Note", syncDir: sync, remoteFolder: "Writing"
+            remotePath: "/sync/notes/Note", syncDir: sync, remoteFolder: "sync/notes"
         )
         #expect(result.path == "/tmp/sync/Note.md")
     }
@@ -54,8 +54,8 @@ struct PathUtilitiesTests {
     func remoteToLocalNested() {
         let sync = URL(fileURLWithPath: "/tmp/sync")
         let result = PathUtilities.remoteToLocal(
-            remotePath: "/Writing/Research/paper",
-            syncDir: sync, remoteFolder: "Writing"
+            remotePath: "/sync/notes/Research/paper",
+            syncDir: sync, remoteFolder: "sync/notes"
         )
         #expect(result.path == "/tmp/sync/Research/paper.md")
     }
@@ -69,13 +69,6 @@ struct PathUtilitiesTests {
             remoteFolder: "sync/attack"
         )
         #expect(result.path == "/tmp/sync/Research/paper.md")
-
-        let dir = PathUtilities.remoteToLocalDir(
-            remotePath: "/sync/attack/Research",
-            syncDir: sync,
-            remoteFolder: "sync/attack"
-        )
-        #expect(dir.path == "/tmp/sync/Research")
     }
 
     // MARK: - localToRemoteParentChain (push side)
@@ -85,10 +78,10 @@ struct PathUtilitiesTests {
         let sync = URL(fileURLWithPath: "/tmp/sync")
         let local = sync.appendingPathComponent("foo.md")
         let result = PathUtilities.localToRemoteParentChain(
-            localPath: local, syncDir: sync, remoteFolder: "Writing"
+            localPath: local, syncDir: sync, remoteFolder: "sync/notes"
         )
-        #expect(result.parentPath == "/Writing")
-        #expect(result.mkdirChain == ["/Writing"])
+        #expect(result.parentPath == "/sync/notes")
+        #expect(result.mkdirChain == ["/sync", "/sync/notes"])
     }
 
     @Test("top-level file under multi-segment remote folder creates each namespace prefix")
@@ -107,10 +100,10 @@ struct PathUtilitiesTests {
         let sync = URL(fileURLWithPath: "/tmp/sync")
         let local = sync.appendingPathComponent("papers/foo.md")
         let result = PathUtilities.localToRemoteParentChain(
-            localPath: local, syncDir: sync, remoteFolder: "Writing"
+            localPath: local, syncDir: sync, remoteFolder: "sync/notes"
         )
-        #expect(result.parentPath == "/Writing/papers")
-        #expect(result.mkdirChain == ["/Writing", "/Writing/papers"])
+        #expect(result.parentPath == "/sync/notes/papers")
+        #expect(result.mkdirChain == ["/sync", "/sync/notes", "/sync/notes/papers"])
     }
 
     @Test("nested-subdir file builds full mkdir chain")
@@ -118,11 +111,11 @@ struct PathUtilitiesTests {
         let sync = URL(fileURLWithPath: "/tmp/sync")
         let local = sync.appendingPathComponent("papers/2026/foo.md")
         let result = PathUtilities.localToRemoteParentChain(
-            localPath: local, syncDir: sync, remoteFolder: "Writing"
+            localPath: local, syncDir: sync, remoteFolder: "sync/notes"
         )
-        #expect(result.parentPath == "/Writing/papers/2026")
+        #expect(result.parentPath == "/sync/notes/papers/2026")
         #expect(result.mkdirChain == [
-            "/Writing", "/Writing/papers", "/Writing/papers/2026",
+            "/sync", "/sync/notes", "/sync/notes/papers", "/sync/notes/papers/2026",
         ])
     }
 
@@ -146,61 +139,6 @@ struct PathUtilitiesTests {
         ])
     }
 
-    @Test("remoteToLocalDir: bare /<remoteFolder> maps to sync_dir")
-    func remoteToLocalDirTopLevel() {
-        let sync = URL(fileURLWithPath: "/tmp/sync")
-        let result = PathUtilities.remoteToLocalDir(
-            remotePath: "/Writing", syncDir: sync, remoteFolder: "Writing"
-        )
-        #expect(result.path == "/tmp/sync")
-    }
-
-    @Test("remoteToLocalDir: nested cloud folder maps to nested local dir")
-    func remoteToLocalDirNested() {
-        let sync = URL(fileURLWithPath: "/tmp/sync")
-        let result = PathUtilities.remoteToLocalDir(
-            remotePath: "/Writing/papers/2026",
-            syncDir: sync, remoteFolder: "Writing"
-        )
-        #expect(result.path == "/tmp/sync/papers/2026")
-        // No .md suffix added — we're naming a directory, not a file.
-        #expect(!result.path.hasSuffix(".md"))
-    }
-
-    @Test("dir helper: sync_dir itself maps to remoteFolder root")
-    func dirChainTopLevel() {
-        let sync = URL(fileURLWithPath: "/tmp/sync")
-        let result = PathUtilities.localDirToRemoteChain(
-            localDir: sync, syncDir: sync, remoteFolder: "Writing"
-        )
-        #expect(result.cloudPath == "/Writing")
-        #expect(result.mkdirChain == ["/Writing"])
-    }
-
-    @Test("dir helper: single subdir resolves to matching cloud path")
-    func dirChainSingleSubdir() {
-        let sync = URL(fileURLWithPath: "/tmp/sync")
-        let dir = sync.appendingPathComponent("papers")
-        let result = PathUtilities.localDirToRemoteChain(
-            localDir: dir, syncDir: sync, remoteFolder: "Writing"
-        )
-        #expect(result.cloudPath == "/Writing/papers")
-        #expect(result.mkdirChain == ["/Writing", "/Writing/papers"])
-    }
-
-    @Test("dir helper: nested path builds full chain ending at the dir")
-    func dirChainNested() {
-        let sync = URL(fileURLWithPath: "/tmp/sync")
-        let dir = sync.appendingPathComponent("papers/2026")
-        let result = PathUtilities.localDirToRemoteChain(
-            localDir: dir, syncDir: sync, remoteFolder: "Writing"
-        )
-        #expect(result.cloudPath == "/Writing/papers/2026")
-        #expect(result.mkdirChain == [
-            "/Writing", "/Writing/papers", "/Writing/papers/2026",
-        ])
-    }
-
     @Test("file outside sync_dir falls back to remoteFolder root")
     func parentChainOutsideSync() {
         // resolvedRelativePath returns nil for paths outside the
@@ -209,10 +147,10 @@ struct PathUtilitiesTests {
         let sync = URL(fileURLWithPath: "/tmp/sync")
         let local = URL(fileURLWithPath: "/tmp/elsewhere/foo.md")
         let result = PathUtilities.localToRemoteParentChain(
-            localPath: local, syncDir: sync, remoteFolder: "Writing"
+            localPath: local, syncDir: sync, remoteFolder: "sync/notes"
         )
-        #expect(result.parentPath == "/Writing")
-        #expect(result.mkdirChain == ["/Writing"])
+        #expect(result.parentPath == "/sync/notes")
+        #expect(result.mkdirChain == ["/sync", "/sync/notes"])
     }
 
     @Test("resolvedRelativePath rejects symlink escapes")

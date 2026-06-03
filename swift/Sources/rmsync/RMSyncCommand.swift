@@ -13,7 +13,7 @@ struct RMSyncCommand: AsyncParsableCommand {
           rmsync accept <path>    # or: rmsync accept --all
           rmsync push [path ...]
 
-        The daemon keeps status, menu bar, dashboard, and IPC online. It does not poll the cloud or watch local files for background mutation.
+        The daemon keeps status, menu bar, dashboard, read-only pull availability, and IPC online. It does not pull or reconcile files in the background.
         """,
         // ``--version`` prints Version.current (rewritten to the tag
         // during ``brew install`` — see Formula/rmsync.rb). ``rmsync
@@ -36,7 +36,6 @@ struct RMSyncCommand: AsyncParsableCommand {
             RestartCmd.self,
             Pause.self,
             Resume.self,
-            SyncNow.self,
             Logs.self,
             Conflicts.self,
             Doctor.self,
@@ -45,7 +44,6 @@ struct RMSyncCommand: AsyncParsableCommand {
             Uninstall.self,
             TrashCmd.self,
             History.self,
-            RetryParked.self,
             Errors.self,
         ],
         defaultSubcommand: nil

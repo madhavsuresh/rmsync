@@ -16,7 +16,7 @@ struct ExplicitPushTests {
         try await state.upsert(Document(
             docID: "same-doc",
             docType: "DocumentType",
-            remotePath: "/Writing/same",
+            remotePath: "/sync/notes/same",
             localPath: mdPath.path,
             remoteModified: "2026-06-03T00:00:00Z",
             lastSyncedMDHash: PathUtilities.sha256(text),
@@ -52,7 +52,7 @@ struct ExplicitPushTests {
             try await state.upsert(Document(
                 docID: "same-doc-\(idx)",
                 docType: "DocumentType",
-                remotePath: "/Writing/same-\(idx)",
+                remotePath: "/sync/notes/same-\(idx)",
                 localPath: canonicalPath,
                 remoteModified: "2026-06-03T00:00:00Z",
                 lastSyncedMDHash: PathUtilities.sha256(text),
@@ -72,6 +72,34 @@ struct ExplicitPushTests {
         #expect(result.pushed == 0)
         #expect(result.skipped == 3)
         #expect(result.refused.isEmpty)
+    }
+
+    @Test("successful push records a local history snapshot")
+    func pushRecordsSnapshot() async throws {
+        let dir = try Self.tempDir()
+        let state = try State(path: dir.appendingPathComponent("state.db"))
+        let mdPath = dir.appendingPathComponent("fresh.md")
+        try "fresh\n".write(to: mdPath, atomically: true, encoding: .utf8)
+        let cloud = SnapshotPushCloud()
+
+        let result = try await ExplicitSync.push(
+            cfg: Config(syncDir: dir),
+            state: state,
+            cloud: cloud,
+            paths: [mdPath.path],
+            includeDeletes: false,
+            force: false
+        )
+
+        #expect(result.pushed == 1)
+        #expect(result.refused.isEmpty)
+        #expect(await cloud.putCount() == 1)
+
+        let doc = try #require(try await state.byLocalPath(mdPath.path))
+        let snapshots = try Snapshots.list(docID: doc.docID, in: await state.storageDir())
+        let last = try #require(snapshots.last)
+        #expect(last.cause == Snapshots.Cause.push)
+        #expect(try Snapshots.read(last) == "fresh\n")
     }
 
     private static func tempDir() throws -> URL {
@@ -95,4 +123,36 @@ struct ExplicitPushTests {
         }
         throw ExplicitSync.SyncError.invalidPath(leaf)
     }
+}
+
+private actor SnapshotPushCloud: CloudWriteClient {
+    private var puts = 0
+
+    func putCount() -> Int { puts }
+
+    func tree(_ root: String) async throws -> [Node] { [] }
+
+    func get(_ remotePath: String, dest: URL) async throws -> URL {
+        throw SnapshotPushCloudError.unsupported
+    }
+
+    func stat(_ remotePath: String) async throws -> StatResult? { nil }
+
+    func put(local: URL, remoteParent: String, update: Bool) async throws {
+        puts += 1
+    }
+
+    func mkdir(_ remotePath: String) async throws {}
+
+    func mv(from src: String, to dst: String) async throws {
+        throw SnapshotPushCloudError.unsupported
+    }
+
+    func rm(_ remotePath: String) async throws {
+        throw SnapshotPushCloudError.unsupported
+    }
+}
+
+private enum SnapshotPushCloudError: Error {
+    case unsupported
 }

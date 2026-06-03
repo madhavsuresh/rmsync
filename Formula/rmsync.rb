@@ -238,36 +238,10 @@ class Rmsync < Formula
       sync_dir      = "$HOME/rmsync-notes"
       remote_folder = "sync/notes"
 
-      worker_pool_size               = 3
-
-      # Legacy daemon tuning retained for config compatibility.
-      # Current explicit-sync releases do not start a watcher, poller,
-      # reconcile pass, or background worker pool.
-      poll_interval_seconds          = 30
-      poll_active_interval_seconds   = 15
-      poll_idle_interval_seconds     = 120
-      debounce_seconds               = 2.0
-      echo_fence_seconds             = 5.0
-      retry_max_attempts             = 3
-
-      # native_plain: plain text only (recommended)
-      # native_formatted: experimental, not fully implemented
-      # pdf: read-only on tablet, not fully implemented
-      push_strategy = "native_plain"
-
       backup_snapshots_to_keep = 30
-      dry_run                  = false
 
       [log]
       level = "INFO"   # DEBUG | INFO | WARNING | ERROR
-
-      # Legacy optional drop-folder for sending PDFs / EPUBs to the tablet.
-      # The explicit-sync daemon does not watch this folder. Use rmapi directly
-      # for PDF / EPUB sends until rmsync has a dedicated explicit send command.
-      # [inbox]
-      # local_dir         = "$HOME/rmsync-notes/_inbox"
-      # remote_folder     = "Inbox"
-      # delete_after_push = true
 
       # Optional: web dashboard at http://127.0.0.1:7878.
       # [web]
@@ -275,19 +249,8 @@ class Rmsync < Formula
       # bind_addr  = "127.0.0.1"
       # port       = 7878
 
-      # Legacy rename / move / delete propagation settings. Current
-      # explicit-sync releases do not propagate deletes automatically.
-      # Local deletes affect the cloud only with:
-      #   rmsync push --include-deletes
-      # Cloud deletes affect local files only after:
-      #   rmsync pull
-      #   rmsync accept --include-deletes <path>
-      # Accepted local deletes are parked in <sync_dir>/.rmsync-trash first.
-      # [deletion]
-      # enable_propagation         = true
-      # trash_retention_days       = 30
-      # bulk_delete_threshold      = 0.5
-      # bulk_delete_window_seconds = 30
+      [deletion]
+      trash_retention_days = 30
       TOML
         echo "  Edit it if you want sync_dir somewhere other than ~/rmsync-notes"
         echo "  (or run 'rmsync relocate <new-path>' after the daemon comes up)."

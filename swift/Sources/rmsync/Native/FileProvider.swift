@@ -2,7 +2,7 @@
 // concern: Linux has no equivalent kernel concept. On Linux we
 // stub the ``Status`` enum and return ``.local`` for any non-empty
 // file (``.empty`` for zero-byte, ``.missing`` for ENOENT) so the
-// SyncWorker push guard treats every readable file as safe to push.
+// explicit push guard treats every readable file as safe to push.
 #if os(macOS)
 import Darwin
 import Foundation

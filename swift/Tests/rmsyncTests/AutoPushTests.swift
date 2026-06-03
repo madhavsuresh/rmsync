@@ -8,7 +8,7 @@ struct AutoPushTests {
     func refusesRemoteDrift() async throws {
         let fixture = try await makeTrackedFixture(localText: "local edit\n", syncedText: "base\n")
         let cloud = FakeCloud(stats: [
-            "/Writing/note": stat(id: "doc-note", modified: "newer"),
+            "/sync/notes/note": stat(id: "doc-note", modified: "newer"),
         ])
 
         let result = try await ExplicitSync.autoPush(
@@ -26,7 +26,7 @@ struct AutoPushTests {
     @Test("explicit auto-push refuses stat failures")
     func refusesStatFailure() async throws {
         let fixture = try await makeTrackedFixture(localText: "local edit\n", syncedText: "base\n")
-        let cloud = FakeCloud(stats: [:], statFailures: ["/Writing/note"])
+        let cloud = FakeCloud(stats: [:], statFailures: ["/sync/notes/note"])
 
         let result = try await ExplicitSync.autoPush(
             cfg: fixture.cfg,
@@ -46,9 +46,9 @@ struct AutoPushTests {
         let file = dir.appendingPathComponent("new.md")
         try write("new file\n", to: file)
         let state = try State(path: dir.appendingPathComponent("state.db"))
-        let cfg = Config(syncDir: dir, remoteFolder: "Writing")
+        let cfg = Config(syncDir: dir, remoteFolder: Config.defaultRemoteFolder)
         let cloud = FakeCloud(stats: [
-            "/Writing/new": stat(id: "existing", modified: "already-there"),
+            "/sync/notes/new": stat(id: "existing", modified: "already-there"),
         ])
 
         let result = try await ExplicitSync.autoPush(
@@ -67,11 +67,11 @@ struct AutoPushTests {
     func coalescesRapidEdits() async throws {
         let fixture = try await makeTrackedFixture(localText: "first edit\n", syncedText: "base\n")
         let cloud = FakeCloud(stats: [
-            "/Writing/note": stat(id: "doc-note", modified: "baseline"),
+            "/sync/notes/note": stat(id: "doc-note", modified: "baseline"),
         ])
         let cfg = Config(
             syncDir: fixture.dir,
-            remoteFolder: "Writing",
+            remoteFolder: Config.defaultRemoteFolder,
             autoPush: Config.AutoPushConfig(
                 enabled: true,
                 debounceSeconds: 0.25,
@@ -111,7 +111,7 @@ struct AutoPushTests {
             seedSnapshot: false
         )
         let cloud = FakeCloud(stats: [
-            "/Writing/note": stat(id: "doc-note", modified: "baseline"),
+            "/sync/notes/note": stat(id: "doc-note", modified: "baseline"),
         ])
 
         let result = try await ExplicitSync.autoPush(
@@ -138,7 +138,7 @@ struct AutoPushTests {
             state: "uploading"
         )
         let engine = AutoPushEngine(
-            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
+            cfg: Config(syncDir: dir, remoteFolder: Config.defaultRemoteFolder),
             state: state,
             cloud: FakeCloud(stats: [:])
         )
@@ -163,8 +163,8 @@ struct AutoPushTests {
             state: "uploading"
         )
         let cloud = FakeCloud(
-            stats: ["/Writing/note": stat(id: "doc-note", modified: "after-put")],
-            archives: ["/Writing/note": remoteArchive]
+            stats: ["/sync/notes/note": stat(id: "doc-note", modified: "after-put")],
+            archives: ["/sync/notes/note": remoteArchive]
         )
         let engine = AutoPushEngine(cfg: fixture.cfg, state: fixture.state, cloud: cloud)
 
@@ -218,7 +218,7 @@ struct AutoPushTests {
         let fixture = try await makeTrackedFixture(localText: "base\n", syncedText: "base\n")
         try FileManager.default.removeItem(at: fixture.file)
         let cloud = FakeCloud(stats: [
-            "/Writing/note": stat(id: "doc-note", modified: "baseline"),
+            "/sync/notes/note": stat(id: "doc-note", modified: "baseline"),
         ])
 
         let result = try await ExplicitSync.autoPush(
@@ -252,7 +252,7 @@ struct AutoPushTests {
         try await state.upsert(Document(
             docID: "doc-note",
             docType: "DocumentType",
-            remotePath: "/Writing/note",
+            remotePath: "/sync/notes/note",
             localPath: file.path,
             remoteModified: "baseline",
             lastSyncedMDHash: PathUtilities.sha256(syncedText),
@@ -261,7 +261,7 @@ struct AutoPushTests {
         if seedSnapshot {
             await ExplicitSync.storeVerifiedRemoteSnapshot(
                 docID: "doc-note",
-                remotePath: "/Writing/note",
+                remotePath: "/sync/notes/note",
                 stat: stat(id: "doc-note", modified: "baseline"),
                 source: syncedText,
                 sourceHash: PathUtilities.sha256(syncedText),
@@ -274,7 +274,7 @@ struct AutoPushTests {
         return Fixture(
             dir: dir,
             file: file,
-            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
+            cfg: Config(syncDir: dir, remoteFolder: Config.defaultRemoteFolder),
             state: state
         )
     }

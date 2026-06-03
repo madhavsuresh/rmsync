@@ -34,7 +34,7 @@ import Foundation
 ///     touching the user's real state directory.
 ///   - **Pure Foundation.** Cross-platform; identical behavior on
 ///     macOS and Linux.
-///   - **Daemon-independent helpers.** Worker integrates via the
+///   - **Daemon-independent helpers.** Explicit sync integrates via the
 ///     ``take``/``prune`` calls; CLI subcommands integrate via
 ///     ``list``/``read``/``unifiedDiff``. No actor coupling.
 enum Snapshots {

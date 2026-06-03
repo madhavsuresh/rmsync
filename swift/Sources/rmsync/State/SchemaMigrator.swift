@@ -1,205 +1,173 @@
 import Foundation
 import GRDB
 
-/// Keeps the ``schema_version`` row honest. Fresh databases open at v9.
-/// Older DBs from the Python implementation migrate in place: each step
-/// is idempotent and safe to re-run.
+/// Creates and verifies the current explicit-sync state schema.
 ///
-/// The migration sequence must match the Python version byte-for-byte —
-/// see ``src/rm_sync/state.py:State._migrate`` in the legacy tree.
+/// This version intentionally does not migrate older rmsync layouts. Users
+/// upgrading from pre-namespace or background-sync releases are expected to do
+/// a full reinstall, so stale databases are rejected rather than reshaped.
 enum SchemaMigrator {
-    static func migrate(_ writer: any DatabaseWriter) throws {
-        var migrator = DatabaseMigrator()
+    static let currentSchemaVersion = 10
 
-        // v1 — original schema. Kept empty because legacy DBs already
-        // created everything via the old executescript path; fresh DBs
-        // get the full v4 schema up front in this v1 step.
-        migrator.registerMigration("v1_base_schema") { db in
-            // ``IF NOT EXISTS`` everywhere so the migrator plays nicely
-            // with pre-existing Python-created DBs.
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS schema_version (
-                    version INTEGER PRIMARY KEY
-                );
-                CREATE TABLE IF NOT EXISTS documents (
-                    doc_id              TEXT PRIMARY KEY,
-                    parent_id           TEXT NOT NULL,
-                    doc_type            TEXT NOT NULL,
-                    title               TEXT NOT NULL,
-                    remote_path         TEXT NOT NULL,
-                    local_path          TEXT NOT NULL,
-                    remote_version      INTEGER NOT NULL,
-                    remote_modified     TEXT,
-                    last_synced_md_hash TEXT,
-                    last_pull_at        TEXT,
-                    last_push_at        TEXT,
-                    conflict_state      TEXT,
-                    error_state         TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_parent       ON documents(parent_id);
-                CREATE INDEX IF NOT EXISTS idx_local_path   ON documents(local_path);
-                CREATE INDEX IF NOT EXISTS idx_remote_path  ON documents(remote_path);
-                CREATE TABLE IF NOT EXISTS sync_log (
-                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts      TEXT NOT NULL,
-                    level   TEXT NOT NULL,
-                    doc_id  TEXT,
-                    message TEXT NOT NULL
-                );
-                """)
-        }
+    enum SchemaError: Error, CustomStringConvertible {
+        case reinstallRequired(String)
 
-        // v2 — add page_ids (stable sync15 cPages entries).
-        migrator.registerMigration("v2_page_ids") { db in
-            if try !columnExists(db, table: "documents", column: "page_ids") {
-                try db.execute(sql: "ALTER TABLE documents ADD COLUMN page_ids TEXT")
+        var description: String {
+            switch self {
+            case .reinstallRequired(let detail):
+                return """
+                unsupported old state database: \(detail). This rmsync version requires a fresh reinstall; move the old state.db aside and rerun `rmsync init`.
+                """
             }
-        }
-
-        // v3 — add settings table. The Python port also seeded
-        // ``author_uuid`` on first access; we do the same lazily in
-        // ``State.getOrCreateAuthorUUID()``.
-        migrator.registerMigration("v3_settings") { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS settings (
-                    key   TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-                """)
-        }
-
-        // v4 — migrate old file-based ``paused`` sentinel into
-        // ``settings.paused`` so IPC can toggle it.
-        migrator.registerMigration("v4_paused_setting") { db in
-            let sentinel = Paths.pauseSentinel
-            if FileManager.default.fileExists(atPath: sentinel.path) {
-                try db.execute(
-                    sql: "INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
-                    arguments: ["paused", "1"]
-                )
-                try? FileManager.default.removeItem(at: sentinel)
-            }
-        }
-
-        // v5 — add ``pending_op`` to track in-flight destructive
-        // operations across daemon restarts. Set before a cloud
-        // delete / rename begins, cleared on success. The startup
-        // reconciler reads this column to resume any operation
-        // that was interrupted (process killed mid-cloud-call,
-        // network hiccup, etc.). See the rename / delete
-        // propagation feature flag in ``Config.deletion``.
-        migrator.registerMigration("v5_pending_op") { db in
-            if try !columnExists(db, table: "documents", column: "pending_op") {
-                try db.execute(
-                    sql: "ALTER TABLE documents ADD COLUMN pending_op TEXT"
-                )
-            }
-        }
-
-        // v6 — drop ``title``. The column was a denormalized cache of
-        // "what is this doc called" with two authoritative sources
-        // (local stem, cloud rmdoc.visibleName) and a write-amplification
-        // bug: ``renameRemote`` / ``renameOnLocal`` updated paths but
-        // not ``title``, so retried pushes after a local rename packed
-        // the rmdoc under the stale stem and the cloud rejected with
-        // HTTP 400 (UUID/name mismatch). Killing the field eliminates
-        // the bug class — push now reads the local stem directly. Pull
-        // ignores ``rmdoc.visibleName`` because the local filename is
-        // the WYSIWYG source of truth (v0.2.27+ filenames sync both
-        // ways). SQLite ``DROP COLUMN`` lands in 3.35 (Mar 2021); we
-        // require macOS 13+ which ships 3.39+.
-        migrator.registerMigration("v6_drop_documents_title") { db in
-            if try columnExists(db, table: "documents", column: "title") {
-                try db.execute(sql: "ALTER TABLE documents DROP COLUMN title")
-            }
-        }
-
-        // v7 — track the text actually written to the tablet separately
-        // from the source Markdown hash. This lets pulls preserve the exact
-        // local source bytes when the tablet-side spacing-normalized text has
-        // not changed.
-        migrator.registerMigration("v7_tablet_hash") { db in
-            if try !columnExists(db, table: "documents", column: "last_synced_tablet_hash") {
-                try db.execute(
-                    sql: "ALTER TABLE documents ADD COLUMN last_synced_tablet_hash TEXT"
-                )
-            }
-        }
-
-        // v8 — durable pull-side remote snapshot cache. This lets an
-        // explicit pull skip rmapi downloads for remote documents whose
-        // stat-derived fingerprint is already rendered and verified in
-        // the cache. It is separate from documents so a staged pull can
-        // be cached without marking the remote content as accepted.
-        migrator.registerMigration("v8_remote_snapshots") { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS remote_snapshots (
-                    doc_id              TEXT PRIMARY KEY,
-                    remote_path         TEXT NOT NULL,
-                    remote_modified     TEXT,
-                    remote_version      INTEGER NOT NULL,
-                    remote_fingerprint  TEXT NOT NULL,
-                    source_hash         TEXT NOT NULL,
-                    tablet_hash         TEXT,
-                    page_ids            TEXT NOT NULL,
-                    cached_source_path  TEXT NOT NULL,
-                    archive_hash        TEXT,
-                    fetched_at          TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_remote_snapshots_fingerprint
-                    ON remote_snapshots(remote_fingerprint);
-                CREATE INDEX IF NOT EXISTS idx_remote_snapshots_path
-                    ON remote_snapshots(remote_path);
-                """)
-        }
-
-        // v9 — durable auto-push operation ledger. Auto-push records an
-        // operation before upload, then updates it after verification. On
-        // restart, interrupted rows are surfaced for manual verification
-        // instead of being blindly replayed.
-        migrator.registerMigration("v9_auto_push_ops") { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS auto_push_ops (
-                    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-                    created_at               TEXT NOT NULL,
-                    updated_at               TEXT NOT NULL,
-                    state                    TEXT NOT NULL,
-                    path                     TEXT NOT NULL,
-                    doc_id                   TEXT,
-                    local_hash               TEXT,
-                    baseline_remote_modified TEXT,
-                    attempt_count            INTEGER NOT NULL DEFAULT 0,
-                    reason                   TEXT,
-                    remote_modified          TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_auto_push_ops_state
-                    ON auto_push_ops(state);
-                CREATE INDEX IF NOT EXISTS idx_auto_push_ops_path
-                    ON auto_push_ops(path);
-                """)
-        }
-
-        try migrator.migrate(writer)
-
-        // Keep the legacy ``schema_version`` row in sync for the CLI
-        // fallback and for anything still talking to the Python schema.
-        try writer.write { db in
-            try db.execute(sql: "DELETE FROM schema_version")
-            try db.execute(
-                sql: "INSERT OR REPLACE INTO schema_version(version) VALUES (?)",
-                arguments: [currentSchemaVersion]
-            )
         }
     }
 
-    static let currentSchemaVersion = 9
+    static func migrate(_ writer: any DatabaseWriter) throws {
+        try writer.write { db in
+            if try hasAnyStateTables(db) {
+                guard try isCurrentSchema(db) else {
+                    throw SchemaError.reinstallRequired("schema does not match current v\(currentSchemaVersion)")
+                }
+                return
+            }
+            try createCurrentSchema(db)
+        }
+    }
 
-    private static func columnExists(
-        _ db: Database, table: String, column: String
-    ) throws -> Bool {
-        let rows = try Row.fetchAll(
-            db, sql: "PRAGMA table_info(\(table))"
+    private static func createCurrentSchema(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY
+            );
+            INSERT INTO schema_version(version) VALUES (\(currentSchemaVersion));
+
+            CREATE TABLE documents (
+                doc_id                  TEXT PRIMARY KEY,
+                parent_id               TEXT NOT NULL,
+                doc_type                TEXT NOT NULL,
+                remote_path             TEXT NOT NULL,
+                local_path              TEXT NOT NULL,
+                remote_version          INTEGER NOT NULL,
+                remote_modified         TEXT,
+                last_synced_md_hash     TEXT,
+                last_synced_tablet_hash TEXT,
+                last_pull_at            TEXT,
+                last_push_at            TEXT,
+                conflict_state          TEXT,
+                error_state             TEXT,
+                page_ids                TEXT
+            );
+            CREATE INDEX idx_parent      ON documents(parent_id);
+            CREATE INDEX idx_local_path  ON documents(local_path);
+            CREATE INDEX idx_remote_path ON documents(remote_path);
+
+            CREATE TABLE sync_log (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts      TEXT NOT NULL,
+                level   TEXT NOT NULL,
+                doc_id  TEXT,
+                message TEXT NOT NULL
+            );
+
+            CREATE TABLE settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE remote_snapshots (
+                doc_id              TEXT PRIMARY KEY,
+                remote_path         TEXT NOT NULL,
+                remote_modified     TEXT,
+                remote_version      INTEGER NOT NULL,
+                remote_fingerprint  TEXT NOT NULL,
+                source_hash         TEXT NOT NULL,
+                tablet_hash         TEXT,
+                page_ids            TEXT NOT NULL,
+                cached_source_path  TEXT NOT NULL,
+                archive_hash        TEXT,
+                fetched_at          TEXT NOT NULL
+            );
+            CREATE INDEX idx_remote_snapshots_fingerprint
+                ON remote_snapshots(remote_fingerprint);
+            CREATE INDEX idx_remote_snapshots_path
+                ON remote_snapshots(remote_path);
+
+            CREATE TABLE auto_push_ops (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at               TEXT NOT NULL,
+                updated_at               TEXT NOT NULL,
+                state                    TEXT NOT NULL,
+                path                     TEXT NOT NULL,
+                doc_id                   TEXT,
+                local_hash               TEXT,
+                baseline_remote_modified TEXT,
+                attempt_count            INTEGER NOT NULL DEFAULT 0,
+                reason                   TEXT,
+                remote_modified          TEXT
+            );
+            CREATE INDEX idx_auto_push_ops_state
+                ON auto_push_ops(state);
+            CREATE INDEX idx_auto_push_ops_path
+                ON auto_push_ops(path);
+            """)
+    }
+
+    private static func hasAnyStateTables(_ db: Database) throws -> Bool {
+        let names = try String.fetchAll(
+            db,
+            sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         )
-        return rows.contains { (row: Row) in (row["name"] as String?) == column }
+        return !names.isEmpty
+    }
+
+    private static func isCurrentSchema(_ db: Database) throws -> Bool {
+        guard try tableExists(db, "schema_version"),
+              try tableExists(db, "documents"),
+              try tableExists(db, "settings"),
+              try tableExists(db, "sync_log"),
+              try tableExists(db, "remote_snapshots"),
+              try tableExists(db, "auto_push_ops")
+        else { return false }
+
+        let version = try Int.fetchOne(db, sql: "SELECT version FROM schema_version")
+        guard version == currentSchemaVersion else { return false }
+
+        let requiredDocumentColumns: Set<String> = [
+            "doc_id", "parent_id", "doc_type", "remote_path", "local_path",
+            "remote_version", "remote_modified", "last_synced_md_hash",
+            "last_synced_tablet_hash", "last_pull_at", "last_push_at",
+            "conflict_state", "error_state", "page_ids",
+        ]
+        let documentColumns = try columns(db, table: "documents")
+        guard documentColumns == requiredDocumentColumns else { return false }
+
+        let remoteSnapshotColumns: Set<String> = [
+            "doc_id", "remote_path", "remote_modified", "remote_version",
+            "remote_fingerprint", "source_hash", "tablet_hash", "page_ids",
+            "cached_source_path", "archive_hash", "fetched_at",
+        ]
+        guard try columns(db, table: "remote_snapshots") == remoteSnapshotColumns else {
+            return false
+        }
+
+        let autoPushColumns: Set<String> = [
+            "id", "created_at", "updated_at", "state", "path", "doc_id",
+            "local_hash", "baseline_remote_modified", "attempt_count",
+            "reason", "remote_modified",
+        ]
+        return try columns(db, table: "auto_push_ops") == autoPushColumns
+    }
+
+    private static func tableExists(_ db: Database, _ table: String) throws -> Bool {
+        try String.fetchOne(
+            db,
+            sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            arguments: [table]
+        ) != nil
+    }
+
+    private static func columns(_ db: Database, table: String) throws -> Set<String> {
+        let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
+        return Set(rows.compactMap { (row: Row) in row["name"] as String? })
     }
 }

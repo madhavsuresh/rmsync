@@ -16,14 +16,14 @@ struct RelocateTests {
             docID: "doc-1",
             parentID: "",
             docType: "DocumentType",
-            remotePath: "/Writing/Doc 1",
+            remotePath: "/sync/notes/Doc 1",
             localPath: old.appendingPathComponent("Doc 1.md").path
         ))
         try await state.upsert(Document(
             docID: "doc-2",
             parentID: "",
             docType: "DocumentType",
-            remotePath: "/Writing/sub/Doc 2",
+            remotePath: "/sync/notes/sub/Doc 2",
             localPath: old.appendingPathComponent("sub/Doc 2.md").path
         ))
 
@@ -43,7 +43,7 @@ struct RelocateTests {
 
     @Test("config rewrite preserves surrounding structure")
     func configRewriteKeepsOtherKeys() throws {
-        let tmp = FileManager.default.temporaryDirectory
+        let tmp = try scratchRoot()
             .appendingPathComponent("rmsync-relocate-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -52,9 +52,7 @@ struct RelocateTests {
         try """
             # top comment
             sync_dir      = "/Users/alice/old-dir"
-            remote_folder = "Writing"
-
-            worker_pool_size = 3
+            remote_folder = "sync/notes"
 
             [log]
             level = "INFO"
@@ -68,8 +66,7 @@ struct RelocateTests {
 
         #expect(rewritten.contains("sync_dir      = \"/Users/alice/new-dir\""))
         #expect(rewritten.contains("# top comment"))
-        #expect(rewritten.contains("remote_folder = \"Writing\""))
-        #expect(rewritten.contains("worker_pool_size = 3"))
+        #expect(rewritten.contains("remote_folder = \"sync/notes\""))
         #expect(rewritten.contains("[log]"))
         #expect(rewritten.contains("level = \"INFO\""))
     }
@@ -77,7 +74,7 @@ struct RelocateTests {
     // MARK: - helpers
 
     private func setUp() async throws -> (tmp: URL, state: State, old: URL, new: URL) {
-        let tmp = FileManager.default.temporaryDirectory
+        let tmp = try scratchRoot()
             .appendingPathComponent("rmsync-relocate-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
@@ -87,5 +84,14 @@ struct RelocateTests {
 
         let state = try State(path: tmp.appendingPathComponent("state.db"))
         return (tmp, state, old, new)
+    }
+
+    private func scratchRoot() throws -> URL {
+        let raw = ProcessInfo.processInfo.environment["RMSYNC_TEST_TMP"]
+            ?? ProcessInfo.processInfo.environment["RM_SYNC_TMP_DIR"]
+            ?? FileManager.default.temporaryDirectory.path
+        let url = URL(fileURLWithPath: raw, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 }

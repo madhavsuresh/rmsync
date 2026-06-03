@@ -941,6 +941,18 @@ enum ExplicitSync {
             throw SyncError.staleLocal(entry.relativePath)
         }
 
+        if FileManager.default.fileExists(atPath: localURL.path),
+           let current = try? String(contentsOf: localURL, encoding: .utf8) {
+            let stateDir = await state.storageDir()
+            recordSnapshot(
+                content: current,
+                docID: entry.docID,
+                cause: Snapshots.Cause.pullOverwrite,
+                cfg: cfg,
+                stateDir: stateDir
+            )
+        }
+
         let text = try String(contentsOf: stagedURL, encoding: .utf8)
         try PathUtilities.atomicWriteText(text, to: localURL)
         Xattrs.apply(
@@ -974,8 +986,7 @@ enum ExplicitSync {
             lastPushAt: existing?.lastPushAt,
             conflictState: nil,
             errorState: nil,
-            pageIDs: entry.pageIDs,
-            pendingOp: nil
+            pageIDs: entry.pageIDs
         )
         try await state.upsert(doc)
         try await state.markPulled(
@@ -1020,7 +1031,7 @@ enum ExplicitSync {
         guard PathUtilities.resolvedRelativePath(from: cfg.syncDir, to: localURL) != nil else {
             throw SyncError.invalidPath(localURL.path)
         }
-        if WatcherFilter.shouldIgnore(localURL.path, root: cfg.syncDir, mode: .markdown) {
+        if WatcherFilter.shouldIgnore(localURL.path, root: cfg.syncDir) {
             return .skipped
         }
 
@@ -1111,6 +1122,14 @@ enum ExplicitSync {
             remoteParent: derivation.parentPath,
             update: stored != nil || remoteOverride != nil
         )
+        let stateDir = await state.storageDir()
+        recordSnapshot(
+            content: text,
+            docID: targetDocID,
+            cause: Snapshots.Cause.push,
+            cfg: cfg,
+            stateDir: stateDir
+        )
 
         let stat: StatResult?
         if mode == .auto {
@@ -1141,8 +1160,7 @@ enum ExplicitSync {
             lastPushAt: ISO8601.now(),
             conflictState: nil,
             errorState: nil,
-            pageIDs: pageIDs,
-            pendingOp: nil
+            pageIDs: pageIDs
         ))
         try await state.markPushed(
             docID: targetDocID,
@@ -1165,6 +1183,33 @@ enum ExplicitSync {
             )
         }
         return .uploaded
+    }
+
+    private static func recordSnapshot(
+        content: String,
+        docID: String,
+        cause: String,
+        cfg: Config,
+        stateDir: URL
+    ) {
+        do {
+            _ = try Snapshots.take(
+                content: content,
+                docID: docID,
+                cause: cause,
+                in: stateDir
+            )
+            _ = try Snapshots.prune(
+                docID: docID,
+                keep: cfg.backupSnapshotsToKeep,
+                in: stateDir
+            )
+        } catch {
+            Logger.shared.warn(
+                "snapshot write failed",
+                meta: ["doc_id": docID, "cause": cause, "error": "\(error)"]
+            )
+        }
     }
 
     private static func pushDelete(
@@ -1230,8 +1275,7 @@ enum ExplicitSync {
             lastPushAt: existing?.lastPushAt,
             conflictState: nil,
             errorState: nil,
-            pageIDs: item.pageIDs,
-            pendingOp: nil
+            pageIDs: item.pageIDs
         ))
     }
 
@@ -1262,8 +1306,7 @@ enum ExplicitSync {
             lastPushAt: existing?.lastPushAt,
             conflictState: nil,
             errorState: nil,
-            pageIDs: item.pageIDs,
-            pendingOp: nil
+            pageIDs: item.pageIDs
         ))
     }
 
@@ -1748,7 +1791,7 @@ enum ExplicitSync {
             options: []
         ) else { return urls }
         for case let url as URL in enumerator {
-            if WatcherFilter.shouldIgnore(url.path, root: cfg.syncDir, mode: .markdown) {
+            if WatcherFilter.shouldIgnore(url.path, root: cfg.syncDir) {
                 continue
             }
             urls.append(url)

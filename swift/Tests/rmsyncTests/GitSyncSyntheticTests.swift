@@ -23,7 +23,7 @@ struct GitSyncSyntheticTests {
 
         let git = try await Git.open(at: repo)
         let head = try await git.headCommit()
-        let cfg = GitSync.RepoConfig(name: "source-preserve", syncRoot: ".", remoteRoot: "sync")
+        let cfg = GitSync.RepoConfig(name: "source-preserve", syncRoot: ".")
         let sync = try await GitSync.materializeSyncTree(git: git, commit: head, cfg: cfg)
         let out = try String(contentsOf: sync.appendingPathComponent("note.md"), encoding: .utf8)
         #expect(out == source)
@@ -63,7 +63,7 @@ struct GitSyncSyntheticTests {
 
         let git = try await Git.open(at: repo)
         let head = try await git.headCommit()
-        let cfg = GitSync.RepoConfig(name: "snapshot-tree", syncRoot: "docs", remoteRoot: "sync")
+        let cfg = GitSync.RepoConfig(name: "snapshot-tree", syncRoot: "docs")
         let tree = try await GitSync.createSnapshotTree(
             git: git,
             baseCommit: head,
@@ -101,7 +101,7 @@ struct GitSyncSyntheticTests {
                 stageEntry(kind: .modified, relativePath: "b.md", stagedPath: "files/b.md", repo: repo),
             ]
         )
-        let cfg = GitSync.RepoConfig(name: "snapshot-commit", syncRoot: ".", remoteRoot: "sync")
+        let cfg = GitSync.RepoConfig(name: "snapshot-commit", syncRoot: ".")
 
         let commit = try await GitSync.createSnapshotCommit(
             git: git,
@@ -126,7 +126,6 @@ struct GitSyncSyntheticTests {
             cwd: repo,
             name: nil,
             syncRoot: ".",
-            remoteRoot: GitSync.defaultRemoteRoot,
             ordinaryRemoteFolder: Config.defaultRemoteFolder,
             cloud: cloud
         )
@@ -136,6 +135,43 @@ struct GitSyncSyntheticTests {
         #expect(await cloud.createdPaths() == [
             "/sync", "/sync/git", "/sync/git/default-remote",
         ])
+    }
+
+    @Test("old repo config with remoteRoot is rejected")
+    func oldRemoteRootConfigRejected() async throws {
+        let repo = try await makeRepo("old-remote-root")
+        try write("base\n", to: repo.appendingPathComponent("base.md"))
+        try await commitAll(repo, "base")
+        let git = try await Git.open(at: repo)
+        let common = try await git.commonDir()
+        let config = GitSync.configURL(common: common)
+        try FileManager.default.createDirectory(
+            at: config.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try write(
+            """
+            {
+              "name": "old-remote-root",
+              "syncRoot": ".",
+              "remoteRoot": "Writing"
+            }
+            """,
+            to: config
+        )
+
+        do {
+            _ = try await GitSync.pull(cwd: repo, cloud: RecordingGitInitCloud())
+            Issue.record("old rmsync-git config with remoteRoot was accepted")
+        } catch let error as GitSync.Error {
+            switch error {
+            case .unsupportedOldConfig(let url, let key):
+                #expect(url.path == config.path)
+                #expect(key == "remoteRoot")
+            default:
+                Issue.record("unexpected GitSync error: \(error)")
+            }
+        }
     }
 
     @Test("git init refuses target nested below ordinary sync namespace")
@@ -149,7 +185,6 @@ struct GitSyncSyntheticTests {
                 cwd: repo,
                 name: "draft",
                 syncRoot: ".",
-                remoteRoot: GitSync.defaultRemoteRoot,
                 ordinaryRemoteFolder: "sync",
                 cloud: RecordingGitInitCloud()
             )
@@ -175,7 +210,6 @@ struct GitSyncSyntheticTests {
             cwd: repo,
             name: "draft",
             syncRoot: ".",
-            remoteRoot: GitSync.defaultRemoteRoot,
             ordinaryRemoteFolder: Config.defaultRemoteFolder,
             cloud: RecordingGitInitCloud()
         )

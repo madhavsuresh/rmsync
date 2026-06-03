@@ -31,9 +31,6 @@ struct GitSyncInitCmd: AsyncParsableCommand {
     @Option(name: .long, help: "Repository subdirectory to sync. Defaults to the repo root.")
     var path: String = "."
 
-    @Option(name: .long, help: "Cloud root folder. Defaults to sync/git.")
-    var remoteRoot: String = GitSync.defaultRemoteRoot
-
     func run() async throws {
         do {
             let ordinaryRemoteFolder = (try? Config.load().remoteFolder)
@@ -42,7 +39,6 @@ struct GitSyncInitCmd: AsyncParsableCommand {
                 cwd: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
                 name: name,
                 syncRoot: path,
-                remoteRoot: remoteRoot,
                 ordinaryRemoteFolder: ordinaryRemoteFolder
             )
             print("initialized:  \(result.name)")

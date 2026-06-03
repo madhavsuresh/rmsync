@@ -8,7 +8,7 @@ final class AutoPushService: @unchecked Sendable {
     private let cfg: Config
     private let state: State
     private let cloud: any CloudWriteClient
-    private let queue = JobQueue()
+    private let queue: AutoPushEventQueue
     private let fence: EchoFence
     private let engine: AutoPushEngine
     private var tasks: [Task<Void, Never>] = []
@@ -19,10 +19,16 @@ final class AutoPushService: @unchecked Sendable {
     private var watcher: INotifyWatcher?
     #endif
 
-    init(cfg: Config, state: State, cloud: any CloudWriteClient = Cloud()) {
+    init(
+        cfg: Config,
+        state: State,
+        cloud: any CloudWriteClient = Cloud(),
+        queue: AutoPushEventQueue = AutoPushEventQueue()
+    ) {
         self.cfg = cfg
         self.state = state
         self.cloud = cloud
+        self.queue = queue
         self.fence = EchoFence(windowSeconds: cfg.echoFenceSeconds)
         self.engine = AutoPushEngine(cfg: cfg, state: state, cloud: cloud)
     }
@@ -50,8 +56,7 @@ final class AutoPushService: @unchecked Sendable {
             syncDir: cfg.syncDir,
             queue: queue,
             fence: fence,
-            debounceSeconds: cfg.autoPush.debounceSeconds,
-            mode: .markdown
+            debounceSeconds: cfg.autoPush.debounceSeconds
         )
         self.watcher = watcher
         watcher.start()
@@ -60,8 +65,7 @@ final class AutoPushService: @unchecked Sendable {
             syncDir: cfg.syncDir,
             queue: queue,
             fence: fence,
-            debounceSeconds: cfg.autoPush.debounceSeconds,
-            mode: .markdown
+            debounceSeconds: cfg.autoPush.debounceSeconds
         )
         self.watcher = watcher
         watcher.start()
@@ -83,15 +87,8 @@ final class AutoPushService: @unchecked Sendable {
 
     private func consumeEvents() async {
         while !Task.isCancelled {
-            guard let job = await queue.dequeue(timeout: 1.0) else { continue }
-            if job.kind == .push {
-                await engine.enqueue(path: job.hint)
-            } else {
-                Logger.shared.debug(
-                    "auto-push ignored non-push watcher event",
-                    meta: ["kind": job.kind.rawValue, "path": job.hint]
-                )
-            }
+            guard let path = await queue.dequeue(timeout: 1.0) else { continue }
+            await engine.enqueue(path: path)
             await queue.taskDone()
         }
     }
@@ -188,7 +185,7 @@ actor AutoPushEngine {
 
     func enqueue(path: String) {
         let canonical = canonicalPath(path)
-        guard !WatcherFilter.shouldIgnore(canonical, root: cfg.syncDir, mode: .markdown) else {
+        guard !WatcherFilter.shouldIgnore(canonical, root: cfg.syncDir) else {
             return
         }
         if candidates[canonical] == nil {
@@ -436,7 +433,7 @@ actor AutoPushEngine {
     }
 
     private func sampleFile(path: String) throws -> FileSample {
-        guard !WatcherFilter.shouldIgnore(path, root: cfg.syncDir, mode: .markdown) else {
+        guard !WatcherFilter.shouldIgnore(path, root: cfg.syncDir) else {
             throw Refusal.ignoredPath
         }
         let url = URL(fileURLWithPath: path)

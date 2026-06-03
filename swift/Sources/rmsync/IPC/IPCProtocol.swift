@@ -24,6 +24,18 @@ enum IPC {
         var updatedAt: String
         var pid: Int
         var version: String
+        var autoPushEnabled: Bool
+        var autoPushQueued: Int
+        var autoPushUploading: Int
+        var autoPushSucceeded: Int
+        var autoPushSkipped: Int
+        var autoPushRefused: Int
+        var autoPushFailed: Int
+        var autoPushLastSucceededAt: String?
+        var pullState: String
+        var pullChanges: Int
+        var pullCheckedAt: String?
+        var pullError: String?
         /// Diagnostic for *why* pushes are failing, populated by
         /// ``CloudHealthProbe`` when the daemon hits its first
         /// ``rmapi put failed`` since startup. Values:
@@ -51,6 +63,18 @@ enum IPC {
             case updatedAt = "updated_at"
             case pid
             case version
+            case autoPushEnabled = "auto_push_enabled"
+            case autoPushQueued = "auto_push_queued"
+            case autoPushUploading = "auto_push_uploading"
+            case autoPushSucceeded = "auto_push_succeeded"
+            case autoPushSkipped = "auto_push_skipped"
+            case autoPushRefused = "auto_push_refused"
+            case autoPushFailed = "auto_push_failed"
+            case autoPushLastSucceededAt = "auto_push_last_succeeded_at"
+            case pullState = "pull_state"
+            case pullChanges = "pull_changes"
+            case pullCheckedAt = "pull_checked_at"
+            case pullError = "pull_error"
             case cloudHealth = "cloud_health"
             case cloudHealthDetail = "cloud_health_detail"
         }
@@ -60,6 +84,11 @@ enum IPC {
             conflicts: 0, errors: 0, queueDepth: 0, lastPullAt: nil,
             lastPushAt: nil, lastError: nil, paused: false,
             updatedAt: "", pid: 0, version: "",
+            autoPushEnabled: false, autoPushQueued: 0, autoPushUploading: 0,
+            autoPushSucceeded: 0, autoPushSkipped: 0, autoPushRefused: 0,
+            autoPushFailed: 0, autoPushLastSucceededAt: nil,
+            pullState: "unknown", pullChanges: 0, pullCheckedAt: nil,
+            pullError: nil,
             cloudHealth: "", cloudHealthDetail: nil
         )
     }

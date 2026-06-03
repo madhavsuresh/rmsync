@@ -19,7 +19,7 @@ struct ForcePushApplyMoveTests {
             items: ExplicitSync.forcePushPlanItems(
                 remoteEntries: [Self.entry("old.md", hash: hash)],
                 localFiles: [Self.localFile("new.md", url: local, hash: hash)],
-                remoteFolder: "Writing",
+                remoteFolder: Config.defaultRemoteFolder,
                 renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
             )
         )
@@ -27,7 +27,7 @@ struct ForcePushApplyMoveTests {
 
         let result = try await ExplicitSync.applyForcePush(
             plan,
-            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
+            cfg: Config(syncDir: dir, remoteFolder: Config.defaultRemoteFolder),
             state: state,
             cloud: cloud
         )
@@ -37,10 +37,13 @@ struct ForcePushApplyMoveTests {
         #expect(result.overwritten == 0)
         #expect(result.deleted == 0)
         #expect(result.refused.isEmpty)
-        #expect(await cloud.operations() == ["mv:/Writing/old->/Writing/new"])
+        let operations = await cloud.operations()
+        #expect(operations.contains("mv:/sync/notes/old->/sync/notes/new"))
+        #expect(!operations.contains { $0.hasPrefix("put:") })
+        #expect(!operations.contains { $0.hasPrefix("rm:") })
 
         let moved = try await state.get(docID: "doc-old.md")
-        #expect(moved?.remotePath == "/Writing/new")
+        #expect(moved?.remotePath == "/sync/notes/new")
         #expect(moved?.localPath == local.path)
     }
 
@@ -57,7 +60,7 @@ struct ForcePushApplyMoveTests {
             items: ExplicitSync.forcePushPlanItems(
                 remoteEntries: [Self.entry("old.md", hash: PathUtilities.sha256("remote\n"))],
                 localFiles: [Self.localFile("new.md", url: local, hash: PathUtilities.sha256("local\n"))],
-                remoteFolder: "Writing",
+                remoteFolder: Config.defaultRemoteFolder,
                 renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
             )
         )
@@ -65,7 +68,7 @@ struct ForcePushApplyMoveTests {
 
         let result = try await ExplicitSync.applyForcePush(
             plan,
-            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
+            cfg: Config(syncDir: dir, remoteFolder: Config.defaultRemoteFolder),
             state: state,
             cloud: cloud
         )
@@ -74,8 +77,13 @@ struct ForcePushApplyMoveTests {
         #expect(result.overwritten == 1)
         #expect(result.refused.isEmpty)
         let operations = await cloud.operations()
-        #expect(operations.first == "mv:/Writing/old->/Writing/new")
-        #expect(operations.contains("put:/Writing:update=true"))
+        #expect(operations.contains("put:/sync/notes:update=true"))
+        if let moveIndex = operations.firstIndex(of: "mv:/sync/notes/old->/sync/notes/new"),
+           let putIndex = operations.firstIndex(of: "put:/sync/notes:update=true") {
+            #expect(moveIndex < putIndex)
+        } else {
+            Issue.record("missing expected move or put operation: \(operations)")
+        }
         #expect(!operations.contains { $0.hasPrefix("rm:") })
     }
 
@@ -92,29 +100,29 @@ struct ForcePushApplyMoveTests {
             items: ExplicitSync.forcePushPlanItems(
                 remoteEntries: [Self.entry("old.md", hash: PathUtilities.sha256("old\n"))],
                 localFiles: [Self.localFile("new.md", url: local, hash: PathUtilities.sha256("new\n"))],
-                remoteFolder: "Writing"
+                remoteFolder: Config.defaultRemoteFolder
             )
         )
         let cloud = RecordingForcePushCloud()
 
         _ = try await ExplicitSync.applyForcePush(
             plan,
-            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
+            cfg: Config(syncDir: dir, remoteFolder: Config.defaultRemoteFolder),
             state: state,
             cloud: cloud
         )
 
         let operations = await cloud.operations()
         #expect(!operations.contains { $0.hasPrefix("mv:") })
-        #expect(operations.contains("rm:/Writing/old"))
-        #expect(operations.contains("put:/Writing:update=false"))
+        #expect(operations.contains("rm:/sync/notes/old"))
+        #expect(operations.contains("put:/sync/notes:update=false"))
     }
 
     private static func document(localPath: String) -> Document {
         Document(
             docID: "doc-old.md",
             docType: "DocumentType",
-            remotePath: "/Writing/old",
+            remotePath: "/sync/notes/old",
             localPath: localPath,
             remoteVersion: 7,
             remoteModified: "2026-06-03T00:00:00Z",
@@ -133,7 +141,7 @@ struct ForcePushApplyMoveTests {
         return ExplicitSync.Entry(
             kind: .modified,
             docID: "doc-\(rel)",
-            remotePath: "/Writing/\(stem)",
+            remotePath: "/sync/notes/\(stem)",
             localPath: "/sync/\(rel)",
             relativePath: rel,
             stagedPath: "files/\(rel)",
