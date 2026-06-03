@@ -147,7 +147,7 @@ class Rmsync < Formula
       (Your reMarkable cloud auth at ~/.config/rmapi survives this.)
 
       rmsync ships a sync daemon and a separate menu bar app. Neither
-      is started by `brew install` — you finish setup in three steps:
+      is started by `brew install`; finish setup with:
 
         1. Authenticate rmapi (one-time per Mac):
              rmapi
@@ -157,17 +157,29 @@ class Rmsync < Formula
         2. Install and boot both launchd agents:
              rmsync-install-agents
 
-        3. Verify:
+        3. Initialize the configured sync folder:
+             rmsync init
+
+        4. Verify and inspect the live interface:
              rmsync doctor
              rmsync status
 
       Current releases use explicit sync. The daemon keeps status,
-      menu bar, dashboard, and IPC online, but it does not poll the
-      cloud or watch local files for background mutation. Sync with:
+      menu bar, dashboard, IPC, and a read-only pull availability
+      probe online, but it does not pull, reconcile, or delete in the
+      background. Sync with:
           rmsync pull
           rmsync diff [path]
           rmsync accept <path>  # or: rmsync accept --all
           rmsync push [path ...]
+      Optional safe auto-push can watch local Markdown edits only if
+      you enable it in config; it never pulls or propagates deletes.
+
+      Interface map:
+          sync folder       edit local Markdown (default: ~/rmsync-notes)
+          menu bar          status, pull availability, conflicts, pause/resume
+          CLI               all sync mutations and diagnostics
+          web dashboard     optional browser status and pause/resume
 
       The default sync dir is ~/rmsync-notes. Move it anywhere
       (iCloud, Dropbox, a git repo) with:
@@ -288,7 +300,7 @@ class Rmsync < Formula
       boot com.user.rmsync.menubar
 
       echo "rmsync agents installed and started."
-      echo "Next: rmsync doctor"
+      echo "Next: rmsync init && rmsync doctor && rmsync status"
     SH
   end
 

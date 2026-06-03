@@ -10,8 +10,8 @@
 #      one-time auth lands in /config/rmapi/rmapi.conf, not a
 #      per-run ephemeral path that vanishes on container restart).
 #   4. Print a clearly-bordered first-run banner if no rmapi
-#      auth token exists yet, telling the user exactly what
-#      ``docker exec`` command to run next. Suppress the banner
+#      auth token exists yet, telling the user exactly which
+#      auth/init/verify commands to run next. Suppress the banner
 #      after auth is in place.
 #   5. Exec the daemon (or whatever subcommand was passed). Using
 #      exec means tini directly supervises the rmsync process so
@@ -81,7 +81,8 @@ if [ ! -f "$CONFIG_DIR/rmapi/rmapi.conf" ] && \
 ║  paste it back into the rmapi prompt. Auth survives container   ║
 ║  restarts (lives in /config/rmapi/rmapi.conf on the volume).    ║
 ║                                                                  ║
-║  Verify: docker exec rmsync rmsync doctor                       ║
+║  Initialize: docker exec rmsync rmsync init                     ║
+║  Verify:     docker exec rmsync rmsync doctor                   ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 BANNER

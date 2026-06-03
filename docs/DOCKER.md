@@ -29,13 +29,14 @@ That script:
 3. Writes a `docker-compose.yml` with **your host user's UID:GID
    baked in** so synced files belong to you, not root.
 4. `docker compose pull && up -d`.
-5. Prints exactly the next command to run for one-time rmapi auth.
+5. Prints the exact auth, init, and verify commands to run next.
 
 After it finishes, follow the printed instructions:
 
 ```sh
 cd rmsync
 docker exec -it rmsync rmapi              # interactive auth
+docker exec rmsync rmsync init            # create /sync/notes if needed
 docker exec rmsync rmsync doctor          # verify
 ```
 
@@ -63,6 +64,7 @@ sed -i "s|# user: \"1000:1000\"|user: \"$(id -u):$(id -g)\"|" docker-compose.yml
 
 docker compose up -d
 docker exec -it rmsync rmapi              # interactive auth
+docker exec rmsync rmsync init
 docker exec rmsync rmsync doctor
 ```
 

@@ -332,13 +332,62 @@ The installed `rmsync-git` wrapper is equivalent to `rmsync git`, so
 
 ### Homebrew (recommended)
 
+First install:
+
 ```sh
 brew install madhavsuresh/rmsync/rmsync
-rmapi                           # paste code from remarkable.com/device/desktop/connect
-rmsync-install-agents           # seeds default config + boots daemon + menu bar
-rmsync doctor                   # should be all ✓
-rmsync-git --help               # optional wrapper for `rmsync git`
+rmapi
+rmsync-install-agents
+rmsync init
+rmsync doctor
+rmsync status
 ```
+
+What each step does:
+
+- `brew install` installs the `rmsync` CLI, the `rmsync-menubar`
+  app, `rmapi`, the `rmsync-git` wrapper, and the launchd helper
+  commands.
+- `rmapi` links this Mac to your reMarkable cloud account. It asks
+  for the 8-character pairing code from
+  `https://my.remarkable.com/device/desktop/connect`. You do this
+  once per Mac; the session is stored under `~/.config/rmapi/`.
+- `rmsync-install-agents` writes `~/.config/rmsync/config.toml` if
+  it does not exist, creates the state/log/sync directories, and
+  starts two launchd agents: the daemon and the menu bar app.
+- `rmsync init` verifies local setup and creates the supported
+  reMarkable cloud folder, `/sync/notes`, if needed.
+- `rmsync doctor` should print all checkmarks. If a line fails, fix
+  that line before trying to sync.
+- `rmsync status` confirms the daemon is reachable and shows the
+  current sync folder, remote folder, tracked docs, conflicts,
+  parked errors, last pull/push, and pull availability probe.
+
+After install, the interface has four parts:
+
+| Surface | Use it for | Important boundary |
+|---|---|---|
+| Sync folder | Edit local Markdown files. Default: `~/rmsync-notes`. | Files do not reach the tablet until you push, unless you explicitly enable safe auto-push. |
+| Menu bar | Glanceable state, pull availability, conflicts, parked errors, pause/resume, restart, logs, and config. | It is a status/control surface, not a file browser and not the main sync workflow. |
+| CLI | Actual sync commands: `pull`, `diff`, `accept`, `push`, `force-push`, `doctor`, `status`. | Cloud/tablet changes never overwrite local files until you accept them. |
+| Web dashboard | Optional browser status page with recent docs, conflicts, and pause/resume. | Pull, accept, push, and force-push stay CLI-only so sync intent is explicit. |
+
+First safe sync loop:
+
+```sh
+# Mac -> tablet/cloud
+printf "hello from rmsync\n" > ~/rmsync-notes/first-note.md
+rmsync push first-note.md
+
+# tablet/cloud -> Mac
+rmsync pull
+rmsync diff
+rmsync accept <path-from-diff>
+```
+
+The daemon keeps status, IPC, menu bar, and the optional dashboard
+online. It does not silently pull cloud changes, reconcile conflicts,
+or propagate deletes in the background.
 
 `brew upgrade rmsync` from then on for new versions.
 
@@ -360,7 +409,8 @@ If you don't have a Mac, run rmsync as a daemon container on any
 Linux host. No menubar, but everything else works the same.
 **One-liner** that handles everything — checks docker, makes the
 volume dirs, writes a compose file with your UID baked in, pulls
-the image, starts the container, and prints the auth command:
+the image, starts the container, and prints the auth/init/verify
+commands:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/madhavsuresh/rmsync/main/scripts/docker-quickstart.sh | sh
@@ -371,6 +421,7 @@ Then:
 ```sh
 cd rmsync
 docker exec -it rmsync rmapi   # one-time reMarkable auth (interactive)
+docker exec rmsync rmsync init
 docker exec rmsync rmsync doctor
 ```
 
@@ -399,6 +450,7 @@ Three interactive prompts — all safe to hit `y`:
 Then:
 
 ```sh
+rmsync init      # create local dir + /sync/notes if needed
 rmsync doctor    # verify all 10 checks pass
 rmsync status    # see what the daemon is doing
 rmsync-git --help # optional wrapper for `rmsync git`
@@ -407,8 +459,10 @@ rmsync-git --help # optional wrapper for `rmsync git`
 Edit files under your sync dir (`~/rmsync-notes` by default), then
 run `rmsync push` when you want them on the tablet. Write on the
 tablet, let it sync to the cloud, then run `rmsync pull`, `rmsync diff`,
-and `rmsync accept` to bring selected changes local. The menu bar icon
-tells you the daemon/status state at a glance.
+and `rmsync accept` to bring selected changes local. The same interface
+model from the Homebrew section applies: sync folder for files, menu
+bar for status/control, CLI for sync mutations, optional web dashboard
+for browser status.
 
 **For everything else:** [`docs/USAGE.md`](docs/USAGE.md) has the full
 operational guide — daily commands, "how do I…" recipes, config

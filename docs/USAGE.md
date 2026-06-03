@@ -7,12 +7,13 @@ the first time; skip to whichever section matters after that.
 
 ## What's installed right now
 
-Two launchd agents, both running under your user (no root, no login password):
+On macOS, rmsync installs two launchd agents. Both run under your
+user account; no root daemon and no login password prompt.
 
-| Label | What it is | Program |
+| Label | What it is | Program path |
 |---|---|---|
-| `com.user.rmsync` | The sync daemon | `~/.local/bin/rmsync daemon` |
-| `com.user.rmsync.menubar` | The menu bar app | `~/code/rmsync/swift/.build/release/rmsync-menubar` |
+| `com.user.rmsync` | The sync daemon | `rmsync daemon`; exact binary path is in the plist |
+| `com.user.rmsync.menubar` | The menu bar app | `rmsync-menubar`; exact binary path is in the plist |
 
 Their plists live at:
 
@@ -21,8 +22,10 @@ Their plists live at:
 ~/Library/LaunchAgents/com.user.rmsync.menubar.plist
 ```
 
-The CLI binary is on your PATH as `rmsync` (symlinked from
-`~/.local/bin/rmsync` to the release build under the repo).
+Homebrew installs the CLI on your PATH as `rmsync`. A source install
+symlinks `~/.local/bin/rmsync` to the Swift build in the repo. In both
+cases, `rmsync status` is the fastest way to confirm the running daemon
+and CLI can talk to each other.
 
 Everything else the daemon needs:
 
@@ -32,14 +35,35 @@ Everything else the daemon needs:
 ~/Library/Application Support/rmsync/remote-cache/     # rendered pull snapshot cache
 ~/Library/Application Support/rmsync/ipc.sock          # live IPC socket
 ~/Library/Application Support/rmsync/status.json       # slow-cadence snapshot
+~/Library/Application Support/rmsync/web-token         # dashboard token, if web UI is enabled
 ~/Library/Logs/rmsync/stderr.log                       # structured daemon log
 ~/Library/Logs/rmsync/stdout.log                       # usually empty under Swift
 ~/Library/Logs/rmsync/menubar.log                      # menu bar log
-~/Library/CloudStorage/Dropbox/reMarkable/              # your sync dir (Dropbox today)
+~/rmsync-notes/                                        # default sync dir
 ```
 
 The agents start automatically at login and restart on crash.
 Set `RM_SYNC_CACHE_DIR` to move the pull snapshot cache somewhere else.
+
+### First-time orientation
+
+Run this after installing and authenticating `rmapi`:
+
+```sh
+rmsync-install-agents   # Homebrew only; source install runs this logic in ./install.sh
+rmsync init             # create local sync dir + /sync/notes cloud folder
+rmsync doctor           # verify the install
+rmsync status           # inspect the live daemon
+```
+
+The interface is deliberately split:
+
+| Surface | Use it for | Boundary |
+|---|---|---|
+| Sync folder | Local Markdown files. Default: `~/rmsync-notes`. | Nothing uploads until `rmsync push`, unless safe auto-push is enabled. |
+| Menu bar | State, pull availability, conflicts, parked errors, pause/resume, restart, logs, config. | It does not run the main pull/accept/push workflow. |
+| CLI | `pull`, `diff`, `accept`, `push`, `force-push`, `doctor`, `status`. | Sync mutations are explicit and reviewable. |
+| Web dashboard | Optional browser status and pause/resume. | It keeps sync mutations in the CLI. |
 
 ### One prerequisite: rmapi must be authenticated
 
@@ -120,7 +144,7 @@ lifecycle (`start`, `stop`, `restart`, `relocate`) talks to `launchctl`.
 Edit it, then push when you are ready.
 
 ```sh
-echo "new line" >> ~/Library/CloudStorage/Dropbox/reMarkable/hello.md
+echo "new line" >> ~/rmsync-notes/hello.md
 rmsync push hello.md
 ```
 

@@ -304,6 +304,7 @@ if [[ "$NEEDS_AUTH" -eq 1 ]]; then
     yellow "         https://my.remarkable.com/device/desktop/connect"
     echo "  Then:"
 fi
+echo "  • $BIN_DIR/rmsync init     # create ~/rmsync-notes + /sync/notes if needed"
 echo "  • $BIN_DIR/rmsync doctor   # verify everything is green"
 echo "  • $BIN_DIR/rmsync status   # check the live daemon"
 echo "  • $BIN_DIR/rmsync pull     # stage cloud changes, then diff/accept"

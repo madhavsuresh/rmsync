@@ -14,7 +14,7 @@
 #   2. Creates ./rmsync (or the path you pass) with subdirs config/, state/, sync/.
 #   3. Drops in a docker-compose.yml whose volumes bind to those subdirs.
 #   4. Pulls the latest amd64 image from ghcr.io and starts the daemon.
-#   5. Prints exactly what command to run for the one-time rmapi auth.
+#   5. Prints the exact auth, init, and verify commands to run next.
 #
 # Idempotent: safe to re-run. If the directory already exists with a
 # config, the script preserves it and just brings the container up.
@@ -100,7 +100,7 @@ green "  container 'rmsync' is up"
 # ── next steps ───────────────────────────────────────────────────────
 bold ""
 bold "═══════════════════════════════════════════════════════════════"
-bold "  rmsync is running. Two more steps:"
+bold "  rmsync is running. Three more steps:"
 bold "═══════════════════════════════════════════════════════════════"
 bold ""
 bold "  1) Authenticate rmapi (one-time, interactive):"
@@ -110,7 +110,10 @@ echo ""
 echo "     The prompt will ask for an 8-character pairing code."
 echo "     Get one at: https://my.remarkable.com/device/desktop/connect"
 echo ""
-bold "  2) Verify everything works:"
+bold "  2) Initialize the configured cloud folder:"
+echo "       docker exec rmsync rmsync init"
+echo ""
+bold "  3) Verify everything works:"
 echo "       docker exec rmsync rmsync doctor"
 echo "       docker logs -f rmsync"
 bold ""
