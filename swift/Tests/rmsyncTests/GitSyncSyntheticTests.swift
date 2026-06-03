@@ -429,6 +429,12 @@ private actor RecordingGitInitCloud: CloudWriteClient {
         throw RecordingGitInitCloudError.unsupported
     }
 
+    func putRaw(localPath: URL, remoteFolder: String) async throws {
+        _ = localPath
+        _ = remoteFolder
+        throw RecordingGitInitCloudError.unsupported
+    }
+
     func mkdir(_ remotePath: String) async throws {
         existing.insert(remotePath)
         created.append(remotePath)

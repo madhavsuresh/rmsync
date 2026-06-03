@@ -403,6 +403,20 @@ private actor FakeCloud: CloudWriteClient {
         _ = update
     }
 
+    func putRaw(localPath: URL, remoteFolder: String) async throws {
+        putCount += 1
+        let remotePath = "\(remoteFolder)/\(localPath.deletingPathExtension().lastPathComponent)"
+        stats[remotePath] = StatResult(
+            id: stats[remotePath]?.id ?? UUID().uuidString.lowercased(),
+            name: localPath.deletingPathExtension().lastPathComponent,
+            version: 0,
+            modifiedClient: "after-put-raw-\(putCount)",
+            type: "DocumentType",
+            currentPage: 0,
+            parent: ""
+        )
+    }
+
     func mkdir(_ remotePath: String) async throws {
         _ = remotePath
     }
