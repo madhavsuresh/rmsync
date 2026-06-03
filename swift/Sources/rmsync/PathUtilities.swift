@@ -40,10 +40,10 @@ enum PathUtilities {
     }
 
     static func remoteToLocal(remotePath: String, syncDir: URL, remoteFolder: String) -> URL {
-        var parts = remotePath.split(separator: "/").map(String.init)
-        if let first = parts.first, first == remoteFolder {
-            parts.removeFirst()
-        }
+        let parts = stripRemoteFolderPrefix(
+            remotePath.split(separator: "/").map(String.init),
+            remoteFolder: remoteFolder
+        )
         let safe = parts.map(sanitizeSegment)
         if safe.isEmpty {
             return syncDir.appendingPathComponent("untitled.md")
@@ -112,10 +112,10 @@ enum PathUtilities {
     static func remoteToLocalDir(
         remotePath: String, syncDir: URL, remoteFolder: String
     ) -> URL {
-        var parts = remotePath.split(separator: "/").map(String.init)
-        if let first = parts.first, first == remoteFolder {
-            parts.removeFirst()
-        }
+        let parts = stripRemoteFolderPrefix(
+            remotePath.split(separator: "/").map(String.init),
+            remoteFolder: remoteFolder
+        )
         let safe = parts.map(sanitizeSegment)
         if safe.isEmpty { return syncDir }
         var url = syncDir
@@ -235,6 +235,21 @@ enum PathUtilities {
             resolved.appendPathComponent(component)
         }
         return resolved
+    }
+
+    private static func stripRemoteFolderPrefix(
+        _ parts: [String],
+        remoteFolder: String
+    ) -> [String] {
+        let prefix = remoteFolder
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard !prefix.isEmpty,
+              parts.count >= prefix.count,
+              Array(parts.prefix(prefix.count)) == prefix else {
+            return parts
+        }
+        return Array(parts.dropFirst(prefix.count))
     }
 }
 

@@ -170,6 +170,13 @@ fi
 ln -sf "$BUILD_PRODUCT" "$BIN_DIR/rmsync"
 echo "  symlinked $BIN_DIR/rmsync -> $BUILD_PRODUCT"
 
+cat > "$BIN_DIR/rmsync-git" <<'EOF'
+#!/bin/sh
+exec rmsync git "$@"
+EOF
+chmod 0755 "$BIN_DIR/rmsync-git"
+echo "  installed $BIN_DIR/rmsync-git"
+
 # ── 5. default config ────────────────────────────────────────────────
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
     step "Writing default config to $CONFIG_DIR/config.toml"

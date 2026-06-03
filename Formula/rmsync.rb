@@ -86,6 +86,12 @@ class Rmsync < Formula
       bin.install "#{release}/rmsync-menubar"
     end
 
+    (bin/"rmsync-git").write <<~SH
+      #!/bin/sh
+      exec "#{opt_bin}/rmsync" git "$@"
+    SH
+    chmod 0755, bin/"rmsync-git"
+
     # Ship plist templates, assets, and docs so the post-install helper
     # can render real plists into ~/Library/LaunchAgents.
     pkgshare.install "scripts"
