@@ -19,6 +19,7 @@ struct RMSyncCommand: AsyncParsableCommand {
             DiffCmd.self,
             AcceptCmd.self,
             PushCmd.self,
+            ForcePushCmd.self,
             StartCmd.self,
             StopCmd.self,
             RestartCmd.self,

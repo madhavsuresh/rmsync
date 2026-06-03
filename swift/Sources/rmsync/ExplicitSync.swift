@@ -54,6 +54,48 @@ enum ExplicitSync {
         var refused: [String] = []
     }
 
+    enum ForcePushAction: String, Codable, Sendable {
+        case createRemote = "create_remote"
+        case overwriteRemote = "overwrite_remote"
+        case deleteRemote = "delete_remote"
+        case unchanged
+        case error
+    }
+
+    struct ForcePushPlanItem: Codable, Sendable {
+        var action: ForcePushAction
+        var relativePath: String
+        var localPath: String?
+        var remotePath: String?
+        var docID: String?
+        var remoteModified: String?
+        var remoteVersion: Int?
+        var remoteHash: String?
+        var localHash: String?
+        var stagedPath: String?
+        var pageIDs: [String]
+        var error: String?
+    }
+
+    struct ForcePushPlan {
+        var stage: StageResult
+        var items: [ForcePushPlanItem]
+    }
+
+    struct ForcePushResult {
+        var created: Int = 0
+        var overwritten: Int = 0
+        var deleted: Int = 0
+        var unchanged: Int = 0
+        var refused: [String] = []
+    }
+
+    struct LocalFile: Sendable {
+        var url: URL
+        var relativePath: String
+        var hash: String
+    }
+
     enum SyncError: Error, CustomStringConvertible {
         case noStagedPull
         case noSelection
@@ -329,6 +371,73 @@ enum ExplicitSync {
         return result
     }
 
+    static func planForcePush(
+        cfg: Config,
+        state: State,
+        cloud: Cloud = Cloud()
+    ) async throws -> ForcePushPlan {
+        let stage = try await stagePull(cfg: cfg, state: state, cloud: cloud)
+        let localFiles = try localForcePushFiles(cfg: cfg)
+        let items = forcePushPlanItems(
+            remoteEntries: stage.entries,
+            localFiles: localFiles
+        )
+        return ForcePushPlan(stage: stage, items: items)
+    }
+
+    static func applyForcePush(
+        _ plan: ForcePushPlan,
+        cfg: Config,
+        state: State,
+        cloud: Cloud = Cloud()
+    ) async throws -> ForcePushResult {
+        var result = ForcePushResult()
+
+        for item in plan.items {
+            do {
+                switch item.action {
+                case .createRemote:
+                    guard let localPath = item.localPath else {
+                        throw SyncError.invalidPath(item.relativePath)
+                    }
+                    try await pushFile(
+                        URL(fileURLWithPath: localPath),
+                        cfg: cfg,
+                        state: state,
+                        cloud: cloud,
+                        force: true
+                    )
+                    result.created += 1
+                case .overwriteRemote:
+                    guard let localPath = item.localPath else {
+                        throw SyncError.invalidPath(item.relativePath)
+                    }
+                    try await pushFile(
+                        URL(fileURLWithPath: localPath),
+                        cfg: cfg,
+                        state: state,
+                        cloud: cloud,
+                        force: true,
+                        remoteOverride: item
+                    )
+                    result.overwritten += 1
+                case .deleteRemote:
+                    try await deleteRemoteOnly(item, state: state, cloud: cloud)
+                    result.deleted += 1
+                case .unchanged:
+                    try await markRemoteUnchanged(item, state: state)
+                    result.unchanged += 1
+                case .error:
+                    throw SyncError.pathNotStaged(item.error ?? item.relativePath)
+                }
+            } catch {
+                result.refused.append("\(item.relativePath): \(error)")
+            }
+        }
+
+        return result
+    }
+
     static func printDiff(_ manifest: Manifest) {
         let visible = manifest.entries.filter { $0.kind != .unchanged }
         if visible.isEmpty {
@@ -341,6 +450,22 @@ enum ExplicitSync {
                 print("\(label) \(entry.relativePath)  (\(error))")
             } else {
                 print("\(label) \(entry.relativePath)")
+            }
+        }
+    }
+
+    static func printForcePushPlan(_ items: [ForcePushPlanItem]) {
+        if items.isEmpty {
+            print("remote already matches an empty local tree")
+            return
+        }
+
+        for item in items {
+            let label = item.action.rawValue.padding(toLength: 16, withPad: " ", startingAt: 0)
+            if let error = item.error, item.action == .error {
+                print("\(label) \(item.relativePath)  (\(error))")
+            } else {
+                print("\(label) \(item.relativePath)")
             }
         }
     }
@@ -435,7 +560,8 @@ enum ExplicitSync {
         cfg: Config,
         state: State,
         cloud: Cloud,
-        force: Bool
+        force: Bool,
+        remoteOverride: ForcePushPlanItem? = nil
     ) async throws {
         guard PathUtilities.resolvedRelativePath(from: cfg.syncDir, to: localURL) != nil else {
             throw SyncError.invalidPath(localURL.path)
@@ -452,7 +578,8 @@ enum ExplicitSync {
 
         let text = try String(contentsOf: localURL, encoding: .utf8)
         let newHash = PathUtilities.sha256(text)
-        let previouslyNonEmpty = stored?.lastSyncedMDHash.map {
+        let previousHash = stored?.lastSyncedMDHash ?? remoteOverride?.remoteHash
+        let previouslyNonEmpty = previousHash.map {
             !$0.isEmpty && $0 != PathUtilities.sha256("")
         } ?? false
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -466,7 +593,13 @@ enum ExplicitSync {
 
         let authorUUID = try await state.getOrCreateAuthorUUID()
         let pagesMd = PageSplitter.split(text)
-        let reuseIDs = stored?.pageIDs ?? []
+        let targetDocID = remoteOverride?.docID ?? stored?.docID ?? UUID().uuidString.lowercased()
+        let reuseIDs: [String]
+        if stored?.docID == targetDocID {
+            reuseIDs = stored?.pageIDs ?? []
+        } else {
+            reuseIDs = remoteOverride?.pageIDs ?? stored?.pageIDs ?? []
+        }
         var pageIDs: [String] = []
         var pageBytes: [Data] = []
         for (idx, pageText) in pagesMd.enumerated() {
@@ -474,14 +607,15 @@ enum ExplicitSync {
             pageBytes.append(try PageCodec.renderPage(text: pageText, authorUUID: authorUUID))
         }
 
-        let docID = stored?.docID ?? UUID().uuidString.lowercased()
         let visible = localURL.deletingPathExtension().lastPathComponent
         let derivation = PathUtilities.localToRemoteParentChain(
             localPath: localURL,
             syncDir: cfg.syncDir,
             remoteFolder: cfg.remoteFolder
         )
-        let remoteDocPath = stored?.remotePath ?? "\(derivation.parentPath)/\(visible)"
+        let remoteDocPath = remoteOverride?.remotePath
+            ?? stored?.remotePath
+            ?? "\(derivation.parentPath)/\(visible)"
         if stored == nil, !force, (try await cloud.stat(remoteDocPath)) != nil {
             throw SyncError.cloudAlreadyHasPath(remoteDocPath)
         }
@@ -495,13 +629,13 @@ enum ExplicitSync {
         let archive = tmpDir.appendingPathComponent("\(visible).rmdoc")
         _ = try await Archive.pack(
             Archive.RmDoc(
-                docID: docID,
+                docID: targetDocID,
                 visibleName: visible,
                 parent: "",
                 pages: zip(pageIDs, pageBytes).map {
                     Archive.RmDocPage(pageID: $0.0, rmBytes: $0.1)
                 },
-                version: (stored?.remoteVersion ?? 0) + 1,
+                version: (remoteOverride?.remoteVersion ?? stored?.remoteVersion ?? 0) + 1,
                 lastModified: Int64(Date().timeIntervalSince1970 * 1000)
             ),
             to: archive
@@ -510,30 +644,34 @@ enum ExplicitSync {
         try await cloud.put(
             local: archive,
             remoteParent: derivation.parentPath,
-            update: stored != nil
+            update: stored != nil || remoteOverride != nil
         )
 
         let stat = try? await cloud.stat(remoteDocPath)
         let remoteModified = stat?.modifiedClient ?? ""
-        let remoteVersion = (stored?.remoteVersion ?? 0) + 1
-        if stored == nil {
-            try await state.upsert(Document(
-                docID: docID,
-                parentID: "",
-                docType: "DocumentType",
-                remotePath: remoteDocPath,
-                localPath: localURL.path,
-                remoteVersion: remoteVersion,
-                remoteModified: remoteModified,
-                lastSyncedMDHash: newHash,
-                lastPushAt: ISO8601.now(),
-                pageIDs: pageIDs
-            ))
-        } else {
-            try await state.setPageIDs(docID: docID, pageIDs: pageIDs)
+        let remoteVersion = (remoteOverride?.remoteVersion ?? stored?.remoteVersion ?? 0) + 1
+        if let stored, stored.docID != targetDocID, force {
+            try await state.delete(docID: stored.docID)
         }
+        let existing = try await state.get(docID: targetDocID)
+        try await state.upsert(Document(
+            docID: targetDocID,
+            parentID: existing?.parentID ?? "",
+            docType: "DocumentType",
+            remotePath: remoteDocPath,
+            localPath: localURL.path,
+            remoteVersion: remoteVersion,
+            remoteModified: remoteModified,
+            lastSyncedMDHash: newHash,
+            lastPullAt: existing?.lastPullAt,
+            lastPushAt: ISO8601.now(),
+            conflictState: nil,
+            errorState: nil,
+            pageIDs: pageIDs,
+            pendingOp: nil
+        ))
         try await state.markPushed(
-            docID: docID,
+            docID: targetDocID,
             version: remoteVersion,
             mdHash: newHash,
             modified: remoteModified
@@ -552,6 +690,48 @@ enum ExplicitSync {
         }
         try await cloud.rm(stored.remotePath)
         try await state.delete(docID: stored.docID)
+    }
+
+    private static func deleteRemoteOnly(
+        _ item: ForcePushPlanItem,
+        state: State,
+        cloud: Cloud
+    ) async throws {
+        guard let remotePath = item.remotePath, let docID = item.docID else {
+            throw SyncError.pathNotStaged(item.relativePath)
+        }
+        try await cloud.rm(remotePath)
+        try await state.delete(docID: docID)
+    }
+
+    private static func markRemoteUnchanged(
+        _ item: ForcePushPlanItem,
+        state: State
+    ) async throws {
+        guard let docID = item.docID,
+              let remotePath = item.remotePath,
+              let localPath = item.localPath,
+              let remoteVersion = item.remoteVersion,
+              let hash = item.remoteHash ?? item.localHash else {
+            return
+        }
+        let existing = try await state.get(docID: docID)
+        try await state.upsert(Document(
+            docID: docID,
+            parentID: existing?.parentID ?? "",
+            docType: "DocumentType",
+            remotePath: remotePath,
+            localPath: localPath,
+            remoteVersion: remoteVersion,
+            remoteModified: item.remoteModified,
+            lastSyncedMDHash: hash,
+            lastPullAt: existing?.lastPullAt,
+            lastPushAt: existing?.lastPushAt,
+            conflictState: nil,
+            errorState: nil,
+            pageIDs: item.pageIDs,
+            pendingOp: nil
+        ))
     }
 
     private static func ensureCloudStillAtBaseline(_ doc: Document, cloud: Cloud) async throws {
@@ -625,6 +805,74 @@ enum ExplicitSync {
         return .conflict
     }
 
+    static func forcePushPlanItems(
+        remoteEntries: [Entry],
+        localFiles: [LocalFile]
+    ) -> [ForcePushPlanItem] {
+        let remoteDocs = remoteEntries.filter { $0.kind != .deleted }
+        var remoteByPath: [String: Entry] = [:]
+        for entry in remoteDocs {
+            remoteByPath[normalizeSelectionPath(entry.relativePath)] = entry
+        }
+        var localByPath: [String: LocalFile] = [:]
+        for file in localFiles {
+            localByPath[normalizeSelectionPath(file.relativePath)] = file
+        }
+        let allPaths = Set(remoteByPath.keys).union(localByPath.keys)
+
+        return allPaths.sorted().map { path in
+            let local = localByPath[path]
+            let remote = remoteByPath[path]
+
+            if let remote, remote.kind == .error {
+                return forcePushItem(
+                    action: .error,
+                    path: path,
+                    local: local,
+                    remote: remote,
+                    error: remote.error ?? "remote snapshot failed"
+                )
+            }
+
+            switch (local, remote) {
+            case let (.some(local), .some(remote)):
+                let action: ForcePushAction = local.hash == remote.remoteHash
+                    ? .unchanged
+                    : .overwriteRemote
+                return forcePushItem(action: action, path: path, local: local, remote: remote)
+            case let (.some(local), .none):
+                return forcePushItem(action: .createRemote, path: path, local: local, remote: nil)
+            case let (.none, .some(remote)):
+                return forcePushItem(action: .deleteRemote, path: path, local: nil, remote: remote)
+            case (.none, .none):
+                return forcePushItem(action: .error, path: path, local: nil, remote: nil, error: "missing local and remote")
+            }
+        }
+    }
+
+    private static func forcePushItem(
+        action: ForcePushAction,
+        path: String,
+        local: LocalFile?,
+        remote: Entry?,
+        error: String? = nil
+    ) -> ForcePushPlanItem {
+        ForcePushPlanItem(
+            action: action,
+            relativePath: path,
+            localPath: local?.url.path,
+            remotePath: remote?.remotePath,
+            docID: remote?.docID,
+            remoteModified: remote?.remoteModified,
+            remoteVersion: remote?.remoteVersion,
+            remoteHash: remote?.remoteHash,
+            localHash: local?.hash,
+            stagedPath: remote?.stagedPath,
+            pageIDs: remote?.pageIDs ?? [],
+            error: error
+        )
+    }
+
     private static func renderMarkdown(_ rmdoc: Archive.RmDoc) throws -> String {
         var pages: [String] = []
         for page in rmdoc.pages {
@@ -656,6 +904,23 @@ enum ExplicitSync {
             urls.append(url)
         }
         return urls
+    }
+
+    private static func localForcePushFiles(cfg: Config) throws -> [LocalFile] {
+        try localPushTargets(cfg: cfg, paths: [])
+            .map { url in
+                guard let rel = relativePathForLocal(url.path, syncDir: cfg.syncDir) else {
+                    throw SyncError.invalidPath(url.path)
+                }
+                if FileProvider.status(of: url).isDataless {
+                    throw SyncError.localDatalessPlaceholder(rel)
+                }
+                return LocalFile(
+                    url: url,
+                    relativePath: rel,
+                    hash: try PathUtilities.sha256File(url)
+                )
+            }
     }
 
     private static func hashIfExists(_ url: URL) throws -> String? {
