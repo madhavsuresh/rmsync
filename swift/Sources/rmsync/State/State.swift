@@ -149,6 +149,23 @@ actor State {
         }
     }
 
+    // MARK: - remote snapshots
+
+    func remoteSnapshot(docID: String) throws -> RemoteSnapshot? {
+        try writer.read { db in
+            try RemoteSnapshot.fetchOne(
+                db, sql: "SELECT * FROM remote_snapshots WHERE doc_id = ?",
+                arguments: [docID]
+            )
+        }
+    }
+
+    func upsertRemoteSnapshot(_ snapshot: RemoteSnapshot) throws {
+        try writer.write { db in
+            try snapshot.save(db)
+        }
+    }
+
     // MARK: - settings
 
     func getSetting(_ key: String) throws -> String? {

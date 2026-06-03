@@ -153,7 +153,12 @@ enum ExplicitSync {
         }
     }
 
-    static func stagePull(cfg: Config, state: State, cloud: Cloud = Cloud()) async throws -> StageResult {
+    static func stagePull(
+        cfg: Config,
+        state: State,
+        cloud: any CloudClient = Cloud(),
+        full: Bool = false
+    ) async throws -> StageResult {
         let fm = FileManager.default
         let id = stageID()
         let root = Paths.stagingDir.appendingPathComponent(id, isDirectory: true)
@@ -181,50 +186,35 @@ enum ExplicitSync {
                 remotePath: node.remotePath,
                 remoteFolder: cfg.remoteFolder
             )
-            let stagedURL = appendRelative(rel, to: filesRoot)
-            let stagedRel = "files/" + rel
             let archiveDest = archivesRoot.appendingPathComponent(node.id, isDirectory: true)
+            let stored = try await state.get(docID: node.id)
+            let byPath = try await state.byLocalPath(localURL.path)
 
             do {
-                let archive = try await cloud.get(node.remotePath, dest: archiveDest)
-                let rmdoc = try await Archive.unpack(archive)
-                let stored = try await state.get(docID: node.id)
-                let byPath = try await state.byLocalPath(localURL.path)
-                let rendered = try renderSourceMarkdown(
-                    rmdoc,
+                if !full,
+                   let cached = try await cachedStageEntry(
+                        node: node,
+                        localURL: localURL,
+                        relativePath: rel,
+                        filesRoot: filesRoot,
+                        state: state,
+                        stored: stored,
+                        byPath: byPath
+                   ) {
+                    entries.append(cached)
+                    continue
+                }
+
+                entries.append(try await downloadedStageEntry(
+                    node: node,
                     localURL: localURL,
-                    stored: stored ?? byPath
-                )
-                let md = rendered.source
-                try PathUtilities.atomicWriteText(md, to: stagedURL)
-
-                let remoteHash = rendered.sourceHash
-                let localHash = try? hashIfExists(localURL)
-                let baseline = stored?.lastSyncedMDHash ?? byPath?.lastSyncedMDHash
-                let kind = classify(
-                    docID: node.id,
-                    stored: stored,
-                    byPath: byPath,
-                    localHash: localHash,
-                    remoteHash: remoteHash,
-                    baseline: baseline
-                )
-
-                entries.append(Entry(
-                    kind: kind,
-                    docID: node.id,
-                    remotePath: node.remotePath,
-                    localPath: localURL.path,
                     relativePath: rel,
-                    stagedPath: stagedRel,
-                    remoteModified: node.modifiedClient.isEmpty ? nil : node.modifiedClient,
-                    remoteVersion: node.version,
-                    remoteHash: remoteHash,
-                    remoteTabletHash: rendered.tabletHash,
-                    localHashAtPull: localHash,
-                    baselineHash: baseline,
-                    pageIDs: rmdoc.pages.map(\.pageID),
-                    error: nil
+                    filesRoot: filesRoot,
+                    archiveDest: archiveDest,
+                    state: state,
+                    cloud: cloud,
+                    stored: stored,
+                    byPath: byPath
                 ))
             } catch {
                 entries.append(Entry(
@@ -239,7 +229,7 @@ enum ExplicitSync {
                     remoteHash: nil,
                     remoteTabletHash: nil,
                     localHashAtPull: try? hashIfExists(localURL),
-                    baselineHash: (try? await state.get(docID: node.id))?.lastSyncedMDHash,
+                    baselineHash: stored?.lastSyncedMDHash ?? byPath?.lastSyncedMDHash,
                     pageIDs: [],
                     error: "\(error)"
                 ))
@@ -283,6 +273,121 @@ enum ExplicitSync {
         try writeManifest(manifest, root: root)
         try PathUtilities.atomicWriteText(id + "\n", to: Paths.stagingDir.appendingPathComponent("current"))
         return StageResult(id: id, root: root, entries: entries)
+    }
+
+    private static func cachedStageEntry(
+        node: Node,
+        localURL: URL,
+        relativePath rel: String,
+        filesRoot: URL,
+        state: State,
+        stored: Document?,
+        byPath: Document?
+    ) async throws -> Entry? {
+        let fingerprint = remoteFingerprint(node)
+        guard let snapshot = try await state.remoteSnapshot(docID: node.id),
+              snapshot.remoteFingerprint == fingerprint,
+              snapshot.remotePath == node.remotePath,
+              let cachedText = cachedSourceText(snapshot)
+        else { return nil }
+
+        let localHash = try? hashIfExists(localURL)
+        let baseline = stored?.lastSyncedMDHash ?? byPath?.lastSyncedMDHash
+        let kind = classify(
+            docID: node.id,
+            stored: stored,
+            byPath: byPath,
+            localHash: localHash,
+            remoteHash: snapshot.sourceHash,
+            baseline: baseline
+        )
+        let stagedRel: String?
+        if requiresStagedSource(kind) {
+            let stagedURL = appendRelative(rel, to: filesRoot)
+            try PathUtilities.atomicWriteText(cachedText, to: stagedURL)
+            stagedRel = "files/" + rel
+        } else {
+            stagedRel = nil
+        }
+
+        return Entry(
+            kind: kind,
+            docID: node.id,
+            remotePath: node.remotePath,
+            localPath: localURL.path,
+            relativePath: rel,
+            stagedPath: stagedRel,
+            remoteModified: remoteModified(node),
+            remoteVersion: node.version,
+            remoteHash: snapshot.sourceHash,
+            remoteTabletHash: snapshot.tabletHash,
+            localHashAtPull: localHash,
+            baselineHash: baseline,
+            pageIDs: snapshot.pageIDs,
+            error: nil
+        )
+    }
+
+    private static func downloadedStageEntry(
+        node: Node,
+        localURL: URL,
+        relativePath rel: String,
+        filesRoot: URL,
+        archiveDest: URL,
+        state: State,
+        cloud: any CloudClient,
+        stored: Document?,
+        byPath: Document?
+    ) async throws -> Entry {
+        let stagedURL = appendRelative(rel, to: filesRoot)
+        let stagedRel = "files/" + rel
+        let archive = try await cloud.get(node.remotePath, dest: archiveDest)
+        let rmdoc = try await Archive.unpack(archive)
+        let rendered = try renderSourceMarkdown(
+            rmdoc,
+            localURL: localURL,
+            stored: stored ?? byPath
+        )
+        let md = rendered.source
+        try PathUtilities.atomicWriteText(md, to: stagedURL)
+
+        let remoteHash = rendered.sourceHash
+        let localHash = try? hashIfExists(localURL)
+        let baseline = stored?.lastSyncedMDHash ?? byPath?.lastSyncedMDHash
+        let kind = classify(
+            docID: node.id,
+            stored: stored,
+            byPath: byPath,
+            localHash: localHash,
+            remoteHash: remoteHash,
+            baseline: baseline
+        )
+        let pageIDs = rmdoc.pages.map(\.pageID)
+
+        await storeRemoteSnapshot(
+            node: node,
+            rendered: rendered,
+            pageIDs: pageIDs,
+            archive: archive,
+            state: state
+        )
+
+        return Entry(
+            kind: kind,
+            docID: node.id,
+            remotePath: node.remotePath,
+            localPath: localURL.path,
+            relativePath: rel,
+            stagedPath: stagedRel,
+            remoteModified: remoteModified(node),
+            remoteVersion: node.version,
+            remoteHash: remoteHash,
+            remoteTabletHash: rendered.tabletHash,
+            localHashAtPull: localHash,
+            baselineHash: baseline,
+            pageIDs: pageIDs,
+            error: nil
+        )
     }
 
     static func loadCurrentStage() throws -> (root: URL, manifest: Manifest) {
@@ -797,6 +902,98 @@ enum ExplicitSync {
         }
         if stat.modifiedClient != baseline {
             throw SyncError.cloudChanged(doc.remotePath)
+        }
+    }
+
+    // MARK: - remote snapshot cache
+
+    private static func storeRemoteSnapshot(
+        node: Node,
+        rendered: (source: String, sourceHash: String, tabletHash: String),
+        pageIDs: [String],
+        archive: URL,
+        state: State
+    ) async {
+        let fingerprint = remoteFingerprint(node)
+        let cacheURL = remoteCacheURL(docID: node.id, fingerprint: fingerprint)
+        do {
+            try PathUtilities.atomicWriteText(rendered.source, to: cacheURL)
+            let writtenHash = try PathUtilities.sha256File(cacheURL)
+            guard writtenHash == rendered.sourceHash else {
+                try? FileManager.default.removeItem(at: cacheURL)
+                Logger.shared.warn(
+                    "remote snapshot cache hash mismatch",
+                    meta: ["doc_id": node.id, "path": node.remotePath]
+                )
+                return
+            }
+
+            try await state.upsertRemoteSnapshot(RemoteSnapshot(
+                docID: node.id,
+                remotePath: node.remotePath,
+                remoteModified: remoteModified(node),
+                remoteVersion: node.version,
+                remoteFingerprint: fingerprint,
+                sourceHash: rendered.sourceHash,
+                tabletHash: rendered.tabletHash,
+                pageIDs: pageIDs,
+                cachedSourcePath: cacheURL.path,
+                archiveHash: try? PathUtilities.sha256File(archive)
+            ))
+        } catch {
+            Logger.shared.warn(
+                "remote snapshot cache write failed",
+                meta: ["doc_id": node.id, "path": node.remotePath, "error": "\(error)"]
+            )
+        }
+    }
+
+    private static func cachedSourceText(_ snapshot: RemoteSnapshot) -> String? {
+        let url = URL(fileURLWithPath: snapshot.cachedSourcePath)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let text = try? String(contentsOf: url, encoding: .utf8),
+              PathUtilities.sha256(text) == snapshot.sourceHash
+        else { return nil }
+        return text
+    }
+
+    private static func remoteCacheURL(docID: String, fingerprint: String) -> URL {
+        Paths.remoteCacheDir
+            .appendingPathComponent(cacheComponent(docID), isDirectory: true)
+            .appendingPathComponent("\(fingerprint).md")
+    }
+
+    private static func cacheComponent(_ raw: String) -> String {
+        if raw.range(of: #"^[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil {
+            return raw
+        }
+        return PathUtilities.sha256(raw)
+    }
+
+    static func remoteFingerprint(_ node: Node) -> String {
+        let fields = [
+            "doc_id=\(node.id)",
+            "remote_path=\(node.remotePath)",
+            "name=\(node.name)",
+            "parent=\(node.parent)",
+            "type=\(node.type.rawValue)",
+            "modified_client=\(node.modifiedClient)",
+            "version=\(node.version)",
+            "current_page=\(node.currentPage)",
+        ]
+        return PathUtilities.sha256(fields.joined(separator: "\n"))
+    }
+
+    private static func remoteModified(_ node: Node) -> String? {
+        node.modifiedClient.isEmpty ? nil : node.modifiedClient
+    }
+
+    private static func requiresStagedSource(_ kind: ChangeKind) -> Bool {
+        switch kind {
+        case .added, .modified, .conflict:
+            return true
+        case .deleted, .localModified, .unchanged, .error:
+            return false
         }
     }
 

@@ -126,11 +126,39 @@ enum SchemaMigrator {
             }
         }
 
+        // v8 — durable pull-side remote snapshot cache. This lets an
+        // explicit pull skip rmapi downloads for remote documents whose
+        // stat-derived fingerprint is already rendered and verified in
+        // the cache. It is separate from documents so a staged pull can
+        // be cached without marking the remote content as accepted.
+        migrator.registerMigration("v8_remote_snapshots") { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS remote_snapshots (
+                    doc_id              TEXT PRIMARY KEY,
+                    remote_path         TEXT NOT NULL,
+                    remote_modified     TEXT,
+                    remote_version      INTEGER NOT NULL,
+                    remote_fingerprint  TEXT NOT NULL,
+                    source_hash         TEXT NOT NULL,
+                    tablet_hash         TEXT,
+                    page_ids            TEXT NOT NULL,
+                    cached_source_path  TEXT NOT NULL,
+                    archive_hash        TEXT,
+                    fetched_at          TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_remote_snapshots_fingerprint
+                    ON remote_snapshots(remote_fingerprint);
+                CREATE INDEX IF NOT EXISTS idx_remote_snapshots_path
+                    ON remote_snapshots(remote_path);
+                """)
+        }
+
         try migrator.migrate(writer)
 
         // Keep the legacy ``schema_version`` row in sync for the CLI
         // fallback and for anything still talking to the Python schema.
         try writer.write { db in
+            try db.execute(sql: "DELETE FROM schema_version")
             try db.execute(
                 sql: "INSERT OR REPLACE INTO schema_version(version) VALUES (?)",
                 arguments: [currentSchemaVersion]
@@ -138,7 +166,7 @@ enum SchemaMigrator {
         }
     }
 
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8
 
     private static func columnExists(
         _ db: Database, table: String, column: String

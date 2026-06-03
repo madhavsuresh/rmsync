@@ -1,5 +1,10 @@
 import Foundation
 
+protocol CloudClient: Sendable {
+    func tree(_ root: String) async throws -> [Node]
+    func get(_ remotePath: String, dest: URL) async throws -> URL
+}
+
 /// reMarkable cloud access via the ``rmapi`` Go binary.
 ///
 /// Ports ``src/rm_sync/cloud.py`` verbatim. The Python implementation
@@ -14,7 +19,7 @@ import Foundation
 ///   ``--content-only`` is PDF-only; don't use it for .rmdoc updates.
 /// - Under sync15 the ``Version`` field is pinned to 0; use
 ///   ``ModifiedClient`` as the change signal.
-actor Cloud {
+actor Cloud: CloudClient {
     /// rmapi versions we've validated against.
     ///
     /// Bumped from 0.0.29 → 0.0.32 in v0.2.23 after a cloud-side
