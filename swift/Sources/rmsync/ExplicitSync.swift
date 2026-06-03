@@ -60,6 +60,11 @@ enum ExplicitSync {
         case skipped
     }
 
+    private struct StageEntryKey: Hashable {
+        var docID: String
+        var relativePath: String
+    }
+
     enum PushMode: Sendable {
         case manual
         case auto
@@ -478,9 +483,11 @@ enum ExplicitSync {
             "path_count": "\(paths.count)",
         ])
         do {
-        let (root, manifest) = try loadCurrentStage()
+        let (root, loadedManifest) = try loadCurrentStage()
+        var manifest = loadedManifest
         let selected = try selectEntries(manifest.entries, paths: paths, all: all)
         var result = AcceptResult()
+        var acceptedKeys = Set<StageEntryKey>()
 
         for entry in selected {
             do {
@@ -496,14 +503,21 @@ enum ExplicitSync {
                         throw SyncError.destructiveDeleteRequiresFlag(entry.relativePath)
                     }
                     try await acceptDelete(entry, cfg: cfg, state: state, force: force)
+                    acceptedKeys.insert(stageEntryKey(entry))
                     result.deleted += 1
                 case .added, .modified, .conflict:
                     try await acceptFile(entry, root: root, cfg: cfg, state: state, force: force)
+                    acceptedKeys.insert(stageEntryKey(entry))
                     result.applied += 1
                 }
             } catch {
                 result.refused.append("\(entry.relativePath): \(error)")
             }
+        }
+
+        if !acceptedKeys.isEmpty {
+            clearAcceptedEntries(in: &manifest, acceptedKeys: acceptedKeys)
+            try writeManifest(manifest, root: root)
         }
 
         Logger.shared.audit(
@@ -1525,7 +1539,33 @@ enum ExplicitSync {
         return try JSONDecoder().decode(Manifest.self, from: data)
     }
 
+    private static func stageEntryKey(_ entry: Entry) -> StageEntryKey {
+        StageEntryKey(
+            docID: entry.docID,
+            relativePath: normalizeSelectionPath(entry.relativePath)
+        )
+    }
+
+    private static func clearAcceptedEntries(
+        in manifest: inout Manifest,
+        acceptedKeys: Set<StageEntryKey>
+    ) {
+        for index in manifest.entries.indices
+        where acceptedKeys.contains(stageEntryKey(manifest.entries[index])) {
+            let acceptedHash = manifest.entries[index].remoteHash
+            manifest.entries[index].kind = .unchanged
+            manifest.entries[index].stagedPath = nil
+            manifest.entries[index].localHashAtPull = acceptedHash
+            manifest.entries[index].baselineHash = acceptedHash
+            manifest.entries[index].error = nil
+        }
+    }
+
     private static func diffText(_ entry: Entry, root: URL) throws -> String {
+        if entry.kind == .unchanged || entry.kind == .localModified {
+            return ""
+        }
+
         let label = entry.kind.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0)
         let heading = "\(label) \(entry.relativePath)\n"
 

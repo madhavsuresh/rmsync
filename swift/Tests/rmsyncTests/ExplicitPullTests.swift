@@ -77,6 +77,38 @@ struct ExplicitPullTests {
         #expect(try Snapshots.read(last) == "old\n")
     }
 
+    @Test("accepted cloud change is cleared from staged diff")
+    func acceptedCloudChangeIsClearedFromStagedDiff() async throws {
+        let fixture = try await makeFixture(localText: "old\n", acceptedText: "old\n", cachedText: "new\n")
+        let cloud = FakePullCloud(nodes: [fixture.node], archives: [:])
+
+        _ = try await ExplicitSync.stagePull(
+            cfg: fixture.cfg, state: fixture.state, cloud: cloud
+        )
+        let accepted = try await ExplicitSync.accept(
+            cfg: fixture.cfg,
+            state: fixture.state,
+            paths: ["doc.md"],
+            all: false,
+            includeDeletes: false,
+            force: false
+        )
+
+        #expect(accepted.applied == 1)
+        #expect(accepted.refused.isEmpty)
+
+        let (stageRoot, manifest) = try ExplicitSync.loadCurrentStage()
+        let entry = try #require(manifest.entries.first { $0.docID == "doc-1" })
+        let acceptedHash = PathUtilities.sha256("new\n")
+        #expect(entry.kind == .unchanged)
+        #expect(entry.stagedPath == nil)
+        #expect(entry.localHashAtPull == acceptedHash)
+        #expect(entry.baselineHash == acceptedHash)
+
+        let diff = try ExplicitSync.diffText(manifest, root: stageRoot, path: "doc.md")
+        #expect(diff.isEmpty)
+    }
+
     @Test("cache hash mismatch falls back to rmapi get")
     func corruptCacheFallsBackToCloudGet() async throws {
         let fixture = try await makeFixture(
