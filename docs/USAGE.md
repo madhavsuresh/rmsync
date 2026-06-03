@@ -349,26 +349,24 @@ The default config's header comment reminds you of this.
 > — it updates the config *and* the three other things that depend on
 > it in sync. See the previous section for the reasoning.
 
-Config keys and defaults (all paths relative to your home):
+Modern config keys and defaults (all paths relative to your home):
 
 | Key | Default | Effect |
 |---|---|---|
 | `sync_dir` | `~/rmsync-writing` | Where local `.md` files live. **Change with `rmsync relocate`, not here** — see above. |
 | `remote_folder` | `Writing` | Which cloud folder to mirror |
-| `worker_pool_size` | `3` | Legacy daemon worker setting; explicit CLI sync does not use background workers |
-| `poll_interval_seconds` | `30` | Legacy poll cadence; automatic polling is disabled |
-| `poll_active_interval_seconds` | `15` | Legacy active poll cadence |
-| `poll_idle_interval_seconds` | `120` | Legacy idle poll cadence |
-| `debounce_seconds` | `2.0` | Legacy watcher debounce; automatic local watching is disabled |
-| `echo_fence_seconds` | `5.0` | Legacy watcher echo-fence window |
-| `retry_max_attempts` | `3` | Per-operation retry budget |
-| `push_strategy` | `native_plain` | Also: `native_formatted` (stub), `pdf` (stub) |
-| `dry_run` | `false` | Log intent, don't execute |
-| `[log].level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `[deletion].enable_propagation` | `true` | Legacy daemon switch. Deletes now require explicit `accept --include-deletes` or `push --include-deletes`. |
 | `[deletion].trash_retention_days` | `30` | Retention used by `rmsync trash prune` (`0` = keep forever). |
-| `[deletion].bulk_delete_threshold` | `0.5` | Legacy daemon bulk-delete brake threshold. |
-| `[deletion].bulk_delete_window_seconds` | `30` | Legacy daemon bulk-delete brake window. |
+| `[web].enabled` | `false` | Enable the optional HTTP dashboard. |
+| `[web].bind_addr` | `127.0.0.1` | Dashboard bind address; use `0.0.0.0` only on trusted networks. |
+| `[web].port` | `7878` | Dashboard port. |
+| `[web].auth_token` | generated when unset | Bearer token for dashboard API requests. |
+
+Normal `rmsync push` is incremental: unchanged tracked Markdown files
+are skipped and do not call `rmapi`. Use `rmsync push --force` when you
+intentionally want to re-upload selected files. Older config keys from
+the watcher/poller daemon are still accepted for existing installs, but
+new configs omit them because explicit sync does not use background
+watching, polling, or automatic delete propagation.
 
 ### …recover a file I deleted by mistake
 
@@ -421,8 +419,7 @@ leak its `.obsidian/` plugins folder to the cloud.
 Every explicit push and accepted pull overwrite for a tracked doc parks
 a snapshot of the bytes at
 `<stateDir>/backups/<doc-id>/<utc-stamp>.md`. Default retention
-is 30 snapshots per doc; bump or shrink via
-`backup_snapshots_to_keep` in config.toml.
+is 30 snapshots per doc.
 
 You don't need to opt in — snapshots are always taken for
 tracked docs. To browse / diff / revert:
@@ -453,8 +450,8 @@ The `cause` column in `history list` distinguishes:
 
 Storage is keyed on the doc UUID (not the local path), so
 `rmsync relocate` doesn't orphan history. Disk usage is bounded
-by `backup_snapshots_to_keep` × file size — typically a few MB
-per actively-written doc.
+by roughly 30 snapshots × file size — typically a few MB per
+actively-written doc.
 
 ---
 
@@ -706,13 +703,11 @@ deletes; `rmsync trash restore <rel-path>` puts one back. Restoring does
 not push automatically, so run `rmsync push <path>` after inspection if
 the restored content should go to the cloud.
 
-Tunables (defaults shown):
+Modern delete-related config:
 
 ```toml
 [deletion]
-trash_retention_days       = 30   # 0 keeps trash forever
-bulk_delete_threshold      = 0.5  # >50% of tracked → refuse burst
-bulk_delete_window_seconds = 30
+trash_retention_days = 30   # 0 keeps trash forever
 ```
 
 ### `rmapi put --force` only

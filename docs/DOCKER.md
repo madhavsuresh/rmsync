@@ -192,21 +192,11 @@ Accepted local deletes are soft-deleted into
 `<sync_dir>/.rmsync-trash/<utc-stamp>/` first; recovery is via
 `rmsync trash list / restore`.
 
-The old propagation switch remains in config for compatibility:
+Modern delete-related config is just local trash retention:
 
 ```toml
 [deletion]
-enable_propagation = false
-```
-
-Tunables (defaults shown; only need to write what you're
-overriding):
-
-```toml
-[deletion]
-trash_retention_days       = 30      # 0 keeps trash forever
-bulk_delete_threshold      = 0.5     # >50% of tracked → refuse
-bulk_delete_window_seconds = 30
+trash_retention_days = 30      # 0 keeps trash forever
 ```
 
 Then `docker compose restart rmsync`. Recovery commands:
@@ -226,8 +216,8 @@ The status-only daemon does not prune trash automatically; run
 
 Every push and every cloud-pull-overwrite parks a copy of the
 file at `/state/backups/<doc-id>/<utc-stamp>.md`. v0.2.20+. No
-config required — it's running by default. Retention via
-`backup_snapshots_to_keep` (default 30).
+config required — it's running by default. Retention defaults to
+30 snapshots per doc.
 
 ```sh
 docker exec rmsync rmsync history list /sync/Chapter-3.md

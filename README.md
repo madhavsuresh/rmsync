@@ -94,22 +94,11 @@ Safety gates that protect against accidents:
   create, overwrite, or delete remotely. Only
   `rmsync force-push --apply` mutates the cloud.
 
-The old automatic delete-propagation knob remains in config for older
-state and worker code paths, but the status-only daemon no longer acts
-on it by itself:
+Modern delete-related config is just local trash retention:
 
 ```toml
 [deletion]
-enable_propagation = false
-```
-
-Tunable thresholds (defaults shown):
-
-```toml
-[deletion]
-trash_retention_days       = 30
-bulk_delete_threshold      = 0.5
-bulk_delete_window_seconds = 30
+trash_retention_days = 30  # 0 keeps trash forever
 ```
 
 Full guide: [`docs/USAGE.md`](docs/USAGE.md) → "Rename / move /
@@ -123,9 +112,8 @@ when you run `rmsync pull`.
 **v0.2.20 — snapshot history (always on).** Every push and every
 cloud-pull-overwrite parks a copy of the file at
 `<stateDir>/backups/<doc-id>/<utc-stamp>.md` so you can always
-roll back. Default 30 snapshots per doc; configurable via
-`backup_snapshots_to_keep`. No setup required — it's already
-running.
+roll back. Default 30 snapshots per doc. No setup required — it's
+already running.
 
 ```sh
 # what saves do I have for this draft?

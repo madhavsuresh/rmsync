@@ -187,59 +187,25 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
 sync_dir      = "$HOME/rmsync-writing"
 remote_folder = "Writing"
 
-worker_pool_size               = 3
+# Explicit pushes are incremental: unchanged tracked Markdown files
+# are counted as skipped and do not call rmapi. Use rmsync push --force
+# to bypass the unchanged-hash no-op path for selected files.
+# Local deletes affect the cloud only with rmsync push --include-deletes.
+# Cloud deletes affect local files only after rmsync pull, rmsync diff,
+# and rmsync accept --include-deletes <path>.
 
-# Legacy daemon tuning retained for config compatibility.
-# Current explicit-sync releases do not start a watcher, poller,
-# reconcile pass, or background worker pool.
-poll_interval_seconds          = 30
-poll_active_interval_seconds   = 15
-poll_idle_interval_seconds     = 120
-debounce_seconds               = 2.0
-echo_fence_seconds             = 5.0
-retry_max_attempts             = 3
-
-# native_plain: plain text only (recommended)
-# native_formatted: experimental, not fully implemented
-# pdf: read-only on tablet, not fully implemented
-push_strategy = "native_plain"
-
-backup_snapshots_to_keep = 30
-dry_run                  = false
-
-[log]
-level = "INFO"   # DEBUG | INFO | WARNING | ERROR
-
-# Legacy optional drop-folder for sending PDFs / EPUBs to the tablet.
-# The explicit-sync daemon does not watch this folder. Use rmapi directly
-# for PDF / EPUB sends until rmsync has a dedicated explicit send command.
-# [inbox]
-# local_dir         = "$HOME/rmsync-writing/_inbox"
-# remote_folder     = "Inbox"
-# delete_after_push = true
+[deletion]
+trash_retention_days = 30 # 0 keeps local .rmsync-trash entries forever
 
 # Optional: web dashboard at http://127.0.0.1:7878. macOS users
 # usually prefer the menubar; included here for parity with the
-# Docker config. Auth via Bearer token; if ``auth_token`` is
-# unset, daemon generates one in ``\$STATE_DIR/web-token``.
+# Docker config. Auth via Bearer token; if auth_token is
+# unset, daemon generates one in \$STATE_DIR/web-token.
 # [web]
 # enabled    = true
 # bind_addr  = "127.0.0.1"
 # port       = 7878
-
-# Legacy rename / move / delete propagation settings. Current
-# explicit-sync releases do not propagate deletes automatically.
-# Local deletes affect the cloud only with:
-#   rmsync push --include-deletes
-# Cloud deletes affect local files only after:
-#   rmsync pull
-#   rmsync accept --include-deletes <path>
-# Accepted local deletes are parked in ``<sync_dir>/.rmsync-trash`` first.
-# [deletion]
-# enable_propagation         = true
-# trash_retention_days       = 30
-# bulk_delete_threshold      = 0.5
-# bulk_delete_window_seconds = 30
+# auth_token = ""          # leave empty → auto-generated
 EOF
     yellow "  Edit this file if you want sync_dir somewhere other than ~/rmsync-writing."
 fi
