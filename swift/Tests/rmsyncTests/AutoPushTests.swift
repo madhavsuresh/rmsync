@@ -46,7 +46,7 @@ struct AutoPushTests {
         let file = dir.appendingPathComponent("new.md")
         try write("new file\n", to: file)
         let state = try State(path: dir.appendingPathComponent("state.db"))
-        let cfg = Config(syncDir: dir)
+        let cfg = Config(syncDir: dir, remoteFolder: "Writing")
         let cloud = FakeCloud(stats: [
             "/Writing/new": stat(id: "existing", modified: "already-there"),
         ])
@@ -71,6 +71,7 @@ struct AutoPushTests {
         ])
         let cfg = Config(
             syncDir: fixture.dir,
+            remoteFolder: "Writing",
             autoPush: Config.AutoPushConfig(
                 enabled: true,
                 debounceSeconds: 0.25,
@@ -136,7 +137,11 @@ struct AutoPushTests {
             baselineRemoteModified: "baseline",
             state: "uploading"
         )
-        let engine = AutoPushEngine(cfg: Config(syncDir: dir), state: state, cloud: FakeCloud(stats: [:]))
+        let engine = AutoPushEngine(
+            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
+            state: state,
+            cloud: FakeCloud(stats: [:])
+        )
 
         await engine.reconcileInterruptedOperations()
 
@@ -266,7 +271,12 @@ struct AutoPushTests {
                 state: state
             )
         }
-        return Fixture(dir: dir, file: file, cfg: Config(syncDir: dir), state: state)
+        return Fixture(
+            dir: dir,
+            file: file,
+            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
+            state: state
+        )
     }
 
     private func tempDir() throws -> URL {

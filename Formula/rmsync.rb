@@ -169,7 +169,7 @@ class Rmsync < Formula
           rmsync accept <path>  # or: rmsync accept --all
           rmsync push [path ...]
 
-      The default sync dir is ~/rmsync-writing. Move it anywhere
+      The default sync dir is ~/rmsync-notes. Move it anywhere
       (iCloud, Dropbox, a git repo) with:
           rmsync relocate ~/path/to/new/dir
 
@@ -225,7 +225,7 @@ class Rmsync < Formula
                "$HOME/Library/Logs/rmsync" \\
                "$HOME/Library/Application Support/rmsync" \\
                "$HOME/.config/rmsync" \\
-               "$HOME/rmsync-writing"
+               "$HOME/rmsync-notes"
 
       # Seed a default config if missing. Mirrors install.sh's block so
       # source-install and brew-install converge on the same defaults.
@@ -235,8 +235,8 @@ class Rmsync < Formula
       # rmsync configuration. Restart the daemon after edits:
       #   rmsync restart
 
-      sync_dir      = "$HOME/rmsync-writing"
-      remote_folder = "Writing"
+      sync_dir      = "$HOME/rmsync-notes"
+      remote_folder = "sync/notes"
 
       worker_pool_size               = 3
 
@@ -265,7 +265,7 @@ class Rmsync < Formula
       # The explicit-sync daemon does not watch this folder. Use rmapi directly
       # for PDF / EPUB sends until rmsync has a dedicated explicit send command.
       # [inbox]
-      # local_dir         = "$HOME/rmsync-writing/_inbox"
+      # local_dir         = "$HOME/rmsync-notes/_inbox"
       # remote_folder     = "Inbox"
       # delete_after_push = true
 
@@ -289,7 +289,7 @@ class Rmsync < Formula
       # bulk_delete_threshold      = 0.5
       # bulk_delete_window_seconds = 30
       TOML
-        echo "  Edit it if you want sync_dir somewhere other than ~/rmsync-writing"
+        echo "  Edit it if you want sync_dir somewhere other than ~/rmsync-notes"
         echo "  (or run 'rmsync relocate <new-path>' after the daemon comes up)."
       fi
 

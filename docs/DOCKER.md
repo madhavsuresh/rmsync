@@ -76,8 +76,9 @@ docker exec rmsync rmsync doctor
 | `/state` | `state.db`, `ipc.sock`, `status.json` | Daemon-private. Don't edit by hand. |
 | `/sync` | Your reMarkable Markdown tree | What you sync. Bind-mount to wherever you want the notes to live on the host. |
 
-The entrypoint seeds `/config/config.toml` from a default
-template if missing — `sync_dir = "/sync"` and sensible defaults.
+The entrypoint seeds `/config/config.toml` from a default template if
+missing — `sync_dir = "/sync"` locally and `remote_folder =
+"sync/notes"` on the reMarkable cloud.
 You can edit it any time and `docker compose restart rmsync` to
 pick up the new values.
 
@@ -90,7 +91,7 @@ synced Markdown from your normal editor without Docker getting in
 the way. The host's view of `./data/sync/` is the same files the
 container sees at `/sync/`. Save a `.md`, then run
 `docker exec rmsync rmsync push <path>` when you want that local
-change on the reMarkable cloud.
+change in the reMarkable cloud's `/sync/notes` folder.
 
 ### File ownership
 

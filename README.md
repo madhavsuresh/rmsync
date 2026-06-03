@@ -1,7 +1,8 @@
 # rmsync
 
-Explicit push/pull sync between a reMarkable tablet's `Writing/`
-folder and a local Markdown tree on macOS. Cloud changes are pulled
+Explicit push/pull sync between a reMarkable cloud folder and a local
+Markdown tree on macOS. New installs use `/sync/notes` on the tablet;
+existing `/Writing` configs keep working. Cloud changes are pulled
 into a staging area first; you review them, accept the files you want,
 and then push local changes deliberately. The daemon stays up for
 status, menu bar, and dashboard IPC, but it does not poll the cloud or
@@ -27,7 +28,8 @@ rmsync push [path ...]               # push local Markdown changes to cloud
 rmsync push --include-deletes        # also propagate tracked local deletes
 rmsync force-push                    # preview replacing cloud with local tree
 rmsync force-push --apply            # overwrite/delete remote-only cloud docs
-rmsync git init --name my-notes      # optional: initialize git-backed sync
+rmsync init                          # create local dir + /sync/notes if needed
+rmsync git init --name my-notes      # optional: initialize /sync/git/my-notes
 rmsync git pull                      # optional: import cloud state as a branch
 rmsync git push                      # optional: merge HEAD with cloud and upload
 rmsync auto-push status              # inspect optional safe auto-push attempts
@@ -44,7 +46,7 @@ rmsync relocate ~/path/to/new/dir
 ```
 
 **Sync is manual by design.** Edit Markdown files under your sync dir
-(`~/rmsync-writing` by default), then run `rmsync push` when you want
+(`~/rmsync-notes` by default), then run `rmsync push` when you want
 those changes to reach the tablet. To inspect tablet/cloud changes,
 run `rmsync pull`, review with `rmsync diff`, then accept selected
 files with `rmsync accept`.
@@ -53,8 +55,10 @@ files with `rmsync accept`.
 `accept` / `push` workflow above remains the default. If your notes live
 inside a git repository and you want every cloud exchange to pass through
 git, use `rmsync git ...` (or the `rmsync-git` wrapper). That mode uses a
-separate reMarkable cloud folder under `/sync/<name>` and stores its
-repo-local state under `.git/rmsync-git/`.
+separate reMarkable cloud folder under `/sync/git/<name>` and stores
+its repo-local state under `.git/rmsync-git/`. The ordinary sync
+folder is `/sync/notes`, so both modes share one top-level tablet
+folder without sharing a namespace.
 
 **Optional safe auto-push.** If you want local edits to reach the
 tablet without a manual command, enable `[auto_push]` in config. It is
@@ -127,14 +131,14 @@ already running.
 
 ```sh
 # what saves do I have for this draft?
-rmsync history list ~/rmsync-writing/Chapter-3.md
+rmsync history list ~/rmsync-notes/Chapter-3.md
 
 # what changed since the last save?
-rmsync history diff ~/rmsync-writing/Chapter-3.md
+rmsync history diff ~/rmsync-notes/Chapter-3.md
 
 # revert to an earlier version (current goes to .rmsync-trash/);
 # run `rmsync push` yourself when you want it on the cloud
-rmsync history restore ~/rmsync-writing/Chapter-3.md \
+rmsync history restore ~/rmsync-notes/Chapter-3.md \
     --to 2026-04-29T22:14:08Z
 ```
 
@@ -173,12 +177,15 @@ rmsync git init --name notes
 rmsync git push
 ```
 
-`init` creates `/sync/notes` on the reMarkable cloud and fails if that
-folder already exists. `push` snapshots the current cloud, asks git to
-merge that snapshot with `HEAD`, and uploads only a verified resolved
-tree. If git reports conflicts, no cloud documents are changed; run
-`rmsync git pull`, merge or rebase the printed branch with normal git
-tools, commit the resolution, then run `rmsync git push` again.
+`init` creates `/sync/git/notes` on the reMarkable cloud and fails if
+that folder already exists. It also refuses namespace overlap with the
+ordinary sync folder; `/sync/notes` and `/sync/git/notes` are siblings,
+but ordinary sync should not own `/sync` directly. `push` snapshots the
+current cloud, asks git to merge that snapshot with `HEAD`, and uploads
+only a verified resolved tree. If git reports conflicts, no cloud
+documents are changed; run `rmsync git pull`, merge or rebase the
+printed branch with normal git tools, commit the resolution, then run
+`rmsync git push` again.
 
 ```sh
 rmsync git pull
@@ -188,6 +195,14 @@ git merge rmsync/cloud/notes/20260603T041500Z-a1b2c3d4
 
 The installed `rmsync-git` wrapper is equivalent to `rmsync git`, so
 `rmsync-git push` and `rmsync git push` are the same command.
+
+**Migrating from `/Writing`.** Existing configs with
+`remote_folder = "Writing"` keep working. To move to the single
+top-level `/sync` layout, first verify your local tree is the source of
+truth, then set `remote_folder = "sync/notes"`, run `rmsync init`, run
+`rmsync force-push` to preview, and only then run
+`rmsync force-push --apply`. This does not delete `/Writing`; remove or
+archive that folder manually after verifying `/sync/notes`.
 
 ---
 
@@ -292,7 +307,7 @@ rmsync status    # see what the daemon is doing
 rmsync-git --help # optional wrapper for `rmsync git`
 ```
 
-Edit files under your sync dir (`~/rmsync-writing` by default), then
+Edit files under your sync dir (`~/rmsync-notes` by default), then
 run `rmsync push` when you want them on the tablet. Write on the
 tablet, let it sync to the cloud, then run `rmsync pull`, `rmsync diff`,
 and `rmsync accept` to bring selected changes local. The menu bar icon
@@ -314,7 +329,7 @@ explicit command.
 
 ```toml
 [inbox]
-local_dir         = "~/rmsync-writing/_inbox"   # any path
+local_dir         = "~/rmsync-notes/_inbox"   # any path
 remote_folder     = "Inbox"
 delete_after_push = true                         # set false to keep a copy
 ```
@@ -382,8 +397,8 @@ there because this is a *product* limitation of the cloud-storage
 provider, not something we can fully prevent from our side.
 
 **If you want zero risk**: use a non-cloud sync directory. The
-default (`~/rmsync-writing`) is local-only and never triggers any
-of this. `rmsync relocate ~/rmsync-writing` moves everything there
+default (`~/rmsync-notes`) is local-only and never triggers any
+of this. `rmsync relocate ~/rmsync-notes` moves everything there
 in place, no data loss.
 
 **If you want cloud backup of your notes anyway**: keep rmsync's
@@ -397,8 +412,9 @@ without being subject to File Provider eviction.
 
 **Does:**
 
-- Explicitly pushes and pulls `Writing/` (and only `Writing/`) between
-  the tablet cloud and a local folder.
+- Explicitly pushes and pulls one configured cloud folder between the
+  tablet cloud and a local folder. New installs use `/sync/notes`;
+  existing `/Writing` configs keep working.
 - Typed-text notebooks round-trip as Markdown.
 - Handles conflicts: writes a `.md.conflict` file with git-style
   markers, never silently merges.
@@ -434,7 +450,7 @@ without being subject to File Provider eviction.
 - Annotation round-tripping — if you annotate a PDF on the tablet, we
   can't convert those annotations to Markdown.
 - Image / drawing round-trip.
-- Anything outside `Writing/` on your tablet.
+- Anything outside the configured cloud folder on your tablet.
 
 ---
 
@@ -509,6 +525,7 @@ rmsync accept --all       # apply all staged non-delete changes
 rmsync push [path ...]    # push local Markdown changes to cloud
 rmsync force-push         # preview replacing cloud state with local tree
 rmsync force-push --apply # apply the local-tree overwrite
+rmsync init               # create local sync dir + configured cloud folder
 rmsync git init           # optional git-backed sync setup, run in a git repo
 rmsync git pull           # optional: import cloud state as a git branch
 rmsync git push           # optional: merge HEAD with cloud and upload

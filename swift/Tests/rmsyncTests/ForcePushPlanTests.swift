@@ -66,6 +66,7 @@ struct ForcePushPlanTests {
         let items = ExplicitSync.forcePushPlanItems(
             remoteEntries: [entry("old.md", hash: hash)],
             localFiles: [localFile("new.md", hash)],
+            remoteFolder: "Writing",
             renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
         )
 
@@ -83,6 +84,7 @@ struct ForcePushPlanTests {
         let items = ExplicitSync.forcePushPlanItems(
             remoteEntries: [entry("old/place.md", hash: hash)],
             localFiles: [localFile("new/place.md", hash)],
+            remoteFolder: "Writing",
             renames: [ExplicitSync.ForcePushRename(oldPath: "old/place.md", newPath: "new/place.md")]
         )
 
@@ -97,6 +99,7 @@ struct ForcePushPlanTests {
         let items = ExplicitSync.forcePushPlanItems(
             remoteEntries: [entry("old.md", hash: PathUtilities.sha256("remote\n"))],
             localFiles: [localFile("new.md", PathUtilities.sha256("local\n"))],
+            remoteFolder: "Writing",
             renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
         )
 

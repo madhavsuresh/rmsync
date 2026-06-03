@@ -37,7 +37,7 @@ struct Status: AsyncParsableCommand {
 
         if let live = IPCClientSync.getStatus() {
             print("sync dir:       \(live.syncDir)")
-            print("remote folder:  /\(live.remoteFolder)")
+            print("remote folder:  \(PathUtilities.remoteFolderPath(live.remoteFolder))")
             if let cfg { print("push strategy:  \(cfg.pushStrategy.rawValue)") }
             print("state:          \(live.state)")
             print("paused:         \(live.paused)")
@@ -87,7 +87,7 @@ struct Status: AsyncParsableCommand {
         // Fallback path.
         if let cfg {
             print("sync dir:       \(cfg.syncDir.path)")
-            print("remote folder:  /\(cfg.remoteFolder)")
+            print("remote folder:  \(PathUtilities.remoteFolderPath(cfg.remoteFolder))")
             print("push strategy:  \(cfg.pushStrategy.rawValue)")
         }
         print("daemon:         not running (reading state DB directly)")
@@ -720,11 +720,86 @@ struct Relocate: AsyncParsableCommand {
     }
 }
 
-struct Init: ParsableCommand {
+struct Init: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "One-time setup wizard.")
-    func run() throws {
-        print("Run ./install.sh from the repo root.")
-        print("After that, edit ~/.config/rmsync/config.toml and run `rmsync doctor`.")
+    func run() async throws {
+        do {
+            let (cfg, seeded) = try loadOrSeedConfig()
+            try FileManager.default.createDirectory(
+                at: cfg.syncDir,
+                withIntermediateDirectories: true
+            )
+
+            let remotePath = PathUtilities.remoteFolderPath(cfg.remoteFolder)
+            print("config:       \(Paths.configPath.path)\(seeded ? " (created)" : "")")
+            print("sync dir:     \(cfg.syncDir.path)")
+            print("cloud folder: \(remotePath)")
+
+            let cloud = Cloud()
+            do {
+                _ = try await cloud.account()
+            } catch {
+                print("")
+                print("local setup is complete, but rmapi is not authenticated.")
+                print("next:         rmapi")
+                print("then:         rmsync init")
+                print("detail:       `rmapi account` failed: \(error)")
+                throw ExitCode(1)
+            }
+
+            for path in PathUtilities.remoteFolderMkdirChain(cfg.remoteFolder) {
+                do {
+                    try await cloud.mkdir(path)
+                } catch {
+                    // rmapi mkdir is not idempotent; existing folders are fine.
+                }
+            }
+            do {
+                _ = try await cloud.find(remotePath)
+            } catch {
+                print("")
+                print("cloud folder could not be verified after mkdir attempts.")
+                print("retry:        rmsync init")
+                print("detail:       `rmapi find \(remotePath)` failed: \(error)")
+                throw ExitCode(1)
+            }
+
+            print("ready:        edit Markdown in sync dir, then run `rmsync push`")
+        } catch let exit as ExitCode {
+            throw exit
+        } catch {
+            print("ERROR: \(error)")
+            throw ExitCode(1)
+        }
+    }
+
+    private func loadOrSeedConfig() throws -> (Config, Bool) {
+        if FileManager.default.fileExists(atPath: Paths.configPath.path) {
+            return (try Config.load(), false)
+        }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let syncDir = home.appendingPathComponent(Config.defaultSyncDirName, isDirectory: true)
+        let cfg = Config(syncDir: syncDir)
+        try FileManager.default.createDirectory(
+            at: Paths.configPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let text = """
+        # rmsync configuration. Restart the daemon after edits:
+        #   rmsync restart
+
+        sync_dir      = "\(syncDir.path)"
+        remote_folder = "\(Config.defaultRemoteFolder)"
+
+        [deletion]
+        trash_retention_days = 30
+
+        [log]
+        level = "INFO"
+        """
+        try text.write(to: Paths.configPath, atomically: true, encoding: .utf8)
+        return (cfg, true)
     }
 }
 

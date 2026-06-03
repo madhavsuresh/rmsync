@@ -80,7 +80,7 @@ if [[ -n "$RESTORE_FROM" ]]; then
     [[ -d "$RESTORE_FROM/appsupport" ]] && mv "$RESTORE_FROM/appsupport" "$HOME/Library/Application Support/rmsync"
     [[ -d "$RESTORE_FROM/logs"       ]] && mv "$RESTORE_FROM/logs"       ~/Library/Logs/rmsync
     if [[ -d "$RESTORE_FROM/sync_dir" ]]; then
-        SYNC_DEST="$(cat "$RESTORE_FROM/sync_dir.path" 2>/dev/null || echo "$HOME/rmsync-writing")"
+        SYNC_DEST="$(cat "$RESTORE_FROM/sync_dir.path" 2>/dev/null || echo "$HOME/rmsync-notes")"
         rm -rf "$SYNC_DEST"
         mv "$RESTORE_FROM/sync_dir" "$SYNC_DEST"
     fi
@@ -110,7 +110,7 @@ if [[ -f ~/.config/rmsync/config.toml ]]; then
     SYNC_DIR="$(grep -E '^sync_dir' ~/.config/rmsync/config.toml | head -1 \
                 | sed -E 's/^sync_dir[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/')"
 fi
-[[ -z "$SYNC_DIR" ]] && SYNC_DIR="$HOME/rmsync-writing"
+[[ -z "$SYNC_DIR" ]] && SYNC_DIR="$HOME/rmsync-notes"
 echo "  sync_dir on disk: $SYNC_DIR"
 
 bold ""
@@ -185,10 +185,10 @@ SMOKE_PASSED=0
 if [[ "$DO_CLOUD_TEST" -eq 1 ]]; then
     step "Cloud roundtrip smoke test"
     PROBE="freshinstall-smoke-$TS"
-    PROBE_FILE="$HOME/rmsync-writing/$PROBE.md"
+    PROBE_FILE="$HOME/rmsync-notes/$PROBE.md"
     PROBE_BODY="probe content $TS — written by fresh-install-test.sh"
 
-    mkdir -p "$HOME/rmsync-writing"
+    mkdir -p "$HOME/rmsync-notes"
     echo "$PROBE_BODY" > "$PROBE_FILE"
     echo "  wrote $PROBE_FILE"
 
@@ -203,7 +203,7 @@ if [[ "$DO_CLOUD_TEST" -eq 1 ]]; then
     # Wait up to 60s for rmapi listing to show the explicit push.
     DEADLINE=$(($(date +%s) + 60))
     while [[ "$(date +%s)" -lt "$DEADLINE" ]]; do
-        if rmapi find /Writing 2>/dev/null | grep -q "$PROBE\b"; then
+        if rmapi find /sync/notes 2>/dev/null | grep -q "$PROBE\b"; then
             SMOKE_PASSED=1
             break
         fi
@@ -213,7 +213,7 @@ if [[ "$DO_CLOUD_TEST" -eq 1 ]]; then
     if [[ "$SMOKE_PASSED" -eq 1 ]]; then
         green "  ✓ probe found on cloud — push path works"
         # Cleanup the probe doc; don't leave it lying around.
-        rmapi rm "/Writing/$PROBE" 2>/dev/null || true
+        rmapi rm "/sync/notes/$PROBE" 2>/dev/null || true
         rm -f "$PROBE_FILE"
     else
         red "  ✗ probe never appeared on cloud after 60s — push path is BROKEN"
@@ -229,12 +229,12 @@ if [[ "$DO_RESTORE" -eq 1 ]]; then
     rm -rf ~/.config/rmsync \
            "$HOME/Library/Application Support/rmsync" \
            ~/Library/Logs/rmsync \
-           "$HOME/rmsync-writing"
+           "$HOME/rmsync-notes"
     [[ -d "$BACKUP/config"     ]] && mv "$BACKUP/config"     ~/.config/rmsync
     [[ -d "$BACKUP/appsupport" ]] && mv "$BACKUP/appsupport" "$HOME/Library/Application Support/rmsync"
     [[ -d "$BACKUP/logs"       ]] && mv "$BACKUP/logs"       ~/Library/Logs/rmsync
     if [[ -d "$BACKUP/sync_dir" ]]; then
-        ORIG_SYNC="$(cat "$BACKUP/sync_dir.path" 2>/dev/null || echo "$HOME/rmsync-writing")"
+        ORIG_SYNC="$(cat "$BACKUP/sync_dir.path" 2>/dev/null || echo "$HOME/rmsync-notes")"
         mkdir -p "$(dirname "$ORIG_SYNC")"
         mv "$BACKUP/sync_dir" "$ORIG_SYNC"
     fi

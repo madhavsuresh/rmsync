@@ -19,6 +19,7 @@ struct ForcePushApplyMoveTests {
             items: ExplicitSync.forcePushPlanItems(
                 remoteEntries: [Self.entry("old.md", hash: hash)],
                 localFiles: [Self.localFile("new.md", url: local, hash: hash)],
+                remoteFolder: "Writing",
                 renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
             )
         )
@@ -26,7 +27,7 @@ struct ForcePushApplyMoveTests {
 
         let result = try await ExplicitSync.applyForcePush(
             plan,
-            cfg: Config(syncDir: dir),
+            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
             state: state,
             cloud: cloud
         )
@@ -56,6 +57,7 @@ struct ForcePushApplyMoveTests {
             items: ExplicitSync.forcePushPlanItems(
                 remoteEntries: [Self.entry("old.md", hash: PathUtilities.sha256("remote\n"))],
                 localFiles: [Self.localFile("new.md", url: local, hash: PathUtilities.sha256("local\n"))],
+                remoteFolder: "Writing",
                 renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
             )
         )
@@ -63,7 +65,7 @@ struct ForcePushApplyMoveTests {
 
         let result = try await ExplicitSync.applyForcePush(
             plan,
-            cfg: Config(syncDir: dir),
+            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
             state: state,
             cloud: cloud
         )
@@ -89,14 +91,15 @@ struct ForcePushApplyMoveTests {
             stage: ExplicitSync.StageResult(id: "stage", root: dir, entries: []),
             items: ExplicitSync.forcePushPlanItems(
                 remoteEntries: [Self.entry("old.md", hash: PathUtilities.sha256("old\n"))],
-                localFiles: [Self.localFile("new.md", url: local, hash: PathUtilities.sha256("new\n"))]
+                localFiles: [Self.localFile("new.md", url: local, hash: PathUtilities.sha256("new\n"))],
+                remoteFolder: "Writing"
             )
         )
         let cloud = RecordingForcePushCloud()
 
         _ = try await ExplicitSync.applyForcePush(
             plan,
-            cfg: Config(syncDir: dir),
+            cfg: Config(syncDir: dir, remoteFolder: "Writing"),
             state: state,
             cloud: cloud
         )

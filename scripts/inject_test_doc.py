@@ -1,4 +1,4 @@
-"""Upload a test .rmdoc into /Writing for end-to-end daemon testing."""
+"""Upload a test .rmdoc into /sync/notes for end-to-end daemon testing."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ RMAPI = str(Path.home() / "bin/rmapi")
 def main() -> int:
     name = sys.argv[1] if len(sys.argv) > 1 else "daemon-test-note"
     text = sys.argv[2] if len(sys.argv) > 2 else "hello from the cloud\nline two\nline three\n"
-    folder = sys.argv[3] if len(sys.argv) > 3 else "/Writing"
+    folder = sys.argv[3] if len(sys.argv) > 3 else "/sync/notes"
 
     buf = BytesIO()
     write_blocks(buf, simple_text_document(text))

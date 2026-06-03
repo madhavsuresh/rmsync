@@ -6,7 +6,7 @@ struct GitSyncCmd: AsyncParsableCommand {
         commandName: "git",
         abstract: "Git-native reMarkable cloud sync.",
         discussion: """
-        Treats /sync/<name> on the reMarkable cloud as a materialized git tree.
+        Treats /sync/git/<name> on the reMarkable cloud as a materialized git tree.
         Pulls create git branches; pushes merge with git and upload only verified
         resolved Markdown states.
         """,
@@ -22,25 +22,28 @@ struct GitSyncCmd: AsyncParsableCommand {
 struct GitSyncInitCmd: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "init",
-        abstract: "Initialize /sync/<name> for the current git repository."
+        abstract: "Initialize /sync/git/<name> for the current git repository."
     )
 
-    @Option(name: .long, help: "Cloud folder name under /sync. Defaults to the repository directory name.")
+    @Option(name: .long, help: "Cloud folder name under /sync/git. Defaults to the repository directory name.")
     var name: String?
 
     @Option(name: .long, help: "Repository subdirectory to sync. Defaults to the repo root.")
     var path: String = "."
 
-    @Option(name: .long, help: "Cloud root folder. Defaults to sync.")
-    var remoteRoot: String = "sync"
+    @Option(name: .long, help: "Cloud root folder. Defaults to sync/git.")
+    var remoteRoot: String = GitSync.defaultRemoteRoot
 
     func run() async throws {
         do {
+            let ordinaryRemoteFolder = (try? Config.load().remoteFolder)
+                ?? Config.defaultRemoteFolder
             let result = try await GitSync.initialize(
                 cwd: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
                 name: name,
                 syncRoot: path,
-                remoteRoot: remoteRoot
+                remoteRoot: remoteRoot,
+                ordinaryRemoteFolder: ordinaryRemoteFolder
             )
             print("initialized:  \(result.name)")
             print("remote:       \(result.remotePath)")

@@ -290,8 +290,8 @@ actor SyncWorker {
         defer { Task { await token.release() } }
 
         // Compute the new remote path. Path semantics: the cloud
-        // doc lives at "/Writing/<rel-without-extension>" by
-        // convention. We sanitize each segment the same way
+        // doc lives under the configured remote_folder by convention.
+        // We sanitize each segment the same way
         // ``Paths.remoteToLocal`` does so a round-trip is stable.
         guard let relTo = PathUtilities.resolvedRelativePath(
             from: cfg.syncDir, to: URL(fileURLWithPath: pair.to)
@@ -305,7 +305,10 @@ actor SyncWorker {
         let cleanRel = relTo.dropLast() + [
             URL(fileURLWithPath: pair.to).deletingPathExtension().lastPathComponent
         ]
-        let newRemote = "/" + ([cfg.remoteFolder] + cleanRel).joined(separator: "/")
+        let remoteRoot = PathUtilities.remoteFolderPath(cfg.remoteFolder)
+        let newRemote = cleanRel.reduce(remoteRoot) { path, segment in
+            path == "/" ? "/\(segment)" : "\(path)/\(segment)"
+        }
 
         // Stamp pending_op and the new local_path. The local file
         // already lives at ``pair.to`` on disk; matching state.db
@@ -1102,7 +1105,7 @@ actor SyncWorker {
         // Guard: push only from ``sync_dir`` (not its subdirs or from a
         // stray location). A file at ``sync_dir/Writing/foo.md`` is
         // almost always residue from an earlier buggy pull; pushing it
-        // would clone the whole Writing tree into a nested phantom.
+        // would clone a whole cloud tree into a nested phantom.
         guard let rel = relativePath(from: cfg.syncDir, to: localPath) else {
             Logger.shared.warn(
                 "push refused: path not in sync_dir",

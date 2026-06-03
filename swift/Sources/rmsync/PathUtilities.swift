@@ -56,6 +56,34 @@ enum PathUtilities {
         return url
     }
 
+    static func normalizedRemoteFolder(_ remoteFolder: String) -> String {
+        remoteFolder
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+            .joined(separator: "/")
+    }
+
+    static func remoteFolderPath(_ remoteFolder: String) -> String {
+        let normalized = normalizedRemoteFolder(remoteFolder)
+        return normalized.isEmpty ? "/" : "/\(normalized)"
+    }
+
+    static func remoteFolderSegments(_ remoteFolder: String) -> [String] {
+        normalizedRemoteFolder(remoteFolder)
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+    }
+
+    static func remoteFolderMkdirChain(_ remoteFolder: String) -> [String] {
+        var chain: [String] = []
+        var prefix = ""
+        for segment in remoteFolderSegments(remoteFolder) {
+            prefix += "/\(segment)"
+            chain.append(prefix)
+        }
+        return chain
+    }
+
     /// Inverse of ``remoteToLocal`` for the *parent folder* of a
     /// given local file: returns the cloud-side path of the
     /// folder the file should land in, plus the chain of mkdir
@@ -84,16 +112,16 @@ enum PathUtilities {
     static func localToRemoteParentChain(
         localPath: URL, syncDir: URL, remoteFolder: String
     ) -> (parentPath: String, mkdirChain: [String]) {
-        let topLevel = "/\(remoteFolder)"
+        let topLevel = remoteFolderPath(remoteFolder)
         var parentSegs: [String] = []
         if let relSegs = resolvedRelativePath(from: syncDir, to: localPath),
            relSegs.count > 1 {
             parentSegs = Array(relSegs.dropLast())
         }
         var prefix = topLevel
-        var chain: [String] = [topLevel]
+        var chain = remoteFolderMkdirChain(remoteFolder)
         for seg in parentSegs {
-            prefix += "/\(seg)"
+            prefix = prefix == "/" ? "/\(seg)" : "\(prefix)/\(seg)"
             chain.append(prefix)
         }
         return (parentPath: prefix, mkdirChain: chain)
@@ -150,15 +178,15 @@ enum PathUtilities {
     static func localDirToRemoteChain(
         localDir: URL, syncDir: URL, remoteFolder: String
     ) -> (cloudPath: String, mkdirChain: [String]) {
-        let topLevel = "/\(remoteFolder)"
+        let topLevel = remoteFolderPath(remoteFolder)
         var dirSegs: [String] = []
         if let relSegs = resolvedRelativePath(from: syncDir, to: localDir) {
             dirSegs = relSegs
         }
         var prefix = topLevel
-        var chain: [String] = [topLevel]
+        var chain = remoteFolderMkdirChain(remoteFolder)
         for seg in dirSegs {
-            prefix += "/\(seg)"
+            prefix = prefix == "/" ? "/\(seg)" : "\(prefix)/\(seg)"
             chain.append(prefix)
         }
         return (cloudPath: prefix, mkdirChain: chain)

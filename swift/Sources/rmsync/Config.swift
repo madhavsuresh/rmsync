@@ -6,6 +6,10 @@ import TOMLDecoder
 /// Field names mirror the Python Pydantic model in ``src/rm_sync/config.py``
 /// so the same TOML file works with both the old and new daemon.
 struct Config: Decodable, Sendable {
+    static let defaultSyncDirName = "rmsync-notes"
+    static let defaultRemoteFolder = "sync/notes"
+    static let legacyRemoteFolder = "Writing"
+
     var syncDir: URL
     var remoteFolder: String
     var workerPoolSize: Int
@@ -275,7 +279,8 @@ struct Config: Decodable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let rawSync = try c.decode(String.self, forKey: .syncDir)
         self.syncDir = URL(fileURLWithPath: NSString(string: rawSync).expandingTildeInPath)
-        self.remoteFolder = try c.decodeIfPresent(String.self, forKey: .remoteFolder) ?? "Writing"
+        self.remoteFolder = try c.decodeIfPresent(String.self, forKey: .remoteFolder)
+            ?? Self.legacyRemoteFolder
         self.workerPoolSize = try c.decodeIfPresent(Int.self, forKey: .workerPoolSize) ?? 3
         self.pollIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pollIntervalSeconds) ?? 30
         self.pollActiveIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pollActiveIntervalSeconds) ?? 15
@@ -309,7 +314,7 @@ struct Config: Decodable, Sendable {
     /// code always goes through :py:meth:`load` for real config files.
     init(
         syncDir: URL,
-        remoteFolder: String = "Writing",
+        remoteFolder: String = Config.defaultRemoteFolder,
         workerPoolSize: Int = 3,
         pollIntervalSeconds: Int = 30,
         pollActiveIntervalSeconds: Int = 15,
