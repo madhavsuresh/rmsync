@@ -1,5 +1,12 @@
 # Deviations from the original design prompt
 
+**Status:** historical implementation notes. Some sections describe
+pre-explicit-sync daemon behavior and are not current operational
+documentation. For current behavior, use `README.md`, `docs/USAGE.md`,
+and `docs/LLM_CONTEXT.md`: sync mutations are explicit through
+`rmsync pull`, `rmsync diff`, `rmsync accept`, `rmsync push`, and
+`rmsync force-push`.
+
 These are deliberate changes made during scaffolding. Each addresses a
 specific issue identified in spec review. If you're reading the original
 prompt and the code disagrees, the code is the source of truth.

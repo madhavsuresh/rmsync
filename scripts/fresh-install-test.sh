@@ -192,8 +192,15 @@ if [[ "$DO_CLOUD_TEST" -eq 1 ]]; then
     echo "$PROBE_BODY" > "$PROBE_FILE"
     echo "  wrote $PROBE_FILE"
 
-    # Wait up to 60s for the daemon to push and the cloud to ack.
-    # Debounce is 2s + push + propagation; usually under 10s.
+    PUSH_OUT="$(rmsync push "$PROBE_FILE" 2>&1)" || {
+        echo "$PUSH_OUT"
+        red "  ✗ explicit push failed"
+        red "    last 30 lines of stderr.log:"
+        tail -30 ~/Library/Logs/rmsync/stderr.log 2>&1 | sed 's/^/      /'
+    }
+    echo "$PUSH_OUT"
+
+    # Wait up to 60s for rmapi listing to show the explicit push.
     DEADLINE=$(($(date +%s) + 60))
     while [[ "$(date +%s)" -lt "$DEADLINE" ]]; do
         if rmapi find /Writing 2>/dev/null | grep -q "$PROBE\b"; then
@@ -212,8 +219,6 @@ if [[ "$DO_CLOUD_TEST" -eq 1 ]]; then
         red "  ✗ probe never appeared on cloud after 60s — push path is BROKEN"
         red "    last 30 lines of stderr.log:"
         tail -30 ~/Library/Logs/rmsync/stderr.log 2>&1 | sed 's/^/      /'
-        red "    last 30 lines of stdout.log:"
-        tail -30 ~/Library/Logs/rmsync/stdout.log 2>&1 | sed 's/^/      /'
     fi
 fi
 

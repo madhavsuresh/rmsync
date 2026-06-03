@@ -31,7 +31,8 @@ Everything else the daemon needs:
 ~/Library/Application Support/rmsync/state.db          # SQLite state
 ~/Library/Application Support/rmsync/ipc.sock          # live IPC socket
 ~/Library/Application Support/rmsync/status.json       # slow-cadence snapshot
-~/Library/Logs/rmsync/stdout.log                       # structured daemon log
+~/Library/Logs/rmsync/stderr.log                       # structured daemon log
+~/Library/Logs/rmsync/stdout.log                       # usually empty under Swift
 ~/Library/Logs/rmsync/menubar.log                      # menu bar log
 ~/Library/CloudStorage/Dropbox/reMarkable/              # your sync dir (Dropbox today)
 ```
@@ -60,7 +61,8 @@ rmapi account
 ```
 
 Without this, the daemon will run but `rmsync doctor` fails on the
-"rmapi authenticated" check and nothing syncs.
+"rmapi authenticated" check and explicit pull/push commands cannot
+reach the cloud.
 
 ---
 
@@ -209,10 +211,9 @@ If you edit `sync_dir` in `config.toml` by hand and restart:
 
 - The daemon comes up looking at the new path.
 - That directory is probably empty (you didn't move the files).
-- Startup reconcile sees every tracked doc's `local_path` pointing at
-  the old location and reads them as "missing from disk."
-- That fires the "local file missing on startup" handler, which tries
-  to propagate deletions to the cloud.
+- The state DB still points at the old absolute paths.
+- Status, history, trash, and future explicit sync operations can then
+  reason about the wrong files.
 
 **Don't edit `sync_dir` in `config.toml` manually.** Always use
 `rmsync relocate`.
@@ -232,13 +233,13 @@ didn't have to do it yourself.
 
 ```sh
 rmsync pause
-# … daemon is now idle. tablet changes still queued up but not pulled; …
-# … local edits still not pushed …
+# … paused status is set; no background sync exists in explicit mode …
 rmsync resume
 ```
 
 The paused state persists across daemon restarts (stored in
-`state.db`'s `settings` table). Menu bar icon shows ⏸ while paused.
+`state.db`'s `settings` table). Menu bar icon shows paused while the
+flag is set.
 
 ### …resolve a conflict
 
@@ -271,12 +272,12 @@ $EDITOR ~/sync-dir/foo.md.conflict
 # you want. you can mix from both sides.
 
 mv ~/sync-dir/foo.md.conflict ~/sync-dir/foo.md
-# overwrites the stale .md with your merged version. the daemon picks
-# this up as a normal local edit and pushes.
+# overwrites the stale .md with your merged version.
+rmsync push foo.md
 ```
 
-After the push, both sides are in sync again and `rmsync conflicts`
-returns empty.
+After the explicit push, both sides are in sync again and
+`rmsync conflicts` returns empty.
 
 ### …change config and have it take effect
 
@@ -369,8 +370,8 @@ leak its `.obsidian/` plugins folder to the cloud.
 
 ### …revert a doc to an earlier version
 
-Every time the daemon writes a `.md` file (either pulled from
-the cloud or about to push), it parks a snapshot of the bytes at
+Every explicit push and accepted pull overwrite for a tracked doc parks
+a snapshot of the bytes at
 `<stateDir>/backups/<doc-id>/<utc-stamp>.md`. Default retention
 is 30 snapshots per doc; bump or shrink via
 `backup_snapshots_to_keep` in config.toml.
@@ -398,10 +399,9 @@ rmsync history restore ~/rmsync-writing/Chapter-3.md \
 
 The `cause` column in `history list` distinguishes:
 
-- `push` — bytes saved on a save / push to cloud.
-- `pull_overwrite` — bytes captured before the daemon overwrote
-  the local file with a remote edit. This is the safety net for
-  "the daemon just clobbered something I was working on".
+- `push` — bytes captured before a tracked local file is pushed.
+- `pull_overwrite` — bytes captured before an accepted cloud change
+  overwrites a local file.
 
 Storage is keyed on the doc UUID (not the local path), so
 `rmsync relocate` doesn't orphan history. Disk usage is bounded
@@ -483,7 +483,7 @@ screen. Click it for the menu.
 - **Restart Daemon** — `launchctl kickstart -k`
 - **Open Logs** — opens the log file in Console.app
 - **Edit Config…** — opens `config.toml`
-- **Quit Menu Bar** — stops the menu bar only; daemon keeps syncing
+- **Quit Menu Bar** — stops the menu bar only; daemon/status IPC keeps running
 
 ---
 
@@ -492,8 +492,8 @@ screen. Click it for the menu.
 ### Where logs go
 
 ```
-~/Library/Logs/rmsync/stdout.log     # daemon (structured JSON, one event per line)
-~/Library/Logs/rmsync/stderr.log     # daemon stderr
+~/Library/Logs/rmsync/stderr.log     # daemon (structured JSON, one event per line)
+~/Library/Logs/rmsync/stdout.log     # usually empty under Swift
 ~/Library/Logs/rmsync/menubar.log    # menu bar
 ```
 
@@ -508,7 +508,7 @@ Ctrl+C to stop.
 Or grep for just structured events:
 
 ```sh
-tail -f ~/Library/Logs/rmsync/stdout.log | grep '"event"'
+tail -f ~/Library/Logs/rmsync/stderr.log | grep '"event"'
 ```
 
 ### `rmsync doctor`

@@ -181,6 +181,10 @@ sync_dir      = "$HOME/rmsync-writing"
 remote_folder = "Writing"
 
 worker_pool_size               = 3
+
+# Legacy daemon tuning retained for config compatibility.
+# Current explicit-sync releases do not start a watcher, poller,
+# reconcile pass, or background worker pool.
 poll_interval_seconds          = 30
 poll_active_interval_seconds   = 15
 poll_idle_interval_seconds     = 120
@@ -199,11 +203,9 @@ dry_run                  = false
 [log]
 level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 
-# Optional: drop-folder for sending PDFs / EPUBs to the tablet.
-# Drop a file into ``local_dir``, the daemon pushes it to
-# ``remote_folder`` on the cloud, then (by default) removes it
-# from local. Closes the "send paper to tablet" loop without
-# emails or rmapi-by-hand. Uncomment to enable.
+# Legacy optional drop-folder for sending PDFs / EPUBs to the tablet.
+# The explicit-sync daemon does not watch this folder. Use rmapi directly
+# for PDF / EPUB sends until rmsync has a dedicated explicit send command.
 # [inbox]
 # local_dir         = "$HOME/rmsync-writing/_inbox"
 # remote_folder     = "Inbox"
@@ -218,17 +220,14 @@ level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 # bind_addr  = "127.0.0.1"
 # port       = 7878
 
-# Rename / move / delete propagation: ON by default (v0.2.27+).
-# Local delete → cloud trash; tablet delete → local trash.
-# Files soft-delete into ``<sync_dir>/.rmsync-trash`` first;
-# ``rmsync trash list / restore`` recovers them. The bulk-delete
-# brake refuses to apply more than ``bulk_delete_threshold`` of
-# tracked docs in a ``bulk_delete_window_seconds`` window — caps
-# the blast radius of an accidental ``rm -rf``.
-#
-# To opt OUT (v0.2.18-style behavior — local delete logs but
-# doesn't touch cloud), uncomment + set ``enable_propagation = false``.
-# To tweak thresholds, uncomment + adjust the lines below.
+# Legacy rename / move / delete propagation settings. Current
+# explicit-sync releases do not propagate deletes automatically.
+# Local deletes affect the cloud only with:
+#   rmsync push --include-deletes
+# Cloud deletes affect local files only after:
+#   rmsync pull
+#   rmsync accept --include-deletes <path>
+# Accepted local deletes are parked in ``<sync_dir>/.rmsync-trash`` first.
 # [deletion]
 # enable_propagation         = true
 # trash_retention_days       = 30
@@ -334,6 +333,8 @@ if [[ "$NEEDS_AUTH" -eq 1 ]]; then
 fi
 echo "  • $BIN_DIR/rmsync doctor   # verify everything is green"
 echo "  • $BIN_DIR/rmsync status   # check the live daemon"
+echo "  • $BIN_DIR/rmsync pull     # stage cloud changes, then diff/accept"
+echo "  • $BIN_DIR/rmsync push     # push local Markdown changes when ready"
 echo "  • edit $CONFIG_DIR/config.toml, then: rmsync restart"
 echo
 echo "Full usage: $SCRIPT_DIR/docs/USAGE.md"

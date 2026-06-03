@@ -1,7 +1,6 @@
-// FSEventStream is macOS-only. Linux uses INotifyWatcher (Phase 1)
-// instead — DaemonScaffold picks the right one with #if. The file
-// is wrapped wholesale; on Linux the entire LocalWatcher type is
-// absent and INotifyWatcher takes its place.
+// Legacy FSEventStream watcher implementation. Explicit-sync daemons do
+// not start local watchers, but the type is retained for old tests and
+// historical worker paths. Linux has a matching INotifyWatcher.
 #if os(macOS)
 import CoreServices
 import Foundation
