@@ -157,11 +157,13 @@ enum ExplicitSync {
         cfg: Config,
         state: State,
         cloud: any CloudClient = Cloud(),
-        full: Bool = false
+        full: Bool = false,
+        stagingDir: URL? = nil
     ) async throws -> StageResult {
         let fm = FileManager.default
         let id = stageID()
-        let root = Paths.stagingDir.appendingPathComponent(id, isDirectory: true)
+        let stagingRoot = stagingDir ?? Paths.stagingDir
+        let root = stagingRoot.appendingPathComponent(id, isDirectory: true)
         let filesRoot = root.appendingPathComponent("files", isDirectory: true)
         let archivesRoot = root.appendingPathComponent("archives", isDirectory: true)
         try fm.createDirectory(at: filesRoot, withIntermediateDirectories: true)
@@ -271,7 +273,7 @@ enum ExplicitSync {
             entries: entries
         )
         try writeManifest(manifest, root: root)
-        try PathUtilities.atomicWriteText(id + "\n", to: Paths.stagingDir.appendingPathComponent("current"))
+        try PathUtilities.atomicWriteText(id + "\n", to: stagingRoot.appendingPathComponent("current"))
         return StageResult(id: id, root: root, entries: entries)
     }
 
@@ -504,9 +506,10 @@ enum ExplicitSync {
     static func planForcePush(
         cfg: Config,
         state: State,
-        cloud: Cloud = Cloud()
+        cloud: Cloud = Cloud(),
+        stagingDir: URL? = nil
     ) async throws -> ForcePushPlan {
-        let stage = try await stagePull(cfg: cfg, state: state, cloud: cloud)
+        let stage = try await stagePull(cfg: cfg, state: state, cloud: cloud, stagingDir: stagingDir)
         let localFiles = try localForcePushFiles(cfg: cfg)
         let items = forcePushPlanItems(
             remoteEntries: stage.entries,

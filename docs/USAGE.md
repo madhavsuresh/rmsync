@@ -85,6 +85,9 @@ Core subcommands. Run any of them from anywhere.
 | `rmsync push --include-deletes` | Also propagate tracked local files missing on disk | Direct rmapi |
 | `rmsync force-push` | Stage current cloud state and preview replacing it with the local tree | rmapi + staging dir |
 | `rmsync force-push --apply` | Replace same-path cloud docs, upload local-only docs, and trash remote-only docs | Direct rmapi |
+| `rmsync git init` | Initialize `/sync/<repo>` for a git-backed workflow | git refs + rmapi |
+| `rmsync git pull` / `rmsync-git pull` | Render cloud state into a new git branch | rmapi + git branch |
+| `rmsync git push` / `rmsync-git push` | Merge cloud with `HEAD`, then upload the verified git tree | git merge-tree + rmapi |
 | `rmsync pause` | Set the paused status flag | IPC → state DB |
 | `rmsync resume` | Clear the paused status flag | IPC → state DB |
 | `rmsync sync-now` | Deprecated; automatic polling is disabled | IPC |
@@ -172,6 +175,40 @@ staging directory before printing the plan. Applying the plan:
 `force-push` bypasses cloud-baseline conflict checks, but it does not
 bypass local data-loss guards: dataless File Provider placeholders and
 suspicious empty local reads are still refused.
+
+### …use git as the sync boundary
+
+Run this from an existing git repository when you want every synced
+state to be a real commit.
+
+```sh
+rmsync-git init --name attack
+rmsync-git push
+```
+
+This creates `/sync/attack` on the reMarkable cloud and stores
+repo-local metadata under `.git/rmsync-git/`. The hidden ref
+`refs/rmsync-git/attack/cloud` records the last git commit whose
+Markdown tree was verified to match the cloud.
+
+When the tablet/cloud changes, import it as a branch:
+
+```sh
+rmsync-git pull
+# prints a branch like rmsync/cloud/attack/20260603T041500Z-a1b2c3d4
+git merge rmsync/cloud/attack/20260603T041500Z-a1b2c3d4
+```
+
+When pushing, rmsync-git renders the current cloud, asks git to perform
+a three-way merge with `refs/rmsync-git/<name>/cloud` as the base, and
+uploads only the resulting Markdown tree. If git reports conflicts, no
+cloud documents are changed; resolve the branch with normal git tools,
+commit the resolution, then run `rmsync-git push` again.
+
+Clean independent changes are merged automatically. If that merge brings
+tablet edits into your branch, `rmsync-git push` creates a real merge
+commit before upload so the local branch and cloud never describe
+different resolved states. A dirty worktree is refused by default.
 
 ### …move the sync dir to Dropbox (or anywhere else)
 

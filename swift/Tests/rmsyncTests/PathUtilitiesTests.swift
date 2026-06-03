@@ -60,6 +60,24 @@ struct PathUtilitiesTests {
         #expect(result.path == "/tmp/sync/Research/paper.md")
     }
 
+    @Test("multi-segment remote folder prefix is stripped")
+    func remoteToLocalMultiSegmentRoot() {
+        let sync = URL(fileURLWithPath: "/tmp/sync")
+        let result = PathUtilities.remoteToLocal(
+            remotePath: "/sync/attack/Research/paper",
+            syncDir: sync,
+            remoteFolder: "sync/attack"
+        )
+        #expect(result.path == "/tmp/sync/Research/paper.md")
+
+        let dir = PathUtilities.remoteToLocalDir(
+            remotePath: "/sync/attack/Research",
+            syncDir: sync,
+            remoteFolder: "sync/attack"
+        )
+        #expect(dir.path == "/tmp/sync/Research")
+    }
+
     // MARK: - localToRemoteParentChain (push side)
 
     @Test("top-level file maps to remoteFolder root")
