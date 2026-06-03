@@ -254,10 +254,11 @@ rmsync doctor    # verify all 10 checks pass
 rmsync status    # see what the daemon is doing
 ```
 
-Edit files under your sync dir (`~/rmsync-writing` by default) and
-they'll push to the tablet. Write on the tablet and they'll appear
-locally. The menu bar icon tells you at a glance what state the sync
-is in.
+Edit files under your sync dir (`~/rmsync-writing` by default), then
+run `rmsync push` when you want them on the tablet. Write on the
+tablet, let it sync to the cloud, then run `rmsync pull`, `rmsync diff`,
+and `rmsync accept` to bring selected changes local. The menu bar icon
+tells you the daemon/status state at a glance.
 
 **For everything else:** [`docs/USAGE.md`](docs/USAGE.md) has the full
 operational guide — daily commands, "how do I…" recipes, config
@@ -328,8 +329,8 @@ reMarkable cloud, your doc would be wiped on every device.
    && st_blocks == 0` — which is unambiguous on APFS regardless of
    which provider is responsible. If it's dataless and we've
    previously synced non-empty content, the push is refused, a
-   banner fires, and the cloud copy is untouched. The push
-   automatically resumes once the provider re-materializes the file.
+   banner fires, and the cloud copy is untouched. Re-run
+   `rmsync push <path>` after the provider re-materializes the file.
 
 2. **`rmsync doctor` warning.** Path-substring match against known
    File Provider roots. If your `sync_dir` is inside one, doctor
@@ -433,9 +434,9 @@ without being subject to File Provider eviction.
 - **Docker engine** (with compose plugin) on any Linux host. Tested
   on amd64 + arm64.
 - **rmapi** is bundled into the image — no host-side install.
-- For large sync trees (>5000 subdirs): bump
-  `fs.inotify.max_user_watches` on the host. Default 8192 is enough
-  for typical use.
+- Legacy inotify watcher settings are still present in config for
+  compatibility, but current explicit-sync releases do not start a
+  background watcher.
 
 ### Both paths
 
@@ -466,10 +467,10 @@ rmsync diff               # review staged cloud changes
 rmsync accept <path>      # apply one staged cloud change locally
 rmsync accept --all       # apply all staged non-delete changes
 rmsync push [path ...]    # push local Markdown changes to cloud
-rmsync force-push         # preview server-wins overwrite of cloud state
-rmsync force-push --apply # apply the server-wins overwrite
+rmsync force-push         # preview replacing cloud state with local tree
+rmsync force-push --apply # apply the local-tree overwrite
 rmsync logs -f            # tail the structured JSON log
-rmsync pause              # suspend syncing (persists across restarts)
+rmsync pause              # set the paused status flag
 rmsync resume             # clear the pause flag
 rmsync sync-now           # deprecated; auto polling is disabled
 rmsync conflicts          # list unresolved conflicts
@@ -494,8 +495,8 @@ required for any edit to take effect.
 It moves the files, rewrites `state.db`'s `local_path` column for every
 tracked doc, updates the config, and restarts the agent atomically.
 Editing `sync_dir` directly leaves every tracked doc's `local_path`
-pointing at a missing location, which the daemon interprets as "user
-deleted everything" on next startup.
+pointing at the old location, so status, history, trash, and future
+explicit sync operations can reason about the wrong files.
 
 Full config reference and behavioural details in `docs/USAGE.md`.
 
@@ -607,7 +608,7 @@ Third-party components each carry their own terms. Full accounting in
   dependencies fetched at build time. Not redistributed in source.
 - **`rmapi`** — [ddvk/rmapi](https://github.com/ddvk/rmapi) (AGPL-3.0).
   rmsync shells out to it as a separate process; it's a runtime
-  dependency that users install themselves (`brew install io41/tap/rmapi`).
+  dependency installed through this tap (`brew install madhavsuresh/rmsync/rmapi`).
   AGPL-3.0 governs rmapi; it does not reach rmsync, per the standard
   subprocess-aggregation reading. See THIRDPARTY.md for the detailed
   argument.

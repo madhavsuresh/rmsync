@@ -6,6 +6,15 @@ struct RMSyncCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "rmsync",
         abstract: "Explicit reMarkable cloud push/pull for a Markdown tree.",
+        discussion: """
+        Current sync is explicit:
+          rmsync pull
+          rmsync diff
+          rmsync accept <path>    # or: rmsync accept --all
+          rmsync push [path ...]
+
+        The daemon keeps status, menu bar, dashboard, and IPC online. It does not poll the cloud or watch local files for background mutation.
+        """,
         // ``--version`` prints Version.current (rewritten to the tag
         // during ``brew install`` — see Formula/rmsync.rb). ``rmsync
         // status`` separately reports the running *daemon's* version

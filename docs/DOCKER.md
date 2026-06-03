@@ -39,7 +39,14 @@ docker exec -it rmsync rmapi              # interactive auth
 docker exec rmsync rmsync doctor          # verify
 ```
 
-If `doctor` is all ✓, you're done. The daemon is syncing.
+If `doctor` is all checkmarks, setup is healthy. Sync explicitly:
+
+```sh
+docker exec rmsync rmsync pull
+docker exec rmsync rmsync diff
+docker exec rmsync rmsync accept <path>  # or: accept --all
+docker exec rmsync rmsync push [path ...]
+```
 
 ### Quick start (manual, if you don't trust curl|sh)
 
@@ -81,9 +88,9 @@ pick up the new values.
 The point of running rmsync on a Linux box is so you can edit the
 synced Markdown from your normal editor without Docker getting in
 the way. The host's view of `./data/sync/` is the same files the
-daemon sees at `/sync/`. Save a `.md`, the daemon's inotify
-watcher fires within a few hundred ms, the file pushes to your
-reMarkable cloud, and the change shows up on the tablet next sync.
+container sees at `/sync/`. Save a `.md`, then run
+`docker exec rmsync rmsync push <path>` when you want that local
+change on the reMarkable cloud.
 
 ### File ownership
 
@@ -93,29 +100,21 @@ you want files to be owned by your host user, uncomment the
 `user:` line in `docker-compose.yml` and set it to your
 `id -u:id -g`. The entrypoint and daemon respect any UID.
 
-### inotify watch limit
+### Legacy watcher settings
 
-The Linux kernel caps inotify watches per user at 8192 by
-default. If your `sync_dir` has more than ~5000 subdirectories,
-you'll exhaust the limit and silently miss events on later
-subdirectories. Fix on the host:
-
-```sh
-echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf
-sudo sysctl --system
-```
-
-The daemon logs a warning at startup if it's already using >50%
-of the kernel default; check `docker logs rmsync | grep watch`.
+The container no longer starts the inotify watcher in explicit-sync
+mode. Older config keys such as `debounce_seconds` and
+`poll_interval_seconds` are retained for compatibility, but sync
+mutations happen through `pull`, `accept`, `push`, and `force-push`.
 
 ---
 
 ## Web dashboard
 
 Optional embedded HTTP dashboard. Replaces the menubar that
-Linux users don't have — shows tracked docs, conflicts, recent
-push/pull activity, and exposes manual sync-now / pause / resume
-buttons.
+Linux users don't have: shows tracked docs, conflicts, recent
+pull/push activity, and exposes pause / resume controls. Pull,
+accept, push, and force-push remain CLI-only.
 
 Enable in `data/config/config.toml`:
 
@@ -165,10 +164,9 @@ docker exec rmsync curl -s http://localhost:7878/api/status \
 
 ## Send PDFs / EPUBs to the tablet (inbox)
 
-Drop a `.pdf` or `.epub` into a configured "inbox" folder; the
-daemon pushes it to a cloud folder and (by default) removes it
-from local. Useful for "I read this on the tablet" workflows
-where you don't want the file round-tripping back as Markdown.
+The `[inbox]` config block is legacy. Current explicit-sync releases
+do not watch an inbox folder or push dropped PDFs / EPUBs
+automatically.
 
 To enable, edit `data/config/config.toml` and add:
 
@@ -179,37 +177,22 @@ remote_folder     = "Inbox"
 delete_after_push = true             # set false to keep a copy locally
 ```
 
-Then restart: `docker compose restart`. The daemon creates the
-`_inbox` directory if missing and starts watching for drops.
-Workflow:
+Adding the block is harmless for older installs, but the current
+daemon ignores it. Use `rmapi put --force <file.pdf> /Inbox`
+directly until rmsync has a dedicated explicit send command.
 
-```sh
-# On the host:
-cp ~/Downloads/some-paper.pdf data/sync/_inbox/
-# Within ~5 seconds (debounce + push), the daemon logs:
-#   inbox push starting        path=/sync/_inbox/some-paper.pdf
-#   inbox push complete; local removed
-# The PDF appears in /Inbox/ on your reMarkable tablet on next sync.
-```
+## Rename / move / delete propagation
 
-Non-`.pdf`/`.epub` files in the inbox dir are ignored with a one-
-time warning. Multiple drops in quick succession are debounced
-and processed serially.
+Delete propagation is explicit. A local delete affects the cloud only
+when you run `rmsync push --include-deletes`. A cloud delete affects
+local files only after `rmsync pull`, review with `rmsync diff`, and
+`rmsync accept --include-deletes <path>`.
 
-## Rename / move / delete propagation (default)
+Accepted local deletes are soft-deleted into
+`<sync_dir>/.rmsync-trash/<utc-stamp>/` first; recovery is via
+`rmsync trash list / restore`.
 
-**Default since v0.2.27** (was opt-in in v0.2.19–v0.2.26).
-Deletes and renames in the sync dir or on the tablet propagate
-to the other side without configuration. Local files are
-soft-deleted into `<sync_dir>/.rmsync-trash/<utc-stamp>/` first;
-recovery via `rmsync trash list / restore`. A bulk-delete brake
-refuses operations that would remove more than
-`bulk_delete_threshold` of tracked docs in
-`bulk_delete_window_seconds` — caps the blast radius of a runaway
-event storm or accidental `rm -rf`.
-
-To opt out (v0.2.18-style — local delete logs but doesn't touch
-cloud), edit `data/config/config.toml`:
+The old propagation switch remains in config for compatibility:
 
 ```toml
 [deletion]
@@ -236,9 +219,8 @@ docker exec rmsync rmsync trash prune          # one-shot manual prune
 docker exec rmsync rmsync trash prune --days 7 # one-off override
 ```
 
-Trash auto-prunes at daemon startup. Refused deletes show up as
-`error_state = "bulk_delete_refused"` in `rmsync status` and the
-web dashboard.
+The status-only daemon does not prune trash automatically; run
+`rmsync trash prune` when you want to enforce retention.
 
 ## Snapshot history (always on)
 
@@ -255,10 +237,10 @@ docker exec rmsync rmsync history restore /sync/Chapter-3.md \
 ```
 
 `history restore` parks the current file in the trash before
-overwriting and asks the daemon to push the reverted content
-immediately (via the `push_path` IPC verb). If you bind-mount
-the `/state` volume, snapshot history survives container
-restarts — same persistence story as `state.db`.
+overwriting. It does not push automatically; run
+`docker exec rmsync rmsync push <path>` after you inspect the restored
+content. If you bind-mount the `/state` volume, snapshot history
+survives container restarts — same persistence story as `state.db`.
 
 ## Operational commands
 
@@ -269,11 +251,16 @@ that lives in `/state/ipc.sock`:
 ```sh
 docker exec rmsync rmsync status
 docker exec rmsync rmsync doctor
-docker exec rmsync rmsync sync-now           # force immediate poll
+docker exec rmsync rmsync pull               # stage cloud changes
+docker exec rmsync rmsync diff               # review staged changes
+docker exec rmsync rmsync accept <path>      # apply selected staged change
+docker exec rmsync rmsync push [path ...]    # push local Markdown changes
+docker exec rmsync rmsync sync-now           # deprecated; auto polling disabled
 docker exec rmsync rmsync conflicts          # list unresolved
 docker exec rmsync rmsync conflicts --resolve-stale
 docker exec rmsync rmsync logs --diagnose    # print log paths + tail
-docker exec rmsync rmsync pause / resume     # toggle sync
+docker exec rmsync rmsync pause              # set paused status flag
+docker exec rmsync rmsync resume             # clear paused status flag
 ```
 
 `rmsync start / stop / restart` are not applicable in Docker —
@@ -340,10 +327,8 @@ services:
   unreliable underlying storage can still cause issues.
 - **No notifications**. Conflict / error events go to the
   structured log instead of a desktop banner.
-- **inotify, not FSEvents**. Slightly different event model —
-  rename detection uses cookie pairing with a 0.5s grace window
-  rather than FSEvents' renamed-flag bit. End-to-end behavior is
-  the same.
+- **No automatic inotify watcher** in explicit-sync mode. The Linux
+  build uses the same `pull` / `accept` / `push` command flow as macOS.
 
 ---
 
@@ -404,11 +389,8 @@ Common surprises:
 - **"no logs visible"**: the daemon writes to stderr, captured by
   Docker. Use `docker logs rmsync`, not the macOS-style "open the
   log file" approach.
-- **"upload doesn't work but download does"**: usually
-  inotify-related. Check `docker exec rmsync rmsync logs --diagnose`
-  for "watcher started" with backend=inotify and reasonable watch
-  count. If the watch count is small relative to your tree size,
-  you're hitting the `max_user_watches` limit on the host.
+- **"upload doesn't work unless I run a command"**: expected in
+  explicit-sync mode. Use `docker exec rmsync rmsync push <path>`.
 - **"daemon can't reach the cloud"**: rmapi auth is per-account
   and survives in `/config/rmapi.conf`. If `docker exec rmsync rmapi
   account` fails, redo the one-time auth flow.

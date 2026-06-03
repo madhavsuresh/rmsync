@@ -93,10 +93,11 @@ definition of *aggregation* — the FSF's own guidance
 treats "two programs, one pipe or subprocess invocation between them"
 as independent works.
 
-Users install `rmapi` separately (typically `brew install io41/tap/rmapi`,
-as recommended by rmsync's Formula and `rmsync doctor`). Anything they
-do with rmapi itself — modify, redistribute, etc. — is governed by
-AGPL-3.0. Anything they do with rmsync is governed by MIT.
+Users install `rmapi` as a separate formula, currently via
+`brew install madhavsuresh/rmsync/rmapi` or transitively through
+`brew install madhavsuresh/rmsync/rmsync`. Anything they do with rmapi
+itself — modify, redistribute, etc. — is governed by AGPL-3.0.
+Anything they do with rmsync is governed by MIT.
 
 If you are uncomfortable with AGPL-3.0 runtime dependencies for your own
 downstream reasons, the rmsync source is structured so that the `Cloud`
@@ -115,6 +116,6 @@ You can fork, modify, bundle, or resell rmsync under MIT terms so long as:
 3. You do not bundle `rmapi` binaries or source alongside the
    redistribution unless you accept AGPL-3.0 for that bundled copy. Tell
    users to install rmapi themselves (the rmsync Formula does this via
-   `depends_on "io41/tap/rmapi"`).
+   `depends_on "madhavsuresh/rmsync/rmapi"`).
 
 Nothing else is restricted.

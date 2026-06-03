@@ -172,12 +172,12 @@ struct RestartCmd: ParsableCommand {
 // MARK: - pause / resume / sync-now
 
 struct Pause: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Tell the daemon to stop syncing.")
+    static let configuration = CommandConfiguration(abstract: "Set the paused status flag.")
     func run() async throws { try await togglePaused(true, verb: "paused") }
 }
 
 struct Resume: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Resume syncing.")
+    static let configuration = CommandConfiguration(abstract: "Clear the paused status flag.")
     func run() async throws { try await togglePaused(false, verb: "resumed") }
 }
 
@@ -375,7 +375,7 @@ struct ForcePushCmd: AsyncParsableCommand {
             }
 
             print("")
-            print("applying server-wins force push...")
+            print("applying force push from local tree...")
             let result = try await ExplicitSync.applyForcePush(
                 plan,
                 cfg: cfg,
@@ -1061,10 +1061,10 @@ struct History: AsyncParsableCommand {
 struct RetryParked: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "retry-parked",
-        abstract: "Force a push retry for docs parked with error_state = push_failed."
+        abstract: "Explicitly retry pushes for docs parked with error_state = push_failed."
     )
 
-    @Flag(name: .long, help: "Show what would be retried without enqueuing.")
+    @Flag(name: .long, help: "Show what would be retried without pushing.")
     var dryRun: Bool = false
 
     func run() async throws {

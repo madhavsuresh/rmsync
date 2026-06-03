@@ -1,12 +1,12 @@
 import Foundation
 
 /// Conflict marker file management. Mirrors ``src/rm_sync/conflict.py``.
+/// Retained for legacy conflict files and state cleanup in explicit-sync mode.
 ///
-/// When both sides of a doc have changed since the last sync, the worker
-/// writes ``<file>.md.conflict`` next to the live ``<file>.md`` with
-/// git-style markers and refuses to touch the live file until the user
-/// resolves the conflict manually (edit the live file, delete the
-/// ``.conflict`` file, daemon picks up the change on its next cycle).
+/// Older worker paths wrote ``<file>.md.conflict`` next to the live
+/// ``<file>.md`` with git-style markers. The current daemon's periodic
+/// status refresh clears unresolved state after the user removes the
+/// marker file; staged explicit pulls report conflicts before writing.
 enum Conflict {
     static func conflictPath(for md: URL) -> URL {
         md.appendingPathExtension("conflict")

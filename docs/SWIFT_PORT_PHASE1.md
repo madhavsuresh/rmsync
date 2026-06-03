@@ -1,6 +1,10 @@
 # Phase 1: Swift daemon port (rmscene stays as a Python subprocess)
 
-**Status:** plan — not started.
+**Status:** historical planning note — superseded by the current Swift
+implementation and the explicit `pull` / `diff` / `accept` / `push`
+sync model. Do not use this file as current runtime or user-facing
+documentation; see `README.md`, `docs/USAGE.md`, and
+`docs/LLM_CONTEXT.md` for current behavior.
 **Timeline:** 8 working weeks, one engineer.
 **Outcome:** A Swift replacement for `rmsync daemon` that drops in as the LaunchAgent. CLI, menu bar, launchd integration, and on-disk state DB stay backward-compatible. Python lives on only as a 60-line CLI bridge around the `rmscene` library.
 

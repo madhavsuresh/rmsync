@@ -126,21 +126,14 @@ enum IPCClientSync {
         return true
     }
 
-    /// Ask the daemon to enqueue a push for ``path`` immediately,
-    /// bypassing the watcher's debounce. Used by
-    /// ``rmsync history restore`` (v0.2.20+) and
-    /// ``rmsync retry-parked`` (v0.2.26+).
+    /// Legacy compatibility helper for the pre-explicit-sync daemon.
+    /// Current daemons reject ``push_path`` with ``explicit_sync_mode``;
+    /// callers should run ``rmsync push <path>`` instead of asking the
+    /// daemon to enqueue hidden work.
     ///
-    /// ``force`` (v0.2.26+) bypasses the worker's hash-unchanged
-    /// no-op short-circuit. Necessary for the retry path because
-    /// a parked doc's ``last_synced_md_hash`` matches the file's
-    /// current content (the failed push stamped it that way), so
-    /// without ``force`` the worker would skip the retry as a
-    /// no-op.
-    ///
-    /// Returns true if the daemon ack'd; false otherwise (e.g.,
-    /// daemon not running). Callers print their own user-facing
-    /// "daemon not running" message.
+    /// Returns true if the daemon ack'd; false otherwise (including
+    /// explicit-sync rejection or daemon unavailable). Callers print
+    /// their own user-facing message.
     @discardableResult
     static func pushPath(
         _ path: String, force: Bool = false, timeout: TimeInterval = 2.0

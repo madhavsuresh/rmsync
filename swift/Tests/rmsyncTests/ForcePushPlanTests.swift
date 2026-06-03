@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Explicit force-push planner")
 struct ForcePushPlanTests {
-    @Test("server-wins plan creates overwrites deletes and skips unchanged docs")
+    @Test("local-tree plan creates overwrites deletes and skips unchanged docs")
     func classifiesWholeTreePlan() {
         let same = PathUtilities.sha256("same\n")
         let local = [

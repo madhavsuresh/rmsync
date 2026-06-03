@@ -16,7 +16,7 @@
 # `.github/workflows/release.yml`, step 2–3 are done for you on tag push.
 
 class Rmsync < Formula
-  desc "Bidirectional macOS ↔ reMarkable tablet Markdown sync daemon"
+  desc "Explicit macOS to reMarkable tablet Markdown sync"
   homepage "https://github.com/madhavsuresh/rmsync"
   url "https://github.com/madhavsuresh/rmsync/archive/refs/tags/v0.2.32.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
@@ -155,6 +155,14 @@ class Rmsync < Formula
              rmsync doctor
              rmsync status
 
+      Current releases use explicit sync. The daemon keeps status,
+      menu bar, dashboard, and IPC online, but it does not poll the
+      cloud or watch local files for background mutation. Sync with:
+          rmsync pull
+          rmsync diff
+          rmsync accept <path>  # or: rmsync accept --all
+          rmsync push [path ...]
+
       The default sync dir is ~/rmsync-writing. Move it anywhere
       (iCloud, Dropbox, a git repo) with:
           rmsync relocate ~/path/to/new/dir
@@ -225,6 +233,10 @@ class Rmsync < Formula
       remote_folder = "Writing"
 
       worker_pool_size               = 3
+
+      # Legacy daemon tuning retained for config compatibility.
+      # Current explicit-sync releases do not start a watcher, poller,
+      # reconcile pass, or background worker pool.
       poll_interval_seconds          = 30
       poll_active_interval_seconds   = 15
       poll_idle_interval_seconds     = 120
@@ -243,10 +255,9 @@ class Rmsync < Formula
       [log]
       level = "INFO"   # DEBUG | INFO | WARNING | ERROR
 
-      # Optional: drop-folder for sending PDFs / EPUBs to the tablet.
-      # Drop a file into ``local_dir``, the daemon pushes it to
-      # ``remote_folder`` on the cloud, then (by default) removes it
-      # from local. Uncomment to enable.
+      # Legacy optional drop-folder for sending PDFs / EPUBs to the tablet.
+      # The explicit-sync daemon does not watch this folder. Use rmapi directly
+      # for PDF / EPUB sends until rmsync has a dedicated explicit send command.
       # [inbox]
       # local_dir         = "$HOME/rmsync-writing/_inbox"
       # remote_folder     = "Inbox"
@@ -258,14 +269,14 @@ class Rmsync < Formula
       # bind_addr  = "127.0.0.1"
       # port       = 7878
 
-      # Rename / move / delete propagation: ON by default (v0.2.27+).
-      # Local delete -> cloud trash; tablet delete -> local trash.
-      # Files soft-delete into <sync_dir>/.rmsync-trash first;
-      # 'rmsync trash list / restore' recovers them. Bulk-delete
-      # brake refuses bursts >50% of tracked docs in a 30s window.
-      #
-      # Opt OUT by uncommenting below and setting false. Tunables
-      # can be adjusted independently.
+      # Legacy rename / move / delete propagation settings. Current
+      # explicit-sync releases do not propagate deletes automatically.
+      # Local deletes affect the cloud only with:
+      #   rmsync push --include-deletes
+      # Cloud deletes affect local files only after:
+      #   rmsync pull
+      #   rmsync accept --include-deletes <path>
+      # Accepted local deletes are parked in <sync_dir>/.rmsync-trash first.
       # [deletion]
       # enable_propagation         = true
       # trash_retention_days       = 30

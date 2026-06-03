@@ -5,10 +5,10 @@ Five layers, in increasing cost:
 | Layer | Catches | Effort |
 |---|---|---|
 | Unit + offline integration tests (`swift test`) on macOS | Logic errors, regression of fixed bugs | Free, runs on every CI push |
-| Same suite on Linux (`swift:6.1-jammy` container) | Linux-specific compile errors, Glibc / Darwin divergences, watcher impl errors | Free, runs on every CI push |
+| Same suite on Linux (`swift:6.1-jammy` container) | Linux-specific compile errors, Glibc / Darwin divergences, explicit-sync regressions | Free, runs on every CI push |
 | Live-cloud smoke test against a real rmapi account | Push/pull roundtrip breaks, rmapi compat issues | One-time secret setup; runs on every push to main |
 | **`scripts/fresh-install-test.sh`** on dev's own Mac | Missing seeded state, install-helper gaps | 90s per run |
-| Guest-user macOS account / fresh Docker host | TCC permissions, Finder integration, FSEvents/inotify on a stranger's tree | 5–10 minutes per attempt |
+| Guest-user macOS account / fresh Docker host | TCC permissions, Finder integration, explicit push/pull on a stranger's tree | 5–10 minutes per attempt |
 
 If a bug surfaces on a tester's fresh install but not on yours, it's
 almost always something that depends on accumulated state — your
@@ -27,7 +27,8 @@ cd swift && swift test --no-parallel
 Runs on every PR + every push to main via `.github/workflows/ci.yml`.
 105+ tests covering archive packing, conflict marker generation, file
 provider detection, IPC, page codec roundtrip, path utilities,
-relocate, state DB schema migration, watcher ignore rules.
+relocate, state DB schema migration, explicit pull/push guards, and
+legacy watcher ignore rules.
 
 What this DOESN'T cover: anything that actually shells out to `rmapi`.
 For that, you need…
@@ -195,7 +196,7 @@ first time.
 
 3. **Install rmapi auth fresh** for the test user:
    ```sh
-   brew install io41/tap/rmapi
+   brew install madhavsuresh/rmsync/rmapi
    rmapi
    # Use a separate test reMarkable account (same one as
    # TEST_RMAPI_CONFIG, ideally) — don't auth your personal
@@ -211,11 +212,12 @@ first time.
 
 5. **Roundtrip test**:
    - Touch `~/rmsync-writing/probe.md`, write content, save.
-   - Wait ~10s.
+   - Run `rmsync push ~/rmsync-writing/probe.md`.
    - On your tablet, swipe down on the home screen to force sync.
    - Verify the doc appears in the Writing folder.
    - Edit the doc on the tablet.
-   - Wait up to 2 minutes for `rmsync sync-now` to pull the change.
+   - Swipe down again so the tablet sends the edit to the cloud.
+   - Run `rmsync pull`, `rmsync diff`, and `rmsync accept <path>`.
    - Verify the local file updated.
 
 ### What this catches that Layer 3 doesn't
