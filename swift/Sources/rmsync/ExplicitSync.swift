@@ -158,8 +158,16 @@ enum ExplicitSync {
         state: State,
         cloud: any CloudClient = Cloud(),
         full: Bool = false,
-        stagingDir: URL? = nil
+        stagingDir: URL? = nil,
+        initiator: String = "manual"
     ) async throws -> StageResult {
+        Logger.shared.audit("explicit pull started", meta: [
+            "initiator": initiator,
+            "sync_dir": cfg.syncDir.path,
+            "remote_folder": cfg.remoteFolder,
+            "full": boolString(full),
+        ])
+        do {
         let fm = FileManager.default
         let id = stageID()
         let stagingRoot = stagingDir ?? Paths.stagingDir
@@ -274,7 +282,22 @@ enum ExplicitSync {
         )
         try writeManifest(manifest, root: root)
         try PathUtilities.atomicWriteText(id + "\n", to: stagingRoot.appendingPathComponent("current"))
-        return StageResult(id: id, root: root, entries: entries)
+        let result = StageResult(id: id, root: root, entries: entries)
+        Logger.shared.audit(
+            "explicit pull staged",
+            meta: stageResultMeta(result, initiator: initiator, full: full)
+        )
+        return result
+        } catch {
+            Logger.shared.audit("explicit pull failed", meta: [
+                "initiator": initiator,
+                "sync_dir": cfg.syncDir.path,
+                "remote_folder": cfg.remoteFolder,
+                "full": boolString(full),
+                "error": "\(error)",
+            ], level: "error")
+            throw error
+        }
     }
 
     private static func cachedStageEntry(
@@ -425,8 +448,18 @@ enum ExplicitSync {
         paths: [String],
         all: Bool,
         includeDeletes: Bool,
-        force: Bool
+        force: Bool,
+        initiator: String = "manual"
     ) async throws -> AcceptResult {
+        Logger.shared.audit("explicit accept started", meta: [
+            "initiator": initiator,
+            "sync_dir": cfg.syncDir.path,
+            "all": boolString(all),
+            "include_deletes": boolString(includeDeletes),
+            "force": boolString(force),
+            "path_count": "\(paths.count)",
+        ])
+        do {
         let (root, manifest) = try loadCurrentStage()
         let selected = try selectEntries(manifest.entries, paths: paths, all: all)
         var result = AcceptResult()
@@ -455,7 +488,28 @@ enum ExplicitSync {
             }
         }
 
+        Logger.shared.audit(
+            "explicit accept completed",
+            meta: acceptResultMeta(
+                result,
+                initiator: initiator,
+                stageID: manifest.id,
+                selected: selected.count
+            )
+        )
         return result
+        } catch {
+            Logger.shared.audit("explicit accept failed", meta: [
+                "initiator": initiator,
+                "sync_dir": cfg.syncDir.path,
+                "all": boolString(all),
+                "include_deletes": boolString(includeDeletes),
+                "force": boolString(force),
+                "path_count": "\(paths.count)",
+                "error": "\(error)",
+            ], level: "error")
+            throw error
+        }
     }
 
     static func push(
@@ -464,8 +518,19 @@ enum ExplicitSync {
         cloud: Cloud = Cloud(),
         paths: [String],
         includeDeletes: Bool,
-        force: Bool
+        force: Bool,
+        initiator: String = "manual"
     ) async throws -> PushResult {
+        Logger.shared.audit("explicit push started", meta: [
+            "initiator": initiator,
+            "sync_dir": cfg.syncDir.path,
+            "remote_folder": cfg.remoteFolder,
+            "include_deletes": boolString(includeDeletes),
+            "force": boolString(force),
+            "path_count": "\(paths.count)",
+            "target_mode": paths.isEmpty ? "all_local_markdown" : "selected_paths",
+        ])
+        do {
         var result = PushResult()
         var targets = try localPushTargets(cfg: cfg, paths: paths)
 
@@ -500,30 +565,88 @@ enum ExplicitSync {
             }
         }
 
+        Logger.shared.audit(
+            "explicit push completed",
+            meta: pushResultMeta(
+                result,
+                initiator: initiator,
+                targets: seen.count,
+                includeDeletes: includeDeletes,
+                force: force
+            )
+        )
         return result
+        } catch {
+            Logger.shared.audit("explicit push failed", meta: [
+                "initiator": initiator,
+                "sync_dir": cfg.syncDir.path,
+                "remote_folder": cfg.remoteFolder,
+                "include_deletes": boolString(includeDeletes),
+                "force": boolString(force),
+                "path_count": "\(paths.count)",
+                "target_mode": paths.isEmpty ? "all_local_markdown" : "selected_paths",
+                "error": "\(error)",
+            ], level: "error")
+            throw error
+        }
     }
 
     static func planForcePush(
         cfg: Config,
         state: State,
         cloud: Cloud = Cloud(),
-        stagingDir: URL? = nil
+        stagingDir: URL? = nil,
+        initiator: String = "manual"
     ) async throws -> ForcePushPlan {
-        let stage = try await stagePull(cfg: cfg, state: state, cloud: cloud, stagingDir: stagingDir)
+        Logger.shared.audit("force push plan started", meta: [
+            "initiator": initiator,
+            "sync_dir": cfg.syncDir.path,
+            "remote_folder": cfg.remoteFolder,
+        ])
+        do {
+        let stage = try await stagePull(
+            cfg: cfg,
+            state: state,
+            cloud: cloud,
+            stagingDir: stagingDir,
+            initiator: initiator
+        )
         let localFiles = try localForcePushFiles(cfg: cfg)
         let items = forcePushPlanItems(
             remoteEntries: stage.entries,
             localFiles: localFiles
         )
-        return ForcePushPlan(stage: stage, items: items)
+        let plan = ForcePushPlan(stage: stage, items: items)
+        Logger.shared.audit(
+            "force push plan completed",
+            meta: forcePlanMeta(plan, initiator: initiator)
+        )
+        return plan
+        } catch {
+            Logger.shared.audit("force push plan failed", meta: [
+                "initiator": initiator,
+                "sync_dir": cfg.syncDir.path,
+                "remote_folder": cfg.remoteFolder,
+                "error": "\(error)",
+            ], level: "error")
+            throw error
+        }
     }
 
     static func applyForcePush(
         _ plan: ForcePushPlan,
         cfg: Config,
         state: State,
-        cloud: Cloud = Cloud()
+        cloud: Cloud = Cloud(),
+        initiator: String = "manual"
     ) async throws -> ForcePushResult {
+        Logger.shared.audit("force push apply started", meta: [
+            "initiator": initiator,
+            "stage_id": plan.stage.id,
+            "sync_dir": cfg.syncDir.path,
+            "remote_folder": cfg.remoteFolder,
+            "item_count": "\(plan.items.count)",
+        ])
         var result = ForcePushResult()
 
         for item in plan.items {
@@ -568,6 +691,10 @@ enum ExplicitSync {
             }
         }
 
+        Logger.shared.audit(
+            "force push apply completed",
+            meta: forcePushResultMeta(result, initiator: initiator, items: plan.items.count)
+        )
         return result
     }
 
@@ -617,6 +744,116 @@ enum ExplicitSync {
                 print("\(label) \(item.relativePath)")
             }
         }
+    }
+
+    // MARK: - audit log helpers
+
+    private static func boolString(_ value: Bool) -> String {
+        value ? "true" : "false"
+    }
+
+    private static func stageResultMeta(
+        _ result: StageResult,
+        initiator: String,
+        full: Bool
+    ) -> [String: String] {
+        var meta: [String: String] = [
+            "initiator": initiator,
+            "stage_id": result.id,
+            "stage_dir": result.root.path,
+            "entry_count": "\(result.entries.count)",
+            "full": boolString(full),
+        ]
+        meta.merge(changeCountMeta(result.entries)) { _, new in new }
+        return meta
+    }
+
+    private static func acceptResultMeta(
+        _ result: AcceptResult,
+        initiator: String,
+        stageID: String,
+        selected: Int
+    ) -> [String: String] {
+        [
+            "initiator": initiator,
+            "stage_id": stageID,
+            "selected": "\(selected)",
+            "applied": "\(result.applied)",
+            "deleted": "\(result.deleted)",
+            "skipped": "\(result.skipped)",
+            "refused": "\(result.refused.count)",
+        ]
+    }
+
+    private static func pushResultMeta(
+        _ result: PushResult,
+        initiator: String,
+        targets: Int,
+        includeDeletes: Bool,
+        force: Bool
+    ) -> [String: String] {
+        [
+            "initiator": initiator,
+            "targets": "\(targets)",
+            "pushed": "\(result.pushed)",
+            "skipped": "\(result.skipped)",
+            "refused": "\(result.refused.count)",
+            "include_deletes": boolString(includeDeletes),
+            "force": boolString(force),
+        ]
+    }
+
+    private static func forcePlanMeta(
+        _ plan: ForcePushPlan,
+        initiator: String
+    ) -> [String: String] {
+        var meta: [String: String] = [
+            "initiator": initiator,
+            "stage_id": plan.stage.id,
+            "item_count": "\(plan.items.count)",
+        ]
+        meta.merge(forceActionCountMeta(plan.items)) { _, new in new }
+        return meta
+    }
+
+    private static func forcePushResultMeta(
+        _ result: ForcePushResult,
+        initiator: String,
+        items: Int
+    ) -> [String: String] {
+        [
+            "initiator": initiator,
+            "items": "\(items)",
+            "created": "\(result.created)",
+            "overwritten": "\(result.overwritten)",
+            "deleted": "\(result.deleted)",
+            "unchanged": "\(result.unchanged)",
+            "refused": "\(result.refused.count)",
+        ]
+    }
+
+    private static func changeCountMeta(_ entries: [Entry]) -> [String: String] {
+        let grouped = Dictionary(grouping: entries, by: \.kind)
+        return [
+            "added": "\(grouped[.added]?.count ?? 0)",
+            "modified": "\(grouped[.modified]?.count ?? 0)",
+            "deleted": "\(grouped[.deleted]?.count ?? 0)",
+            "conflict": "\(grouped[.conflict]?.count ?? 0)",
+            "local_modified": "\(grouped[.localModified]?.count ?? 0)",
+            "unchanged": "\(grouped[.unchanged]?.count ?? 0)",
+            "error": "\(grouped[.error]?.count ?? 0)",
+        ]
+    }
+
+    private static func forceActionCountMeta(_ items: [ForcePushPlanItem]) -> [String: String] {
+        let grouped = Dictionary(grouping: items, by: \.action)
+        return [
+            "create_remote": "\(grouped[.createRemote]?.count ?? 0)",
+            "overwrite_remote": "\(grouped[.overwriteRemote]?.count ?? 0)",
+            "delete_remote": "\(grouped[.deleteRemote]?.count ?? 0)",
+            "unchanged": "\(grouped[.unchanged]?.count ?? 0)",
+            "error": "\(grouped[.error]?.count ?? 0)",
+        ]
     }
 
     // MARK: - accept helpers

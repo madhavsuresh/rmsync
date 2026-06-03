@@ -437,24 +437,30 @@ struct Logs: ParsableCommand {
             try runDiagnose()
             return
         }
-        // The Swift daemon writes structured JSON to stderr (see
-        // ``Logger.emit`` → ``FileHandle.standardError.write``).
-        // launchd routes that to ``stderr.log``. ``stdout.log``
-        // exists for parity with the launchd plist but is always
-        // empty under the Swift daemon — it was the Python
-        // implementation's primary log. Read stderr.log here so
-        // ``rmsync logs`` shows the actual daemon activity, and
-        // fall back to stdout.log if some future caller restores
-        // a stdout-writing logger.
+        // ``events.log`` is the shared audit stream for daemon events
+        // and explicit CLI sync operations. Older installs only have
+        // launchd's stderr/stdout files, so keep those as fallbacks.
+        let eventsPath = Paths.logDir.appendingPathComponent("events.log")
         let stderrPath = Paths.logDir.appendingPathComponent("stderr.log")
         let stdoutPath = Paths.logDir.appendingPathComponent("stdout.log")
         let path: URL = {
             let fm = FileManager.default
-            if fm.fileExists(atPath: stderrPath.path),
-               (try? Data(contentsOf: stderrPath))?.isEmpty == false {
-                return stderrPath
+            let candidates = [eventsPath, stderrPath, stdoutPath].filter { url in
+                fm.fileExists(atPath: url.path)
+                    && ((try? Data(contentsOf: url))?.isEmpty == false)
             }
-            if fm.fileExists(atPath: stdoutPath.path) { return stdoutPath }
+            if let newest = candidates.max(by: { lhs, rhs in
+                let lhsDate = (try? fm.attributesOfItem(atPath: lhs.path)[.modificationDate] as? Date)
+                    ?? .distantPast
+                let rhsDate = (try? fm.attributesOfItem(atPath: rhs.path)[.modificationDate] as? Date)
+                    ?? .distantPast
+                return lhsDate < rhsDate
+            }) {
+                return newest
+            }
+            for fallback in [eventsPath, stderrPath, stdoutPath] where fm.fileExists(atPath: fallback.path) {
+                return fallback
+            }
             return stderrPath
         }()
         guard FileManager.default.fileExists(atPath: path.path) else {
@@ -485,7 +491,7 @@ struct Logs: ParsableCommand {
 
         // 1. Log paths and sizes.
         print("Log files:")
-        let logFiles = ["stdout.log", "stderr.log", "menubar.log"]
+        let logFiles = ["events.log", "stdout.log", "stderr.log", "menubar.log"]
         let fm = FileManager.default
         for name in logFiles {
             let url = Paths.logDir.appendingPathComponent(name)
@@ -542,15 +548,17 @@ struct Logs: ParsableCommand {
         }
 
         // 4. Quick interpretation.
+        let eventsEmpty = (try? Data(contentsOf: Paths.logDir.appendingPathComponent("events.log")).isEmpty) ?? true
         let stdoutEmpty = (try? Data(contentsOf: Paths.logDir.appendingPathComponent("stdout.log")).isEmpty) ?? true
         let stderrEmpty = (try? Data(contentsOf: Paths.logDir.appendingPathComponent("stderr.log")).isEmpty) ?? true
-        if stdoutEmpty && stderrEmpty {
-            print("Interpretation: BOTH logs empty.")
-            print("  This means the daemon never wrote anything — most likely it never ran")
+        if eventsEmpty && stdoutEmpty && stderrEmpty {
+            print("Interpretation: all structured logs are empty.")
+            print("  This means neither the daemon nor an explicit CLI sync command wrote anything.")
+            print("  If you expected daemon activity, it most likely never ran")
             print("  (launchd plist missing, binary path wrong, or pre-execution crash).")
             print("  Fix: rmsync-install-agents, then 'rmsync logs --diagnose' again.")
-        } else if stdoutEmpty && !stderrEmpty {
-            print("Interpretation: stdout empty, stderr has content.")
+        } else if eventsEmpty && stdoutEmpty && !stderrEmpty {
+            print("Interpretation: events/stdout empty, stderr has content.")
             print("  The daemon crashed before its first Logger.shared.info call.")
             print("  Read stderr.log above for the crash trace.")
         }

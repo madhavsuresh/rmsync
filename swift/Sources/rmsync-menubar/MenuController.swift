@@ -275,29 +275,34 @@ final class MenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openLogs(_ sender: Any) {
-        // The Swift daemon writes structured logs to stderr (see
-        // Logger.emit → FileHandle.standardError.write); launchd
-        // routes that to ``stderr.log``. ``stdout.log`` is the
-        // empty leftover from the Python predecessor — opening
-        // it (the prior behavior) showed users a blank file.
-        // v0.2.23 fixed the same bug in the CLI's `rmsync logs`;
-        // v0.2.25 catches the menubar's matching call site.
+        // Prefer the shared event stream because explicit CLI sync
+        // commands and the daemon both append to it. Older installs
+        // may only have launchd stderr/stdout logs, so keep those as
+        // fallbacks.
         let logDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/rmsync")
+        let eventsLog = logDir.appendingPathComponent("events.log")
         let stderrLog = logDir.appendingPathComponent("stderr.log")
         let stdoutLog = logDir.appendingPathComponent("stdout.log")
         let fm = FileManager.default
         let target: URL = {
-            // Prefer stderr.log when it exists and is non-empty.
-            if fm.fileExists(atPath: stderrLog.path),
-               (try? Data(contentsOf: stderrLog))?.isEmpty == false {
-                return stderrLog
+            let candidates = [eventsLog, stderrLog, stdoutLog].filter { url in
+                fm.fileExists(atPath: url.path)
+                    && ((try? Data(contentsOf: url))?.isEmpty == false)
             }
-            // Fall back to stdout.log only if it has anything to
-            // show (e.g., a hypothetical future stdout-writing
-            // logger).
-            if fm.fileExists(atPath: stdoutLog.path) { return stdoutLog }
-            return stderrLog
+            if let newest = candidates.max(by: { lhs, rhs in
+                let lhsDate = (try? fm.attributesOfItem(atPath: lhs.path)[.modificationDate] as? Date)
+                    ?? .distantPast
+                let rhsDate = (try? fm.attributesOfItem(atPath: rhs.path)[.modificationDate] as? Date)
+                    ?? .distantPast
+                return lhsDate < rhsDate
+            }) {
+                return newest
+            }
+            for fallback in [eventsLog, stderrLog, stdoutLog] where fm.fileExists(atPath: fallback.path) {
+                return fallback
+            }
+            return eventsLog
         }()
         if FileManager.default.fileExists(atPath: target.path) {
             NSWorkspace.shared.open(target)

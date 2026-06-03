@@ -31,7 +31,7 @@ rmsync git init --name my-notes      # optional: initialize git-backed sync
 rmsync git pull                      # optional: import cloud state as a branch
 rmsync git push                      # optional: merge HEAD with cloud and upload
 rmsync doctor                        # full self-check (10 items)
-rmsync logs -f                       # follow the daemon log
+rmsync logs -f                       # follow the shared event log
 rmsync conflicts                     # list any unresolved .md.conflict files
 
 # pause / resume — useful before bulk-editing a tree
@@ -425,9 +425,10 @@ without being subject to File Provider eviction.
   `rmsync push --include-deletes`.
 - **Diagnosable.** `rmsync logs --diagnose` distinguishes "daemon
   never ran" / "crashed pre-logging" / "running but quiet" in one
-  command. `rmsync conflicts --resolve-stale` clears stuck conflict
-  markers. `scripts/fresh-install-test.sh` wipes-and-reinstalls
-  locally to reproduce fresh-install bugs.
+  command, and `rmsync logs` includes explicit CLI sync operations
+  as well as daemon events. `rmsync conflicts --resolve-stale` clears
+  stuck conflict markers. `scripts/fresh-install-test.sh`
+  wipes-and-reinstalls locally to reproduce fresh-install bugs.
 
 **Doesn't:**
 
@@ -514,7 +515,7 @@ rmsync git init           # optional git-backed sync setup, run in a git repo
 rmsync git pull           # optional: import cloud state as a git branch
 rmsync git push           # optional: merge HEAD with cloud and upload
 rmsync-git push           # same as `rmsync git push`
-rmsync logs -f            # tail the structured JSON log
+rmsync logs -f            # tail the structured JSON event log
 rmsync pause              # set the paused status flag
 rmsync resume             # clear the pause flag
 rmsync sync-now           # deprecated; auto polling is disabled
