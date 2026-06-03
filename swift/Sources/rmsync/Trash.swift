@@ -1,12 +1,12 @@
 import Foundation
 
-/// Soft-delete buffer for the rename / delete propagation feature.
+/// Soft-delete buffer for explicit destructive actions.
 ///
 /// Every destructive cloud-driven action (local-delete, cloud-delete,
 /// rename) parks the on-disk file under
 /// ``<syncDir>/.rmsync-trash/<utc-iso-stamp>/<rel-path>`` before doing
 /// anything irreversible. The user can audit and undo via
-/// ``rmsync trash list / restore``; ``Reconcile.pruneTrash`` removes
+/// ``rmsync trash list / restore``; ``rmsync trash prune`` removes
 /// stamps older than ``deletion.trash_retention_days`` (default 30).
 ///
 /// Design constraints:
@@ -188,8 +188,7 @@ enum Trash {
     }
 
     /// Hard-delete every per-stamp subfolder older than
-    /// ``cutoff``. Called from ``Reconcile.pruneTrash`` at startup
-    /// and (eventually) on a periodic timer. Conservative: only
+    /// ``cutoff``. Conservative: only
     /// removes entire stamp directories whose timestamp is older
     /// than the cutoff, so a freshly-trashed file inside an old
     /// stamp can never happen (each ``moveIn`` mints a new stamp).

@@ -6,10 +6,9 @@ enum GitSync {
     struct RepoConfig: Codable, Sendable {
         var name: String
         var syncRoot: String
-        var remoteRoot: String
 
         var remoteFolder: String {
-            remoteRoot.isEmpty ? name : "\(remoteRoot)/\(name)"
+            "\(GitSync.defaultRemoteRoot)/\(name)"
         }
         var cloudRef: String { "refs/rmsync-git/\(name)/cloud" }
         var lastRemoteSnapshotRef: String { "refs/rmsync-git/\(name)/last-remote-snapshot" }
@@ -62,6 +61,7 @@ enum GitSync {
         case invalidSyncRoot(String)
         case remoteNamespaceConflict(target: String, ordinary: String)
         case remoteFolderExists(String)
+        case unsupportedOldConfig(URL, String)
         case cloudSnapshotFailed([String])
         case pushConflict(branch: String, detail: String)
         case verificationFailed(URL)
@@ -79,10 +79,15 @@ enum GitSync {
             case .remoteNamespaceConflict(let target, let ordinary):
                 return """
                 rmsync-git remote /\(target) overlaps the configured ordinary sync folder /\(ordinary).
-                Use an ordinary remote folder like /sync/notes, or pass --remote-root outside that namespace.
+                Use /sync/notes for ordinary sync and /sync/git/<name> for git sync.
                 """
             case .remoteFolderExists(let path):
                 return "\(path) already exists on the reMarkable cloud"
+            case .unsupportedOldConfig(let url, let key):
+                return """
+                unsupported old rmsync-git config at \(url.path): contains \(key).
+                Remove the old rmsync-git state and rerun `rmsync git init`; current git sync always uses /sync/git/<name>.
+                """
             case .cloudSnapshotFailed(let errors):
                 return "cloud snapshot failed:\n" + errors.joined(separator: "\n")
             case .pushConflict(let branch, let detail):
@@ -107,7 +112,6 @@ enum GitSync {
         cwd: URL,
         name rawName: String?,
         syncRoot rawSyncRoot: String,
-        remoteRoot: String,
         ordinaryRemoteFolder: String? = nil,
         cloud: any CloudWriteClient = Cloud()
     ) async throws -> InitResult {
@@ -122,7 +126,7 @@ enum GitSync {
         let name = rawName ?? git.root.lastPathComponent
         try validateName(name)
         let syncRoot = try normalizedSyncRoot(rawSyncRoot, git: git)
-        let cfg = RepoConfig(name: name, syncRoot: syncRoot, remoteRoot: normalizeRemoteRoot(remoteRoot))
+        let cfg = RepoConfig(name: name, syncRoot: syncRoot)
         if let ordinaryRemoteFolder,
            remoteFoldersOverlap(cfg.remoteFolder, ordinaryRemoteFolder) {
             throw Error.remoteNamespaceConflict(
@@ -480,7 +484,7 @@ enum GitSync {
     }
 
     private static func ensureRemoteFolderIsNew(cfg: RepoConfig, cloud: any CloudWriteClient) async throws {
-        for path in PathUtilities.remoteFolderMkdirChain(cfg.remoteRoot) {
+        for path in PathUtilities.remoteFolderMkdirChain(defaultRemoteRoot) {
             do {
                 try await cloud.mkdir(path)
             } catch {
@@ -503,6 +507,10 @@ enum GitSync {
             throw Error.notInitialized(url)
         }
         let data = try Data(contentsOf: url)
+        if let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+           raw["remoteRoot"] != nil {
+            throw Error.unsupportedOldConfig(url, "remoteRoot")
+        }
         return (try JSONDecoder().decode(RepoConfig.self, from: data), common, url)
     }
 
@@ -598,10 +606,6 @@ enum GitSync {
         if name.isEmpty || name.contains("/") || name == "." || name == ".." {
             throw Error.invalidName(name)
         }
-    }
-
-    static func normalizeRemoteRoot(_ raw: String) -> String {
-        PathUtilities.normalizedRemoteFolder(raw)
     }
 
     static func remoteFoldersOverlap(_ lhs: String, _ rhs: String) -> Bool {

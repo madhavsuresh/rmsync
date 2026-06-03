@@ -50,6 +50,33 @@ struct ExplicitPullTests {
         #expect(text == "new\n")
     }
 
+    @Test("accepting a changed pull records overwritten local text")
+    func acceptRecordsPullOverwriteSnapshot() async throws {
+        let fixture = try await makeFixture(localText: "old\n", acceptedText: "old\n", cachedText: "new\n")
+        let cloud = FakePullCloud(nodes: [fixture.node], archives: [:])
+
+        _ = try await ExplicitSync.stagePull(
+            cfg: fixture.cfg, state: fixture.state, cloud: cloud
+        )
+        let accepted = try await ExplicitSync.accept(
+            cfg: fixture.cfg,
+            state: fixture.state,
+            paths: ["doc.md"],
+            all: false,
+            includeDeletes: false,
+            force: false
+        )
+
+        #expect(accepted.applied == 1)
+        #expect(accepted.refused.isEmpty)
+        let local = fixture.cfg.syncDir.appendingPathComponent("doc.md")
+        #expect(try String(contentsOf: local, encoding: .utf8) == "new\n")
+        let snapshots = try Snapshots.list(docID: "doc-1", in: await fixture.state.storageDir())
+        let last = try #require(snapshots.last)
+        #expect(last.cause == Snapshots.Cause.pullOverwrite)
+        #expect(try Snapshots.read(last) == "old\n")
+    }
+
     @Test("cache hash mismatch falls back to rmapi get")
     func corruptCacheFallsBackToCloudGet() async throws {
         let fixture = try await makeFixture(
@@ -142,7 +169,7 @@ struct ExplicitPullTests {
         let syncDir = root.appendingPathComponent("sync", isDirectory: true)
         try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
         let state = try State(path: root.appendingPathComponent("state.db"))
-        let cfg = Config(syncDir: syncDir, remoteFolder: "Writing")
+        let cfg = Config(syncDir: syncDir)
         let node = Node(
             id: "doc-1",
             name: "doc",
@@ -151,7 +178,7 @@ struct ExplicitPullTests {
             modifiedClient: "2026-06-03T00:00:00Z",
             version: 7,
             currentPage: 0,
-            path: ["Writing", "doc"]
+            path: ["sync", "notes", "doc"]
         )
         let localURL = syncDir.appendingPathComponent("doc.md")
         if let localText {

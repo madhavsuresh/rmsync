@@ -7,9 +7,8 @@ import Testing
 /// Companion to ``PullPathGuardsTests`` on the pull side — same
 /// defensive philosophy, different direction.
 ///
-/// We can't exercise ``SyncWorker.doPush`` directly (private, coupled
-/// to a live ``Cloud`` actor). These tests cover the decision logic
-/// at the primitive level it's built on, plus the doctor's
+/// These tests cover the decision logic at the primitive level used
+/// by explicit push and auto-push, plus the doctor's
 /// path-pattern detection.
 @Suite("Cloud-provider eviction guards")
 struct CloudProviderGuardsTests {

@@ -29,22 +29,22 @@ struct CloudSmokeTests {
         #expect(maj >= 0 && min >= 0 && patch >= 0)
     }
 
-    @Test("stat /Writing returns JSON")
-    func statWriting() async throws {
+    @Test("stat /sync/notes returns JSON")
+    func statSyncNotes() async throws {
         guard live() else { return }
         let cloud = Cloud()
-        let meta = try await cloud.stat("/Writing")
+        let meta = try await cloud.stat("/sync/notes")
         #expect(meta != nil)
         #expect(meta?.type == "CollectionType")
     }
 
-    @Test("tree /Writing walks without error")
-    func treeWriting() async throws {
+    @Test("tree /sync/notes walks without error")
+    func treeSyncNotes() async throws {
         guard live() else { return }
         let cloud = Cloud()
-        let nodes = try await cloud.tree("/Writing")
+        let nodes = try await cloud.tree("/sync/notes")
         for n in nodes {
-            #expect(n.remotePath.hasPrefix("/Writing/"))
+            #expect(n.remotePath.hasPrefix("/sync/notes/"))
             #expect(!n.id.isEmpty)
         }
     }

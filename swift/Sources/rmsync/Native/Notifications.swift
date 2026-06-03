@@ -58,7 +58,7 @@ import Foundation
 
 /// Linux stub: route notifications through the structured log so they
 /// surface via ``docker logs`` / ``rmsync logs --diagnose``. Same call
-/// surface as the macOS path so the SyncWorker is unaffected.
+/// surface as the macOS path.
 enum Notifications {
     static func notify(title: String, body: String, subtitle: String? = nil) {
         var meta: [String: String] = [

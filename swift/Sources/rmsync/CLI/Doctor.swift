@@ -241,9 +241,8 @@ struct DoctorRun {
     /// providers can demote a "fully local" file to a dataless
     /// placeholder at any time to reclaim disk space — and when
     /// rmsync reads a dataless file it gets zero bytes, which the
-    /// push path would happily propagate to reMarkable as "doc
-    /// emptied". The push-side guard in ``SyncWorker.doPush`` catches
-    /// this as a conflict, but the better fix is to prevent the
+    /// push path could propagate to reMarkable as "doc emptied".
+    /// The explicit push guard catches this as a conflict, but the better fix is to prevent the
     /// eviction in the first place. This check just flags the
     /// situation so the user knows to pin the folder offline.
     private static func cloudProviderSyncDir(cfg: Config?) -> CheckResult {

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import rmsync
 
-/// Full deterministic push→pull composition test, WITHOUT ``SyncWorker``
+/// Full deterministic push→pull composition test.
 /// or ``Cloud``. Composes:
 ///
 ///   ``md → PageSplitter.split → [renderPage] → Archive.pack →
@@ -66,7 +66,7 @@ struct PushPullCycleTests {
         }
         let nonEmpty = parsed.filter { !$0.isEmpty }
         guard !nonEmpty.isEmpty else {
-            // Matches the "all empty → skip" guard in SyncWorker.pull.
+            // Matches the "all empty → skip" guard in the pull renderer.
             throw PullCycleError.allPagesParsedEmpty
         }
         return PageSplitter.join(nonEmpty)
@@ -156,7 +156,7 @@ struct PushPullCycleTests {
         #expect(parsed.count == 1)
         #expect(parsed[0] == "")
 
-        // Apply the same policy the fix added in SyncWorker.pull.
+        // Apply the same policy used by the pull renderer.
         let emptyCount = parsed.filter { $0.isEmpty }.count
         #expect(emptyCount == parsed.count)  // all empty → pull refuses
     }

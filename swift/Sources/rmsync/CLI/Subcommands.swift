@@ -38,7 +38,6 @@ struct Status: AsyncParsableCommand {
         if let live = IPCClientSync.getStatus() {
             print("sync dir:       \(live.syncDir)")
             print("remote folder:  \(PathUtilities.remoteFolderPath(live.remoteFolder))")
-            if let cfg { print("push strategy:  \(cfg.pushStrategy.rawValue)") }
             print("state:          \(live.state)")
             print("paused:         \(live.paused)")
             print("tracked docs:   \(live.trackedDocs)")
@@ -55,6 +54,8 @@ struct Status: AsyncParsableCommand {
             print("queue depth:    \(live.queueDepth)")
             print("last pull:      \(live.lastPullAt ?? "(never)")")
             print("last push:      \(live.lastPushAt ?? "(never)")")
+            print("auto-push:      \(Self.autoPushLine(live))")
+            print("pull probe:     \(Self.pullProbeLine(live))")
             // v0.2.25 — cloud-health probe diagnostic. Empty
             // means no probe has run yet (daemon healthy from
             // its perspective). Anything else surfaces the
@@ -88,7 +89,6 @@ struct Status: AsyncParsableCommand {
         if let cfg {
             print("sync dir:       \(cfg.syncDir.path)")
             print("remote folder:  \(PathUtilities.remoteFolderPath(cfg.remoteFolder))")
-            print("push strategy:  \(cfg.pushStrategy.rawValue)")
         }
         print("daemon:         not running (reading state DB directly)")
         if FileManager.default.fileExists(atPath: Paths.stateDBPath.path) {
@@ -101,6 +101,41 @@ struct Status: AsyncParsableCommand {
             print("conflicts:      \(conflicts)")
             print("parked errors:  \(errors)")
         }
+    }
+
+    private static func autoPushLine(_ live: IPC.Status) -> String {
+        guard live.autoPushEnabled else { return "off (manual push mode)" }
+        let active = live.autoPushQueued + live.autoPushUploading
+        if active > 0 {
+            return "on (\(active) queued/uploading)"
+        }
+        if live.autoPushFailed > 0 || live.autoPushRefused > 0 {
+            return "on (\(live.autoPushFailed) failed, \(live.autoPushRefused) refused)"
+        }
+        if let last = live.autoPushLastSucceededAt {
+            return "on (last success \(last))"
+        }
+        return "on (waiting for changes)"
+    }
+
+    private static func pullProbeLine(_ live: IPC.Status) -> String {
+        switch live.pullState {
+        case "available":
+            let plural = live.pullChanges == 1 ? "" : "s"
+            return "\(live.pullChanges) cloud change\(plural) available"
+        case "clean":
+            return "no cloud changes" + checkedSuffix(live.pullCheckedAt)
+        case "checking":
+            return "checking cloud"
+        case "error":
+            return "error" + (live.pullError.map { ": \($0)" } ?? "")
+        default:
+            return "not checked yet"
+        }
+    }
+
+    private static func checkedSuffix(_ checkedAt: String?) -> String {
+        checkedAt.map { " (checked \($0))" } ?? ""
     }
 }
 
@@ -169,7 +204,7 @@ struct RestartCmd: ParsableCommand {
     }
 }
 
-// MARK: - pause / resume / sync-now
+// MARK: - pause / resume
 
 struct Pause: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Set the paused status flag.")
@@ -193,26 +228,6 @@ private func togglePaused(_ paused: Bool, verb: String) async throws {
         let state = try State(path: Paths.stateDBPath)
         try await state.setPaused(paused)
         print("\(verb) (daemon not running; will apply on next start)")
-    }
-}
-
-struct SyncNow: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "sync-now",
-        abstract: "Deprecated: automatic polling is disabled in explicit sync mode."
-    )
-    func run() async throws {
-        do {
-            _ = try IPCClientSync.request("sync_now")
-            print("sync requested")
-        } catch IPCClientSync.CallError.commandFailed(let message)
-            where message == "explicit_sync_mode" {
-            print("automatic polling is disabled; use `rmsync pull`, review with `rmsync diff`, then `rmsync accept`.")
-            throw ExitCode(1)
-        } catch {
-            print("daemon not running; start it with `rmsync start`.")
-            throw ExitCode(1)
-        }
     }
 }
 
@@ -936,9 +951,9 @@ struct TrashCmd: AsyncParsableCommand {
 
 /// Browse, diff, and revert per-doc snapshot history.
 ///
-/// Snapshots are written by ``SyncWorker`` on every push (about-
-/// to-go-up bytes) and every cloud-pull-overwrite (about-to-be-
-/// clobbered bytes). Storage at
+/// Snapshots are written by explicit push (about-to-go-up bytes)
+/// and explicit accept when overwriting local content
+/// (about-to-be-clobbered bytes). Storage at
 /// ``<stateDir>/backups/<doc-id>/<utc-stamp>.{md,json}``;
 /// retention controlled by ``backup_snapshots_to_keep``.
 ///
@@ -1205,66 +1220,6 @@ struct History: AsyncParsableCommand {
     }
 }
 
-// MARK: - retry-parked
-
-/// Force an explicit push retry for every doc currently parked with
-/// ``error_state = "push_failed"``.
-///
-/// Other ``error_state`` values are NOT retried — those represent failure
-/// modes where retrying without other action would not help.
-struct RetryParked: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "retry-parked",
-        abstract: "Explicitly retry pushes for docs parked with error_state = push_failed."
-    )
-
-    @Flag(name: .long, help: "Show what would be retried without pushing.")
-    var dryRun: Bool = false
-
-    func run() async throws {
-        let cfg = try Config.load()
-        let state = try State(path: Paths.stateDBPath)
-        let allDocs = try await state.allDocuments()
-        let parked = allDocs.filter { $0.errorState == "push_failed" }
-
-        if parked.isEmpty {
-            print("No push-failed parked errors. Other error_state values "
-                  + "(parse_failed, bulk_delete_refused) need different "
-                  + "handling and aren't touched by this command.")
-            return
-        }
-
-        print("Retrying \(parked.count) parked push(es):")
-        for doc in parked {
-            print("  - \(doc.localPath)")
-        }
-        if dryRun {
-            print("")
-            print("(dry-run; no IPC sent)")
-            return
-        }
-
-        var pushed = 0
-        var refused: [String] = []
-        for doc in parked {
-            let result = try await ExplicitSync.push(
-                cfg: cfg,
-                state: state,
-                paths: [doc.localPath],
-                includeDeletes: false,
-                force: true
-            )
-            pushed += result.pushed
-            refused.append(contentsOf: result.refused)
-        }
-
-        print("")
-        for line in refused { print("refused: \(line)") }
-        print("Pushed \(pushed)/\(parked.count) parked doc(s).")
-        if !refused.isEmpty { throw ExitCode(1) }
-    }
-}
-
 // MARK: - errors
 
 /// List every doc currently parked with a non-NULL ``error_state``,
@@ -1291,9 +1246,7 @@ struct RetryParked: AsyncParsableCommand {
 ///   bulk_delete_refused (2): ...
 /// ```
 ///
-/// And tails with class-specific next-action hints (``rmsync
-/// retry-parked`` for ``push_failed``, ``rmapi rm`` + repull
-/// for ``parse_failed``, etc.). The ``cloud_health`` IPC field
+/// And tails with class-specific next-action hints. The ``cloud_health`` IPC field
 /// (if non-empty + non-OK) gets shown above the table so the user
 /// sees "this is rmapi's fault" before the per-doc detail.
 struct Errors: AsyncParsableCommand {
@@ -1354,13 +1307,13 @@ struct Errors: AsyncParsableCommand {
             print("")
         }
 
-        // Per-class next-action hints. The user shouldn't have to
-        // remember which command to run for which failure mode —
-        // print the right one inline.
+        // Per-class next-action hints. Current rmsync has no hidden retry
+        // worker, so every recovery path points back to explicit commands.
         let classes = Set(parked.compactMap(\.errorState))
         if classes.contains("push_failed") {
-            print("To retry push_failed docs (no SQL, no file edits):")
-            print("    rmsync retry-parked")
+            print("push_failed came from an older state database. This version does")
+            print("not have a hidden retry worker; inspect the file, then run:")
+            print("    rmsync push <path>")
             print("")
         }
         if classes.contains("parse_failed") {
@@ -1371,33 +1324,15 @@ struct Errors: AsyncParsableCommand {
             print("")
         }
         if classes.contains("bulk_delete_refused") {
-            print("bulk_delete_refused means the bulk-delete brake")
-            print("(`[deletion].bulk_delete_threshold`) tripped. Either:")
-            print("  • Run `rmsync retry-parked` to re-attempt — the brake's")
-            print("    rolling window will have aged out.")
-            print("  • Restore the file(s) you didn't mean to delete via")
-            print("    `rmsync trash list / restore`.")
+            print("bulk_delete_refused came from the removed background delete")
+            print("pipeline. Restore anything you need from trash, then use")
+            print("explicit `rmsync push` or `rmsync force-push` deliberately.")
             print("")
         }
         if classes.contains("missing_pre_upgrade") {
-            // The first-start-after-upgrade guard parked these.
-            // The user rm'd them locally on a version that didn't
-            // propagate, so they don't necessarily WANT them gone
-            // on the cloud now. Two action paths.
-            print("missing_pre_upgrade means the file was tracked, the local")
-            print("file is missing on disk, AND this is the first daemon start")
-            print("after a version change. The daemon DELIBERATELY didn't")
-            print("propagate these to cloud-side deletes — pre-v0.2.27 had")
-            print("propagation off by default, so an old rm without the")
-            print("intent to cloud-delete would silently cascade now. Pick:")
-            print("  • You meant to delete these → `rmapi rm <remote_path>`")
-            print("    for each, then `sqlite3 <state.db> \"DELETE FROM")
-            print("    documents WHERE error_state = 'missing_pre_upgrade'\"`.")
-            print("  • You DIDN'T mean to delete → re-pull from cloud:")
-            print("    `rmsync pull`, review with `rmsync diff`, then")
-            print("    `rmsync accept <path>` for the docs you want restored.")
-            print("  • Unsure → leave them parked. They don't hurt anything")
-            print("    while sitting; the daemon won't act on them.")
+            print("missing_pre_upgrade came from the removed upgrade guard.")
+            print("This version expects a fresh reinstall; move old state aside")
+            print("or recover with `rmsync pull`, `rmsync diff`, and `rmsync accept`.")
             print("")
         }
 

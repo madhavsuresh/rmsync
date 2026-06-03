@@ -27,8 +27,8 @@ cd swift && swift test --no-parallel
 Runs on every PR + every push to main via `.github/workflows/ci.yml`.
 105+ tests covering archive packing, conflict marker generation, file
 provider detection, IPC, page codec roundtrip, path utilities,
-relocate, state DB schema migration, explicit pull/push guards, and
-legacy watcher ignore rules.
+relocate, current-only state schema checks, explicit pull/push guards,
+and safe auto-push watcher ignore rules.
 
 What this DOESN'T cover: anything that actually shells out to `rmapi`.
 For that, you need…
@@ -37,9 +37,8 @@ For that, you need…
 
 ## Layer 2: live-cloud smoke test
 
-The test suite contains `CloudSmokeTests` and `PushSmokeTests` —
-both gated behind `RMSYNC_LIVE=1` because they write probe documents
-to a real reMarkable cloud account. Locally:
+The test suite contains `CloudSmokeTests`, gated behind `RMSYNC_LIVE=1`
+because it talks to a real reMarkable cloud account. Locally:
 
 ```sh
 cd swift

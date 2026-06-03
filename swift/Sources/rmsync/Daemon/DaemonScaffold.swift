@@ -2,10 +2,10 @@ import Foundation
 
 /// Top-level daemon event loop.
 ///
-/// The daemon is intentionally status-only in the explicit sync model.
-/// It keeps IPC / dashboard status online, but it does not watch local
-/// files, poll the cloud, or reconcile deletions. Sync mutations happen
-/// only through explicit CLI commands: ``pull``, ``accept``, and ``push``.
+/// The daemon keeps IPC / dashboard status online and may run read-only
+/// probes, but it does not mutate local files from the background. Sync
+/// mutations happen only through explicit CLI commands: ``pull``, ``accept``,
+/// ``push``, ``force-push``, or opt-in safe auto-push.
 enum DaemonScaffold {
     static func run() async throws {
         // First thing: announce we got off the ground. If the user's
@@ -47,13 +47,12 @@ enum DaemonScaffold {
 
         let state = try State(path: Paths.stateDBPath)
         let bus = StateBus()
-        let queue = JobQueue()
+        let queue = AutoPushEventQueue()
 
         try await refreshBus(bus: bus, state: state, cfg: cfg, queue: queue)
 
-        // IPC server accepts pause/resume/sync_now/get_status. In
-        // explicit mode, sync_now and push_path return clear errors
-        // instead of scheduling hidden mutation work.
+        // IPC server accepts only the current status/pause surface. Hidden
+        // background sync requests from old clients are no longer supported.
         let server = IPCServer(socketPath: Paths.ipcSocketPath, bus: bus)
         await server.register("pause") { _ in
             try? await state.setPaused(true)
@@ -65,27 +64,9 @@ enum DaemonScaffold {
             try? await refreshBus(bus: bus, state: state, cfg: cfg, queue: queue)
             return SendableJSON.dict([:])
         }
-        await server.register("sync_now") { _ in
-            Logger.shared.info("sync_now ignored in explicit sync mode")
-            return SendableJSON.dict([
-                "ok": false,
-                "error": "explicit_sync_mode",
-                "hint": "use `rmsync pull`, `rmsync accept`, and `rmsync push`",
-            ])
-        }
         await server.register("get_status") { _ in
             let snap = await bus.snapshot()
             return Self.snapshotFrame(snap)
-        }
-        // Compatibility endpoint for older clients. It deliberately
-        // refuses to enqueue hidden work in explicit sync mode.
-        await server.register("push_path") { _ in
-            Logger.shared.info("push_path ignored in explicit sync mode")
-            return SendableJSON.dict([
-                "ok": false,
-                "error": "explicit_sync_mode",
-                "hint": "use `rmsync push <path>`",
-            ])
         }
         try await server.start()
         Logger.shared.info(
@@ -102,13 +83,16 @@ enum DaemonScaffold {
             cfg: cfg, bus: bus, queue: queue, state: state
         )
 
-        // Explicit sync mode: no reconcile, no watcher, no cloud poller.
-        // Keep only IPC / dashboard status alive.
+        // Explicit sync mode: no reconcile and no hidden pull worker. Keep
+        // IPC/dashboard status alive, plus opt-in auto-push and a read-only
+        // pull availability probe.
         Logger.shared.info(
-            "explicit sync mode: daemon is status-only; use rmsync pull/push"
+            "explicit sync mode: daemon probes pull availability only; use rmsync pull/push"
         )
-        let autoPush = AutoPushService(cfg: cfg, state: state)
+        let autoPush = AutoPushService(cfg: cfg, state: state, queue: queue)
         autoPush.start()
+        let pullProbe = PullAvailabilityProbe(cfg: cfg, state: state, bus: bus)
+        pullProbe.start()
 
         // Periodic bus refresh so the menu bar sees live counts even
         // during quiet stretches. Light touch — 5s tick.
@@ -126,6 +110,7 @@ enum DaemonScaffold {
         // Orderly shutdown (unreached in practice — launchd SIGTERMs the
         // process, but kept for completeness).
         busTask.cancel()
+        pullProbe.stop()
         autoPush.stop()
         if let httpServer { await httpServer.stop() }
         await server.stop()
@@ -134,12 +119,12 @@ enum DaemonScaffold {
     // MARK: - helpers (shared with the Week 2-era scaffold)
 
     static func refreshBus(
-        bus: StateBus, state: State, cfg: Config, queue: JobQueue
+        bus: StateBus, state: State, cfg: Config, queue: AutoPushEventQueue
     ) async throws {
         let docs = try await state.allDocuments()
         let tracked = docs.filter { $0.docType == "DocumentType" }.count
 
-        // Reconcile any docs whose state.db says "unresolved" but whose
+        // Clear any docs whose state.db says "unresolved" but whose
         // ``.conflict`` marker file on disk has since been deleted by
         // the user. Deleting the marker is the canonical "I resolved
         // this" gesture per the conflict workflow; previously the
@@ -167,6 +152,7 @@ enum DaemonScaffold {
         let lastPush = liveDocs.compactMap(\.lastPushAt).max()
         let paused = try await state.isPaused()
         let queueDepth = await queue.size()
+        let autoPushSummary = try? await state.autoPushSummary()
 
         await bus.update { s in
             s.state = paused ? "paused" : (queueDepth > 0 ? "syncing" : "idle")
@@ -181,6 +167,14 @@ enum DaemonScaffold {
             s.paused = paused
             s.pid = Int(getpid())
             s.version = Version.current
+            s.autoPushEnabled = cfg.autoPush.enabled
+            s.autoPushQueued = autoPushSummary?.queued ?? 0
+            s.autoPushUploading = autoPushSummary?.uploading ?? 0
+            s.autoPushSucceeded = autoPushSummary?.succeeded ?? 0
+            s.autoPushSkipped = autoPushSummary?.skipped ?? 0
+            s.autoPushRefused = autoPushSummary?.refused ?? 0
+            s.autoPushFailed = autoPushSummary?.failed ?? 0
+            s.autoPushLastSucceededAt = autoPushSummary?.lastSucceededAt
         }
     }
 
@@ -190,7 +184,7 @@ enum DaemonScaffold {
     /// run and persists it to ``$STATE_DIR/web-token`` so the user
     /// can paste it into the dashboard URL without editing config.
     private static func startHTTPDashboardIfEnabled(
-        cfg: Config, bus: StateBus, queue: JobQueue,
+        cfg: Config, bus: StateBus, queue: AutoPushEventQueue,
         state: State
     ) async throws -> HTTPServer? {
         guard let web = cfg.web, web.enabled else { return nil }
@@ -224,9 +218,6 @@ enum DaemonScaffold {
             bindAddr: web.bindAddr, port: web.port, authToken: token,
             bus: bus, queue: queue, state: state
         )
-        await http.register("sync-now") {
-            Logger.shared.info("dashboard sync-now ignored in explicit sync mode")
-        }
         await http.register("pause") {
             try? await state.setPaused(true)
             try? await refreshBus(bus: bus, state: state, cfg: cfg, queue: queue)
@@ -240,22 +231,8 @@ enum DaemonScaffold {
     }
 
     private static func snapshotFrame(_ snap: IPC.Status) -> SendableJSON {
-        let status: [String: SendableValue] = [
-            "state": .string(snap.state),
-            "sync_dir": .string(snap.syncDir),
-            "remote_folder": .string(snap.remoteFolder),
-            "tracked_docs": .int(snap.trackedDocs),
-            "conflicts": .int(snap.conflicts),
-            "errors": .int(snap.errors),
-            "queue_depth": .int(snap.queueDepth),
-            "paused": .bool(snap.paused),
-            "updated_at": .string(snap.updatedAt),
-            "pid": .int(snap.pid),
-            "version": .string(snap.version),
-            "last_pull_at": snap.lastPullAt.map { .string($0) } ?? .null,
-            "last_push_at": snap.lastPushAt.map { .string($0) } ?? .null,
-            "last_error": snap.lastError.map { .string($0) } ?? .null,
-        ]
-        return SendableJSON.dict(["status": .object(status)])
+        SendableJSON.dict([
+            "status": .object(StateBus.statusPayload(snap, includeType: false)),
+        ])
     }
 }

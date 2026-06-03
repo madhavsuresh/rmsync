@@ -115,6 +115,18 @@ enum IPCClientSync {
             updatedAt: stringValue("updated_at"),
             pid: intValue("pid"),
             version: stringValue("version"),
+            autoPushEnabled: boolValue("auto_push_enabled"),
+            autoPushQueued: intValue("auto_push_queued"),
+            autoPushUploading: intValue("auto_push_uploading"),
+            autoPushSucceeded: intValue("auto_push_succeeded"),
+            autoPushSkipped: intValue("auto_push_skipped"),
+            autoPushRefused: intValue("auto_push_refused"),
+            autoPushFailed: intValue("auto_push_failed"),
+            autoPushLastSucceededAt: optionalString("auto_push_last_succeeded_at"),
+            pullState: stringValue("pull_state").isEmpty ? "unknown" : stringValue("pull_state"),
+            pullChanges: intValue("pull_changes"),
+            pullCheckedAt: optionalString("pull_checked_at"),
+            pullError: optionalString("pull_error"),
             cloudHealth: stringValue("cloud_health"),
             cloudHealthDetail: optionalString("cloud_health_detail")
         )
@@ -124,35 +136,6 @@ enum IPCClientSync {
         guard let fd = try? openSocket(path: Paths.ipcSocketPath, timeout: timeout) else { return false }
         close(fd)
         return true
-    }
-
-    /// Legacy compatibility helper for the pre-explicit-sync daemon.
-    /// Current daemons reject ``push_path`` with ``explicit_sync_mode``;
-    /// callers should run ``rmsync push <path>`` instead of asking the
-    /// daemon to enqueue hidden work.
-    ///
-    /// Returns true if the daemon ack'd; false otherwise (including
-    /// explicit-sync rejection or daemon unavailable). Callers print
-    /// their own user-facing message.
-    @discardableResult
-    static func pushPath(
-        _ path: String, force: Bool = false, timeout: TimeInterval = 2.0
-    ) -> Bool {
-        do {
-            var extra: [String: Any] = ["path": path]
-            if force { extra["force"] = true }
-            _ = try request("push_path", extra: extra, timeout: timeout)
-            return true
-        } catch {
-            // Log to stderr so callers can diagnose without
-            // patching the source. Earlier this swallowed errors
-            // silently; v0.2.26 surfaces the underlying cause
-            // (timeout / malformed-response / daemon-down).
-            FileHandle.standardError.write(Data(
-                "  push_path IPC error: \(error)\n".utf8
-            ))
-            return false
-        }
     }
 
     // MARK: - internals

@@ -105,7 +105,7 @@ struct ExplicitDiffTests {
         ExplicitSync.Manifest(
             id: "stage-id",
             createdAt: "2026-06-03T00:00:00Z",
-            remoteFolder: "Writing",
+            remoteFolder: Config.defaultRemoteFolder,
             syncDir: syncDir.path,
             entries: entries
         )
@@ -120,7 +120,7 @@ struct ExplicitDiffTests {
         return ExplicitSync.Entry(
             kind: kind,
             docID: "doc-\(rel)",
-            remotePath: "/Writing/\(stem)",
+            remotePath: "/sync/notes/\(stem)",
             localPath: syncDir.appendingPathComponent(rel).path,
             relativePath: rel,
             stagedPath: kind == .deleted ? nil : "files/\(rel)",

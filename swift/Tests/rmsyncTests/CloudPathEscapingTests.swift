@@ -5,19 +5,19 @@ import Testing
 struct CloudPathEscapingTests {
     @Test("interactive-shell paths are always quoted")
     func safePathQuoted() throws {
-        #expect(try Cloud.escapeShellPath("/Writing/hello world") == "\"/Writing/hello world\"")
+        #expect(try Cloud.escapeShellPath("/sync/notes/hello world") == "\"/sync/notes/hello world\"")
     }
 
     @Test("interactive-shell paths reject unsafe metacharacters")
     func rejectsUnsafePath() {
         #expect(throws: RmapiError.self) {
-            try Cloud.escapeShellPath("/Writing/evil\"name")
+            try Cloud.escapeShellPath("/sync/notes/evil\"name")
         }
         #expect(throws: RmapiError.self) {
-            try Cloud.escapeShellPath("/Writing/evil`name")
+            try Cloud.escapeShellPath("/sync/notes/evil`name")
         }
         #expect(throws: RmapiError.self) {
-            try Cloud.escapeShellPath("/Writing/evil$name")
+            try Cloud.escapeShellPath("/sync/notes/evil$name")
         }
     }
 }

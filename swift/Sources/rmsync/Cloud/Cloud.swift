@@ -232,33 +232,6 @@ actor Cloud: CloudWriteClient {
         _ = try await run(args: args)
     }
 
-    /// Upload a non-Markdown file (PDF / EPUB) directly to a cloud
-    /// folder. Used by the inbox-watcher for "drag-and-drop send to
-    /// tablet" workflow. ``--force`` so re-dropping a file with the
-    /// same name replaces the cloud copy in place rather than
-    /// erroring on duplicate. The cloud folder is created if missing.
-    ///
-    /// Different from ``put`` because the inbox flow has no doc_id
-    /// to track — these are one-way pushes for reading on the
-    /// tablet, not docs that round-trip back as Markdown.
-    func putRaw(localPath: URL, remoteFolder: String) async throws {
-        // Make sure ``/Inbox`` (or whatever the user configured)
-        // exists. Cheap: rmapi mkdir is idempotent (errors on
-        // existing dirs but the error is benign — we ignore it).
-        let normalized = remoteFolder.hasPrefix("/") ? remoteFolder : "/" + remoteFolder
-        do {
-            try await mkdir(normalized)
-        } catch {
-            // Existing directory → rmapi exits non-zero with "entry
-            // already exists" or similar. Continue regardless.
-            Logger.shared.debug(
-                "inbox mkdir noop",
-                meta: ["path": normalized, "error": "\(error)"]
-            )
-        }
-        _ = try await run(args: ["put", "--force", localPath.path, normalized])
-    }
-
     func mkdir(_ remotePath: String) async throws {
         _ = try await run(args: ["mkdir", remotePath])
     }

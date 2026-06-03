@@ -66,7 +66,7 @@ struct ForcePushPlanTests {
         let items = ExplicitSync.forcePushPlanItems(
             remoteEntries: [entry("old.md", hash: hash)],
             localFiles: [localFile("new.md", hash)],
-            remoteFolder: "Writing",
+            remoteFolder: Config.defaultRemoteFolder,
             renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
         )
 
@@ -74,8 +74,8 @@ struct ForcePushPlanTests {
         #expect(items[0].action == .moveRemote)
         #expect(items[0].sourceRelativePath == "old.md")
         #expect(items[0].relativePath == "new.md")
-        #expect(items[0].remotePath == "/Writing/old")
-        #expect(items[0].destinationRemotePath == "/Writing/new")
+        #expect(items[0].remotePath == "/sync/notes/old")
+        #expect(items[0].destinationRemotePath == "/sync/notes/new")
     }
 
     @Test("folder move derives nested destination path")
@@ -84,14 +84,14 @@ struct ForcePushPlanTests {
         let items = ExplicitSync.forcePushPlanItems(
             remoteEntries: [entry("old/place.md", hash: hash)],
             localFiles: [localFile("new/place.md", hash)],
-            remoteFolder: "Writing",
+            remoteFolder: Config.defaultRemoteFolder,
             renames: [ExplicitSync.ForcePushRename(oldPath: "old/place.md", newPath: "new/place.md")]
         )
 
         #expect(items.count == 1)
         #expect(items[0].action == .moveRemote)
-        #expect(items[0].remotePath == "/Writing/old/place")
-        #expect(items[0].destinationRemotePath == "/Writing/new/place")
+        #expect(items[0].remotePath == "/sync/notes/old/place")
+        #expect(items[0].destinationRemotePath == "/sync/notes/new/place")
     }
 
     @Test("rename with changed content plans move and overwrite")
@@ -99,14 +99,14 @@ struct ForcePushPlanTests {
         let items = ExplicitSync.forcePushPlanItems(
             remoteEntries: [entry("old.md", hash: PathUtilities.sha256("remote\n"))],
             localFiles: [localFile("new.md", PathUtilities.sha256("local\n"))],
-            remoteFolder: "Writing",
+            remoteFolder: Config.defaultRemoteFolder,
             renames: [ExplicitSync.ForcePushRename(oldPath: "old.md", newPath: "new.md")]
         )
 
         #expect(items.count == 1)
         #expect(items[0].action == .moveAndOverwriteRemote)
         #expect(items[0].sourceRelativePath == "old.md")
-        #expect(items[0].destinationRemotePath == "/Writing/new")
+        #expect(items[0].destinationRemotePath == "/sync/notes/new")
     }
 
     @Test("rename destination collision is refused without deleting source")
@@ -145,7 +145,7 @@ struct ForcePushPlanTests {
         return ExplicitSync.Entry(
             kind: kind,
             docID: "doc-\(rel)",
-            remotePath: "/Writing/\(stem)",
+            remotePath: "/sync/notes/\(stem)",
             localPath: "/sync/\(rel)",
             relativePath: rel,
             stagedPath: hash == nil ? nil : "files/\(rel)",
