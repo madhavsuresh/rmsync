@@ -94,6 +94,98 @@ struct GitSyncSyntheticTests {
         #expect(needsBranch == true)
     }
 
+    @Test("push dry-run does not update rmsync-git refs")
+    func pushDryRunDoesNotUpdateRefs() async throws {
+        let repo = try await makeRepo("dry-run-ref-clean")
+        try write("local\n", to: repo.appendingPathComponent("local.md"))
+        try await commitAll(repo, "local")
+        let cloud = RecordingGitInitCloud()
+        _ = try await GitSync.initialize(
+            cwd: repo,
+            name: "dry-run-ref-clean",
+            syncRoot: ".",
+            ordinaryRemoteFolder: Config.defaultRemoteFolder,
+            cloud: cloud
+        )
+
+        let git = try await Git.open(at: repo)
+        let cfg = GitSync.RepoConfig(name: "dry-run-ref-clean", syncRoot: ".")
+        let cloudBefore = try await git.run(["rev-parse", cfg.cloudRef])
+        let lastBefore = try await git.run(["rev-parse", cfg.lastRemoteSnapshotRef])
+
+        let result = try await GitSync.push(cwd: repo, dryRun: true, allowDirty: false, cloud: cloud)
+
+        #expect(result.dryRun)
+        #expect(result.created == 1)
+        #expect(try await git.run(["rev-parse", cfg.cloudRef]) == cloudBefore)
+        #expect(try await git.run(["rev-parse", cfg.lastRemoteSnapshotRef]) == lastBefore)
+    }
+
+    @Test("push dry-run conflict does not create cloud branch")
+    func pushDryRunConflictDoesNotCreateBranch() async throws {
+        let fixture = try await makePushConflictFixture(name: "dry-run-conflict")
+        let cloudBefore = try await fixture.git.run(["rev-parse", fixture.cfg.cloudRef])
+        let lastBefore = try await fixture.git.run(["rev-parse", fixture.cfg.lastRemoteSnapshotRef])
+
+        do {
+            _ = try await GitSync.push(
+                cwd: fixture.repo,
+                dryRun: true,
+                allowDirty: false,
+                cloud: fixture.cloud
+            )
+            Issue.record("dry-run conflict unexpectedly succeeded")
+        } catch let error as GitSync.Error {
+            switch error {
+            case .pushConflict:
+                break
+            default:
+                Issue.record("unexpected GitSync error: \(error)")
+            }
+        }
+
+        #expect(try await fixture.git.run(["rev-parse", fixture.cfg.cloudRef]) == cloudBefore)
+        #expect(try await fixture.git.run(["rev-parse", fixture.cfg.lastRemoteSnapshotRef]) == lastBefore)
+        let createdBranches = try await fixture.git.run([
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads/rmsync/cloud/dry-run-conflict",
+        ])
+        #expect(createdBranches.isEmpty)
+    }
+
+    @Test("push conflict creates cloud branch when applying")
+    func pushConflictCreatesBranchWhenApplying() async throws {
+        let name = "push-conflict-branch"
+        let fixture = try await makePushConflictFixture(name: name)
+
+        var branch: String?
+        do {
+            _ = try await GitSync.push(
+                cwd: fixture.repo,
+                dryRun: false,
+                allowDirty: false,
+                cloud: fixture.cloud
+            )
+            Issue.record("conflicting push unexpectedly succeeded")
+        } catch let error as GitSync.Error {
+            switch error {
+            case .pushConflict(let createdBranch, _):
+                branch = createdBranch
+            default:
+                Issue.record("unexpected GitSync error: \(error)")
+            }
+        }
+
+        guard let branch else {
+            Issue.record("push conflict did not report the created branch")
+            return
+        }
+        #expect(branch.hasPrefix("rmsync/cloud/\(name)/"))
+        let created = try await fixture.git.run(["rev-parse", "refs/heads/\(branch)"])
+        #expect(!created.isEmpty)
+    }
+
     @Test("materializing a git tree preserves source bytes")
     func materializePreservesSourceBytes() async throws {
         let repo = try await makeRepo("source-preserve")
@@ -506,6 +598,73 @@ struct GitSyncSyntheticTests {
         try Data(text.utf8).write(to: url)
     }
 
+    private func makePushConflictFixture(
+        name: String
+    ) async throws -> (repo: URL, git: Git, cfg: GitSync.RepoConfig, cloud: SyntheticGitSyncCloud) {
+        let repo = try await makeRepo(name)
+        try write("base\n", to: repo.appendingPathComponent("a.md"))
+        try await commitAll(repo, "base")
+        let git = try await Git.open(at: repo)
+        let base = try await git.headCommit()
+
+        _ = try await GitSync.initialize(
+            cwd: repo,
+            name: name,
+            syncRoot: ".",
+            ordinaryRemoteFolder: Config.defaultRemoteFolder,
+            cloud: RecordingGitInitCloud()
+        )
+        let cfg = GitSync.RepoConfig(name: name, syncRoot: ".")
+        try await git.updateRef(cfg.cloudRef, to: base)
+        try await git.updateRef(cfg.lastRemoteSnapshotRef, to: base)
+
+        try write("local\n", to: repo.appendingPathComponent("a.md"))
+        try await commitAll(repo, "local")
+
+        let archiveRoot = try scratchRoot()
+            .appendingPathComponent("rmsync-git-push-conflict-\(UUID().uuidString)", isDirectory: true)
+        let archive = try await makeArchive(
+            root: archiveRoot,
+            text: "cloud\n",
+            docID: "doc-a",
+            visibleName: "a"
+        )
+        let node = Node(
+            id: "doc-a",
+            name: "a",
+            type: .document,
+            parent: "folder",
+            modifiedClient: "2026-06-04T00:00:00Z",
+            version: 1,
+            currentPage: 0,
+            path: ["sync", "git", name, "a"]
+        )
+        let cloud = SyntheticGitSyncCloud(nodes: [node], archives: [node.remotePath: archive])
+        return (repo, git, cfg, cloud)
+    }
+
+    private func makeArchive(root: URL, text: String, docID: String, visibleName: String) async throws -> URL {
+        let archiveDir = root.appendingPathComponent("archive-src", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDir, withIntermediateDirectories: true)
+        let pageID = "page-\(UUID().uuidString)"
+        let pageBytes = try PageCodec.renderPage(
+            text: text,
+            authorUUID: "11111111-2222-3333-4444-555555555555"
+        )
+        let archiveURL = archiveDir.appendingPathComponent("\(visibleName).rmdoc")
+        _ = try await Archive.pack(
+            Archive.RmDoc(
+                docID: docID,
+                visibleName: visibleName,
+                parent: "",
+                pages: [Archive.RmDocPage(pageID: pageID, rmBytes: pageBytes)],
+                version: 1
+            ),
+            to: archiveURL
+        )
+        return archiveURL
+    }
+
     private func scratchRoot() throws -> URL {
         let raw = ProcessInfo.processInfo.environment["RMSYNC_TEST_TMP"]
             ?? FileManager.default.temporaryDirectory.path
@@ -564,4 +723,49 @@ private actor RecordingGitInitCloud: CloudWriteClient {
 
 private enum RecordingGitInitCloudError: Error {
     case unsupported
+}
+
+private actor SyntheticGitSyncCloud: CloudWriteClient {
+    private var nodes: [Node]
+    private var archives: [String: URL]
+
+    init(nodes: [Node], archives: [String: URL]) {
+        self.nodes = nodes
+        self.archives = archives
+    }
+
+    func tree(_ root: String) async throws -> [Node] {
+        nodes.filter { $0.remotePath == root || $0.remotePath.hasPrefix(root + "/") }
+    }
+
+    func get(_ remotePath: String, dest: URL) async throws -> URL {
+        guard let archive = archives[remotePath] else {
+            throw ExplicitSync.SyncError.cloudMissing(remotePath)
+        }
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let out = dest.appendingPathComponent(archive.lastPathComponent)
+        if FileManager.default.fileExists(atPath: out.path) {
+            try FileManager.default.removeItem(at: out)
+        }
+        try FileManager.default.copyItem(at: archive, to: out)
+        return out
+    }
+
+    func stat(_ remotePath: String) async throws -> StatResult? { nil }
+
+    func put(local: URL, remoteParent: String, update: Bool) async throws {
+        throw RecordingGitInitCloudError.unsupported
+    }
+
+    func mkdir(_ remotePath: String) async throws {
+        throw RecordingGitInitCloudError.unsupported
+    }
+
+    func mv(from src: String, to dst: String) async throws {
+        throw RecordingGitInitCloudError.unsupported
+    }
+
+    func rm(_ remotePath: String) async throws {
+        throw RecordingGitInitCloudError.unsupported
+    }
 }
