@@ -21,10 +21,17 @@ enum GitSync {
     }
 
     struct PullResult: Sendable {
-        var branch: String
+        var branch: String?
         var snapshot: String
         var stageID: String
         var changed: Int
+        var status: PullStatus
+    }
+
+    enum PullStatus: String, Sendable {
+        case noCloudChanges
+        case alreadyMerged
+        case branchCreated
     }
 
     struct PushResult: Sendable {
@@ -163,6 +170,18 @@ enum GitSync {
 
         let base = try await git.run(["rev-parse", loaded.cfg.cloudRef])
         let staged = try await stageCurrentCloud(git: git, cfg: loaded.cfg, baseCommit: base, cloud: cloud)
+        let changed = staged.stage.entries.filter { $0.kind != .unchanged }.count
+        if changed == 0 {
+            try await git.updateRef(loaded.cfg.lastRemoteSnapshotRef, to: base)
+            return PullResult(
+                branch: nil,
+                snapshot: base,
+                stageID: staged.stage.id,
+                changed: 0,
+                status: .noCloudChanges
+            )
+        }
+
         let remoteSnapshot = try await createSnapshotCommit(
             git: git,
             baseCommit: base,
@@ -172,14 +191,26 @@ enum GitSync {
         )
         try await git.updateRef(loaded.cfg.lastRemoteSnapshotRef, to: remoteSnapshot)
 
+        let local = try await git.headCommit()
+        if !(try await pullNeedsBranch(git: git, base: base, local: local, remoteSnapshot: remoteSnapshot)) {
+            try await git.updateRef(loaded.cfg.cloudRef, to: remoteSnapshot)
+            return PullResult(
+                branch: nil,
+                snapshot: remoteSnapshot,
+                stageID: staged.stage.id,
+                changed: changed,
+                status: .alreadyMerged
+            )
+        }
+
         let branch = try await uniqueBranchName(git: git, name: loaded.cfg.name)
         try await git.createBranch(branch, at: remoteSnapshot)
-        let changed = staged.stage.entries.filter { $0.kind != .unchanged }.count
         return PullResult(
             branch: branch,
             snapshot: remoteSnapshot,
             stageID: staged.stage.id,
-            changed: changed
+            changed: changed,
+            status: .branchCreated
         )
     }
 
@@ -439,6 +470,21 @@ enum GitSync {
         let pathspec = cfg.syncRoot == "." ? nil : cfg.syncRoot
         return try await git.listTreePaths(commit, under: pathspec)
             .filter { isSyncedMarkdown(repoPath: $0, syncRoot: cfg.syncRoot) }
+    }
+
+    static func pullNeedsBranch(
+        git: Git,
+        base: String,
+        local: String,
+        remoteSnapshot: String
+    ) async throws -> Bool {
+        let localTree = try await git.tree(local)
+        do {
+            let merge = try await git.mergeTree(base: base, local: local, remote: remoteSnapshot)
+            return merge.tree != localTree
+        } catch Git.GitError.mergeConflict(_) {
+            return true
+        }
     }
 
     private static func forcePushRenames(
