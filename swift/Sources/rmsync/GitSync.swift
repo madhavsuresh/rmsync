@@ -70,7 +70,7 @@ enum GitSync {
         case remoteFolderExists(String)
         case unsupportedOldConfig(URL, String)
         case cloudSnapshotFailed([String])
-        case pushConflict(branch: String, detail: String)
+        case pushConflict(branch: String?, detail: String)
         case verificationFailed(URL)
 
         var description: String {
@@ -98,14 +98,24 @@ enum GitSync {
             case .cloudSnapshotFailed(let errors):
                 return "cloud snapshot failed:\n" + errors.joined(separator: "\n")
             case .pushConflict(let branch, let detail):
+                if let branch {
+                    return """
+                    push cannot merge cleanly without conflict.
+                    cloud branch: \(branch)
+
+                    Resolve with normal git, then retry:
+                        git merge \(branch)
+                        # edit conflicts, git add, git commit
+                        rmsync git push
+
+                    \(detail)
+                    """
+                }
                 return """
                 push cannot merge cleanly without conflict.
-                cloud branch: \(branch)
+                dry-run did not create a cloud branch.
 
-                Resolve with normal git, then retry:
-                    git merge \(branch)
-                    # edit conflicts, git add, git commit
-                    rmsync git push
+                Rerun without --dry-run to create a merge branch, or run `rmsync git pull` first.
 
                 \(detail)
                 """
@@ -239,7 +249,9 @@ enum GitSync {
             stage: remote.stage,
             message: "rmsync-git: current cloud snapshot for \(loaded.cfg.name)\n"
         )
-        try await git.updateRef(loaded.cfg.lastRemoteSnapshotRef, to: remoteSnapshot)
+        if !dryRun {
+            try await git.updateRef(loaded.cfg.lastRemoteSnapshotRef, to: remoteSnapshot)
+        }
 
         let localTree = try await git.tree(local)
         let remoteTree = try await git.tree(remoteSnapshot)
@@ -265,8 +277,14 @@ enum GitSync {
         do {
             merge = try await git.mergeTree(base: base, local: local, remote: remoteSnapshot)
         } catch let error as Git.GitError {
-            let branch = try await uniqueBranchName(git: git, name: loaded.cfg.name)
-            try await git.createBranch(branch, at: remoteSnapshot)
+            let branch: String?
+            if dryRun {
+                branch = nil
+            } else {
+                let branchName = try await uniqueBranchName(git: git, name: loaded.cfg.name)
+                try await git.createBranch(branchName, at: remoteSnapshot)
+                branch = branchName
+            }
             throw Error.pushConflict(branch: branch, detail: error.description)
         }
 
